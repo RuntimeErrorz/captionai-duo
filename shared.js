@@ -206,15 +206,16 @@
     ]);
   }
 
-  function aiChatCompletionBody(configValue, messages, maxTokens, temperature) {
+  function aiChatCompletionBody(configValue, messages, maxTokens, temperature, optionsValue) {
     const config = configValue && typeof configValue === "object" ? configValue : {};
+    const options = optionsValue && typeof optionsValue === "object" ? optionsValue : {};
     const endpointKind = aiEndpointKind(config.baseUrl);
     const thinking = normalizeAiThinking(config.thinking);
     const thinkingEnabled = thinking !== "disabled";
     return {
       messages: Array.isArray(messages) ? messages : [],
       ...(endpointKind === "deepseek" ? {
-        response_format: { type: "json_object" },
+        ...(!options.jsonLines ? { response_format: { type: "json_object" } } : {}),
         thinking: { type: thinkingEnabled ? "enabled" : "disabled" },
         stream_options: { include_usage: true }
       } : {}),
@@ -988,6 +989,144 @@
     return translations;
   }
 
+  function aiJsonlLines(value, flush) {
+    const input = String(value || "");
+    const lines = [];
+    let cursor = 0;
+    while (true) {
+      const newline = input.indexOf("\n", cursor);
+      if (newline < 0) break;
+      lines.push(input.slice(cursor, newline).replace(/\r$/, ""));
+      cursor = newline + 1;
+    }
+    let rest = input.slice(cursor);
+    if (flush && rest) {
+      lines.push(rest.replace(/\r$/, ""));
+      rest = "";
+    }
+    return { lines, rest };
+  }
+
+  function aiJsonlRecordFromLine(value) {
+    const line = String(value || "").trim();
+    if (!line || /^```(?:jsonl?|ndjson)?$/i.test(line) || line === "```") {
+      return { ignored: true, record: null, error: "" };
+    }
+    try {
+      const record = JSON.parse(line);
+      if (!record || typeof record !== "object" || Array.isArray(record)) {
+        return { ignored: false, record: null, error: "JSONL line is not an object" };
+      }
+      return { ignored: false, record, error: "" };
+    } catch (_e) {
+      return { ignored: false, record: null, error: "invalid JSONL line" };
+    }
+  }
+
+  function createAiJsonlTranslationState(itemsValue, targetLang) {
+    const items = Array.isArray(itemsValue) ? itemsValue.filter(Boolean) : [];
+    return {
+      items,
+      expected: items.map((item) => String(item && item.id)),
+      targetLang: String(targetLang || ""),
+      cursor: 0,
+      translations: [],
+      deferredIds: [],
+      done: false,
+      error: ""
+    };
+  }
+
+  function pushAiJsonlTranslationRecord(stateValue, recordValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const record = recordValue && typeof recordValue === "object" ? recordValue : null;
+    const reject = (reason) => {
+      if (state && !state.error) state.error = reason;
+      return { ok: false, type: "error", error: reason, translations: [] };
+    };
+    if (!state || !Array.isArray(state.items) || !Array.isArray(state.expected)) {
+      return reject("invalid JSONL translation state");
+    }
+    if (state.error) return reject(state.error);
+    if (state.done) return reject("JSONL record appears after done");
+    if (!record) return reject("missing JSONL record");
+
+    if (record.type === "done") {
+      const deferredIds = Array.isArray(record.deferred_ids)
+        ? record.deferred_ids.map(String) : [];
+      const remaining = state.expected.slice(state.cursor);
+      if (deferredIds.length !== remaining.length ||
+          deferredIds.some((id, index) => id !== remaining[index])) {
+        return reject("invalid JSONL deferred suffix");
+      }
+      state.deferredIds = deferredIds;
+      state.done = true;
+      return { ok: true, type: "done", deferredIds: deferredIds.slice(), translations: [] };
+    }
+
+    if (record.type !== "unit") return reject("unknown JSONL record type");
+    const chunks = Array.isArray(record.chunks) ? record.chunks : [];
+    if (!chunks.length) return reject(`missing JSONL unit chunks at offset ${state.cursor}`);
+    const alignedChunks = [];
+    const ids = [];
+    for (const chunk of chunks) {
+      const chunkIds = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
+      const translation = String(chunk && chunk.translation || "").trim();
+      if (!chunkIds.length || !translation) {
+        return reject(`invalid JSONL chunk at offset ${state.cursor + ids.length}`);
+      }
+      for (const id of chunkIds) {
+        const expectedId = state.expected[state.cursor + ids.length];
+        if (id !== expectedId) {
+          return reject(`unexpected JSONL id ${id} at offset ${state.cursor + ids.length}`);
+        }
+        ids.push(id);
+      }
+      alignedChunks.push({ ids: chunkIds, translation });
+    }
+    if (!ids.length) return reject(`empty JSONL unit at offset ${state.cursor}`);
+    for (let index = state.cursor; index < state.cursor + ids.length - 1; index++) {
+      if (state.items[index] && state.items[index].hardAfter) {
+        return reject(`JSONL unit crosses hard boundary after cue ${state.expected[index]}`);
+      }
+    }
+    const firstItem = state.items[state.cursor] || {};
+    const lastItem = state.items[state.cursor + ids.length - 1] || {};
+    const durationMs = Number(lastItem.endMs) - Number(firstItem.startMs);
+    const sourceChars = state.items.slice(state.cursor, state.cursor + ids.length)
+      .reduce((sum, item) => sum + String(item && item.text || "").length, 0);
+    if (ids.length > 1 &&
+        ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
+      return reject(`oversized JSONL unit ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
+    }
+    const translation = joinTranslatedParts(
+      alignedChunks.map((chunk) => chunk.translation), state.targetLang
+    );
+    const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
+    const translations = ids.map((id, index) => index === 0
+      ? { id, translation, unitId, alignedChunks }
+      : { id, translation, unitId });
+    state.translations.push(...translations);
+    state.cursor += ids.length;
+    return { ok: true, type: "unit", unitId, ids, translations };
+  }
+
+  function aiJsonlTranslationResult(stateValue, allowPartial) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    if (!state || !Array.isArray(state.translations) || !Array.isArray(state.expected)) return null;
+    const partial = !state.done || !!state.error;
+    if (partial && (!allowPartial || !state.translations.length)) return null;
+    const deferredIds = state.done
+      ? state.deferredIds.slice() : state.expected.slice(state.cursor);
+    const out = state.translations.slice();
+    Object.defineProperties(out, {
+      deferredIds: { value: deferredIds },
+      streamPartial: { value: partial },
+      streamError: { value: String(state.error || "") }
+    });
+    return out;
+  }
+
   function joinTranslatedParts(values, targetLang) {
     const parts = (Array.isArray(values) ? values : [])
       .map((value) => String(value || "").trim())
@@ -1627,6 +1766,11 @@
     deepSeekConcurrencyStatus,
     jsonObjectFromText,
     translationFromJsonText,
+    aiJsonlLines,
+    aiJsonlRecordFromLine,
+    createAiJsonlTranslationState,
+    pushAiJsonlTranslationRecord,
+    aiJsonlTranslationResult,
     joinTranslatedParts,
     segmentedTranslationsFromJsonText,
     alignedTranslationsFromJsonText,

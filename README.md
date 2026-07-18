@@ -6,7 +6,7 @@ An AI bilingual-subtitle extension for YouTube. It reads the active caption trac
 
 - Original and translated subtitles share one non-overlapping overlay.
 - Defaults to `https://api.deepseek.com`; another Chat Completions-compatible Base URL and model can be entered directly.
-- Accepts streaming SSE and ordinary JSON responses, with local output validation before display.
+- Accepts streaming SSE and ordinary JSON; complete streamed semantic units are validated and painted line by line.
 - Per-line font, size, color, background, outline, spacing, and line order controls.
 - The overlay can be dragged vertically; font, player-size, and fullscreen changes trigger repagination.
 - 15 target languages plus original, translated, and bilingual SRT export.
@@ -92,9 +92,9 @@ The AI first groups contiguous current coordinates into natural sentences or cla
 
 ### 4. Streaming transport and model output
 
-Requests use Chat Completions JSON with `stream: true`. DeepSeek also receives JSON-output, thinking, and `stream_options.include_usage` fields; a custom endpoint needs to accept the request and return OpenAI-style `choices`.
+Requests use Chat Completions JSON with `stream: true`. The primary translation contract is JSONL: each finalized semantic unit occupies one physical line, followed by exactly one `{"type":"done","deferred_ids":[...]}` line declaring the unresolved contiguous suffix. DeepSeek receives thinking controls and `stream_options.include_usage`; the JSONL request deliberately omits the single-object `response_format`. A custom compatible endpoint only needs to accept the request and return OpenAI-style `choices`.
 
-Because network chunks may split anywhere, the parser buffers through a blank-line-delimited SSE event before parsing its `data:` fields and joins content through `[DONE]`. Usage-only SSE chunks are accumulated separately. A server that ignores streaming and returns ordinary JSON is also accepted, including its top-level `usage` object. Streaming currently improves transport behavior and first-byte visibility; it **does not paint partial model text token by token**. The complete JSON must pass validation before anything is cached or displayed.
+Both SSE network chunks and model tokens may split at arbitrary byte positions, so buffering happens in two layers: first through a complete blank-line-delimited SSE event, then through a complete JSONL newline. A unit reaches the immutable cache and page immediately only after that whole line parses independently with ordered, structurally complete IDs. Half a JSON string, half a sentence, or an arbitrary token delta is never painted. Usage-only events are accumulated separately, and `[DONE]` flushes the last line. A server that ignores SSE and returns ordinary JSON is accepted, including top-level `usage`; the previous complete-JSON schema remains a compatibility path.
 
 ### 5. Validation, monotonic commit, and fallback
 
@@ -109,7 +109,7 @@ The extension no longer judges translation quality with numeric multiplicity, te
 
 Even if the model calls the window tail complete, any unit touching the private 16-item guard is carried whole into the next, longer window. Each hard-boundary region commits only a contiguous prefix from left to right. A later response therefore cannot leave a hole or overwrite an earlier decision; fixed request edges do not split a cross-cue phrase.
 
-If aligned-chunk JSON is invalid, the extension tries a simpler whole-segment JSON contract. HTTP work receives up to three attempts with timeout, `429`, and temporary-server-error handling. Structurally invalid output is never added to the cache.
+If JSONL fails before its first valid unit, the extension can still try the previous complete aligned JSON and then a simpler whole-segment JSON contract. If malformed output, disconnection, timeout, or cancellation happens after valid lines, the already committed contiguous prefix survives and only the uncommitted suffix is requested again. This prevents a bad tail from wasting completed translation or overwriting older results. HTTP work receives up to three attempts with timeout, `429`, and temporary-server-error handling; after a stream has produced a valid unit, that HTTP request is not replayed from the beginning because replay could duplicate emitted lines.
 
 ### 6. Playback, seek, prefetch, and concurrency
 

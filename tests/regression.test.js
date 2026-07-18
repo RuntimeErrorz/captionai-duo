@@ -60,6 +60,12 @@ assert.equal(deepseekRequestBody.response_format.type, "json_object");
 assert.equal(deepseekRequestBody.thinking.type, "enabled");
 assert.equal(deepseekRequestBody.reasoning_effort, "high");
 assert.equal("temperature" in deepseekRequestBody, false);
+const deepseekJsonlRequestBody = shared.aiChatCompletionBody({
+  baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", thinking: "disabled"
+}, [{ role: "user", content: "JSONL only" }], 4096, 0.1, { jsonLines: true });
+assert.equal(deepseekJsonlRequestBody.stream, true);
+assert.equal(deepseekJsonlRequestBody.stream_options.include_usage, true);
+assert.equal("response_format" in deepseekJsonlRequestBody, false);
 const customRequestBody = shared.aiChatCompletionBody({
   baseUrl: "http://localhost:11434/v1", model: "local-model", thinking: "disabled"
 }, [{ role: "user", content: "JSON only" }], 4096, 0.1);
@@ -103,6 +109,11 @@ assert.equal(typeof shared.compactAiPromptCueRows, "function");
 assert.equal(typeof shared.compactAiPromptContextRows, "function");
 assert.equal(typeof shared.alignedTranslationsFromJsonText, "function");
 assert.equal(typeof shared.alignedChunkDisplayPlan, "function");
+assert.equal(typeof shared.aiJsonlLines, "function");
+assert.equal(typeof shared.aiJsonlRecordFromLine, "function");
+assert.equal(typeof shared.createAiJsonlTranslationState, "function");
+assert.equal(typeof shared.pushAiJsonlTranslationRecord, "function");
+assert.equal(typeof shared.aiJsonlTranslationResult, "function");
 
 assert.equal(shared.videoIdFromUrl("https://www.youtube.com/watch?v=abcdefghijk"), "abcdefghijk");
 assert.equal(shared.videoIdFromUrl("https://www.youtube.com/shorts/abcdefghijk"), "abcdefghijk");
@@ -279,7 +290,7 @@ assert.ok((content.match(
   /resetDeepseekCommitTimeline\(\);\s*if \(sentGroups && sentGroups\.length\) buildDeepseekCommitRegions\(\);/g
 ) || []).length >= 2, "settings and credential changes must rebuild semantic commit regions");
 assert.match(background, /alignedTranslationsFromJsonText/);
-assert.match(background, /prompt-v23-compact-usage/);
+assert.match(background, /prompt-v24-jsonl-stream/);
 assert.match(background, /MAX_PROMPT_SOURCE_CHARS = 28000/);
 assert.match(background, /preparePromptContexts/);
 assert.match(background, /cleanContext\(msg\.contextAfter, 20, "future"\)/);
@@ -288,8 +299,13 @@ assert.doesNotMatch(background, /repairSuspiciousSemanticTranslations/);
 assert.doesNotMatch(background, /semantic-translation-repair/);
 assert.doesNotMatch(sharedSource, /translationQualityIssue/);
 assert.match(content, /sourceLang: cueSourceLang/);
-assert.match(background, /ONE flat top-level chunks array/);
-assert.match(background, /never put chunks inside another chunk/);
+assert.match(background, /one completed semantic unit per physical JSONL line/i);
+assert.match(background, /"type":"done","deferred_ids"/);
+assert.match(background, /jsonLines: true/);
+assert.match(background, /semantic-jsonl-unit/);
+assert.match(background, /translationBatchProgress/);
+assert.match(content, /handleDeepseekTranslationProgress/);
+assert.match(content, /semantic-jsonl-progress-committed/);
 assert.match(background, /Prefer the FEWEST chunks/);
 assert.match(background, /compact lexical rows shaped \[id,text,pauseAfterMs,boundary\]/);
 assert.match(background, /function deepseekTranslateSemanticFallback/);

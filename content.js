@@ -1448,7 +1448,11 @@
       return "";
     }
     const requestId = `${kind}:${deepseekFocusGeneration}:${++deepseekRequestSerial}:${start}-${end}`;
-    deepseekRequestMeta.set(inflightKey, { requestId, urgent: !!urgent });
+    deepseekRequestMeta.set(inflightKey, {
+      requestId,
+      urgent: !!urgent,
+      progressTranslations: []
+    });
     transInflight.add(inflightKey);
     return requestId;
   }
@@ -1459,6 +1463,15 @@
     deepseekRequestMeta.delete(inflightKey);
     transInflight.delete(inflightKey);
     return true;
+  }
+
+  function deepseekRequestById(requestId) {
+    const wanted = String(requestId || "");
+    if (!wanted) return null;
+    for (const [inflightKey, request] of deepseekRequestMeta.entries()) {
+      if (request && request.requestId === wanted) return { inflightKey, request };
+    }
+    return null;
   }
 
   function cancelDeepseekPrefetchRequests() {
@@ -1686,6 +1699,77 @@
     return plan.carryStart;
   }
 
+  function handleDeepseekTranslationProgress(msg) {
+    if (String(msg && msg.requestId || "") === fallbackRequestId &&
+        String(msg && msg.videoId || "") === currentVideoId &&
+        Number(msg && msg.focusGeneration) === deepseekFocusGeneration) {
+      const translated = Array.isArray(msg.translations) && msg.translations[0] &&
+        String(msg.translations[0].translation || "").trim();
+      if (translated && lastSource) {
+        setTranslation(translated, lastSource);
+        return true;
+      }
+    }
+    const found = deepseekRequestById(msg && msg.requestId);
+    if (!found) return false;
+    const request = found.request;
+    if (String(msg.videoId || "") !== request.reqVid ||
+        Number(msg.focusGeneration) !== request.focusGeneration ||
+        request.reqEpoch !== cueEpoch || request.reqVid !== cueVideoId) {
+      return false;
+    }
+    const incoming = Array.isArray(msg.translations) ? msg.translations.filter(Boolean) : [];
+    if (!incoming.length) return false;
+
+    // Delivery through chrome.tabs.sendMessage is asynchronous. Keep a small
+    // id-keyed buffer so a duplicated or slightly reordered progress message
+    // can never create a hole or overwrite an already committed unit.
+    const byId = new Map();
+    for (const item of request.progressTranslations) {
+      const id = Number(item && item.id);
+      if (Number.isInteger(id)) byId.set(id, item);
+    }
+    for (const item of incoming) {
+      const id = Number(item && item.id);
+      if (Number.isInteger(id) && id >= request.requestStart && id <= request.requestEnd) {
+        byId.set(id, item);
+      }
+    }
+    request.progressTranslations = Array.from(byId.values())
+      .sort((a, b) => Number(a.id) - Number(b.id));
+
+    const state = deepseekCommitState(request.regionIndex);
+    if (!state || state.cursor < request.requestStart || state.cursor > request.requestEnd) return false;
+    const pending = request.progressTranslations.filter(
+      (item) => Number(item && item.id) >= state.cursor
+    );
+    const previousCursor = state.cursor;
+    const nextCursor = commitDeepseekResponsePrefix(
+      request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
+      request.limitEnd, pending, request.effectiveGuardItems
+    );
+    if (!Number.isInteger(nextCursor) || nextCursor <= previousCursor) return false;
+
+    state.cursor = nextCursor;
+    state.commitFloor = nextCursor;
+    state.windowItems = DEEPSEEK_REQUEST_ITEMS;
+    request.progressTranslations = request.progressTranslations.filter(
+      (item) => Number(item && item.id) >= nextCursor
+    );
+    deepseekRetryCounts.delete(deepseekBatchRetryKey(
+      request.requestStart, request.requestEnd, request.reqVid, request.reqEpoch
+    ));
+    emitDebug("semantic-jsonl-progress-committed", {
+      regionIndex: request.regionIndex,
+      requestStart: request.requestStart,
+      requestEnd: request.requestEnd,
+      previousCursor,
+      nextCursor
+    });
+    repaintActiveDeepseekTranslation();
+    return true;
+  }
+
   function pumpDeepseekCommitRegion(regionIndex, urgent) {
     const region = deepseekCommitRegions[regionIndex];
     const state = deepseekCommitState(regionIndex);
@@ -1730,6 +1814,20 @@
     if (!requestId) return;
     const reqVid = cueVideoId;
     const reqEpoch = cueEpoch;
+    const liveRequest = deepseekRequestMeta.get(inflightKey);
+    if (liveRequest && liveRequest.requestId === requestId) {
+      Object.assign(liveRequest, {
+        regionIndex,
+        requestStart,
+        requestEnd,
+        commitFloor,
+        limitEnd,
+        effectiveGuardItems,
+        reqVid,
+        reqEpoch,
+        focusGeneration: deepseekFocusGeneration
+      });
+    }
     sendRuntimeMessage({
       type: "translateBatch",
       debug: !!settings.debugEnabled,
@@ -1749,11 +1847,19 @@
       contextAfter
     }, (resp, runtimeError) => {
       if (!finishDeepseekRequest(inflightKey, requestId)) return;
+      const progressedCursor = state.cursor;
       if (runtimeError) {
-        scheduleDeepSeekBatchRetry(
-          requestStart, requestStart, requestEnd, reqVid, reqEpoch,
-          runtimeError.message || "runtime unavailable", { urgent: requestUrgent }
-        );
+        if (progressedCursor > requestStart) {
+          repaintActiveDeepseekTranslation();
+          if (state.cursor <= state.targetThrough && state.cursor <= state.limitEnd) {
+            queueMicrotask(() => pumpDeepseekCommitRegion(regionIndex, false));
+          }
+        } else {
+          scheduleDeepSeekBatchRetry(
+            requestStart, requestStart, requestEnd, reqVid, reqEpoch,
+            runtimeError.message || "runtime unavailable", { urgent: requestUrgent }
+          );
+        }
         return;
       }
       if (reqEpoch !== cueEpoch || reqVid !== cueVideoId) return;
@@ -1767,7 +1873,12 @@
           retryAfterMs: Number(resp && resp.retryAfterMs) || 0,
           limitReason: String(resp && resp.limitReason || "")
         });
-        if (!resp || resp.netfail || resp.timeout || resp.rateLimited ||
+        if (progressedCursor > requestStart) {
+          repaintActiveDeepseekTranslation();
+          if (state.cursor <= state.targetThrough && state.cursor <= state.limitEnd) {
+            queueMicrotask(() => pumpDeepseekCommitRegion(regionIndex, false));
+          }
+        } else if (!resp || resp.netfail || resp.timeout || resp.rateLimited ||
             error === "invalid translation batch" || error === "untrusted sender") {
           scheduleDeepSeekBatchRetry(requestStart, requestStart, requestEnd, reqVid, reqEpoch, error, {
             rateLimited: !!(resp && resp.rateLimited),
@@ -1787,18 +1898,27 @@
         modelDeferredIds: Array.isArray(resp.deferredIds) ? resp.deferredIds : [],
         httpDiagnostics: resp.httpDiagnostics || { attempts: [] }
       });
+      const finalStart = state.cursor;
+      const finalTranslations = resp.translations.filter(
+        (item) => Number(item && item.id) >= finalStart
+      );
       const nextCursor = commitDeepseekResponsePrefix(
-        regionIndex, requestStart, requestEnd, commitFloor, limitEnd,
-        resp.translations, effectiveGuardItems
+        regionIndex, finalStart, requestEnd, state.commitFloor, limitEnd,
+        finalTranslations, effectiveGuardItems
       );
       if (!Number.isInteger(nextCursor)) return;
       deepseekRetryCounts.delete(deepseekBatchRetryKey(
         requestStart, requestEnd, reqVid, reqEpoch
       ));
-      if (nextCursor > requestStart) {
+      if (nextCursor > finalStart) {
         state.cursor = nextCursor;
         state.commitFloor = nextCursor;
         state.windowItems = DEEPSEEK_REQUEST_ITEMS;
+      }
+      const madeProgress = state.cursor > requestStart;
+      if (madeProgress) {
+        // A malformed/cancelled tail is intentionally retried from the first
+        // uncommitted id. Completed JSONL units are already immutable cache.
       } else if (requestEnd < limitEnd && targetAwareItems < DEEPSEEK_MAX_REQUEST_ITEMS) {
         state.windowItems = Math.min(DEEPSEEK_MAX_REQUEST_ITEMS, targetAwareItems + 32);
         emitDebug("semantic-commit-window-expanded", {
@@ -2075,6 +2195,10 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg) return;
+    if (msg.type === "translationBatchProgress") {
+      sendResponse({ ok: handleDeepseekTranslationProgress(msg) });
+      return;
+    }
     if (msg.type === "settingsPatch") {
       const patch = msg.patch && typeof msg.patch === "object" ? msg.patch : {};
       let needDisplayReflow = false;
