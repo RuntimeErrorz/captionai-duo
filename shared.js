@@ -700,11 +700,14 @@
 
   // Urgent playback work is sized around the one subtitle currently needed.
   // Speculative targetThrough may be much farther ahead and is resumed after
-  // that subtitle is covered. The urgent cap grows only when a previous window
-  // could not produce an immutable prefix.
+  // that subtitle is covered. A separate target tail keeps the visible unit
+  // away from the trailing commit guard: without it, a seek target placed
+  // immediately before the guard forces any ordinary sentence continuing past
+  // the target into a second request. Very long units still use adaptive
+  // expansion and remain bounded by maxItems.
   function semanticCommitRequestPlan(
     state, requestStartValue, guardItemsValue, maxItemsValue, urgent,
-    initialUrgentItemsValue
+    initialUrgentItemsValue, urgentTargetTailItemsValue
   ) {
     const requestStart = Math.max(0, Math.floor(Number(requestStartValue) || 0));
     const guardItems = Math.max(0, Math.floor(Number(guardItemsValue) || 0));
@@ -712,12 +715,15 @@
     const windowItems = Math.max(1, Math.floor(Number(state && state.windowItems) || 1));
     const initialUrgentItems = Math.max(1,
       Math.floor(Number(initialUrgentItemsValue) || maxItems));
+    const urgentTargetTailItems = urgent
+      ? Math.max(0, Math.floor(Number(urgentTargetTailItemsValue) || 0)) : 0;
     const target = Math.floor(Number(urgent
       ? state && state.urgentTarget : state && state.targetThrough));
     const targetThrough = Number.isFinite(target) ? Math.max(requestStart - 1, target) : requestStart - 1;
-    const targetItems = Math.max(0, targetThrough - requestStart + 1) + guardItems;
+    const targetItems = Math.max(0, targetThrough - requestStart + 1) +
+      guardItems + urgentTargetTailItems;
     const effectiveMaxItems = urgent
-      ? Math.min(maxItems, Math.max(windowItems, initialUrgentItems))
+      ? Math.min(maxItems, Math.max(windowItems, initialUrgentItems, targetItems))
       : maxItems;
     return {
       targetThrough,

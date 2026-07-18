@@ -124,10 +124,10 @@ test("urgent request sizing ignores a farther speculative target but preserves t
     cursor: 4416, windowItems: 80, urgentTarget: 4447, targetThrough: 4575
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
-    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96)
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96, 48)
   )), {
     targetThrough: 4447,
-    itemCount: 80
+    itemCount: 96
   });
 });
 
@@ -148,7 +148,7 @@ test("guard-crossing recovery expansion is not clamped back to the cold window",
     cursor: 4743, windowItems: 80, urgentTarget: 4753, targetThrough: 4831
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
-    shared.semanticCommitRequestPlan(state, 4743, 16, 160, true, 96)
+    shared.semanticCommitRequestPlan(state, 4743, 16, 160, true, 96, 48)
   )), {
     targetThrough: 4753,
     itemCount: 80
@@ -160,10 +160,10 @@ test("first urgent window covers the visible target without absorbing speculativ
     cursor: 4416, windowItems: 48, urgentTarget: 4495, targetThrough: 4575
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
-    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96)
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96, 48)
   )), {
     targetThrough: 4495,
-    itemCount: 96
+    itemCount: 144
   });
 });
 
@@ -172,11 +172,37 @@ test("urgent window can expand after an unsafe prefix while remaining globally b
     cursor: 4416, windowItems: 128, urgentTarget: 4495, targetThrough: 4575
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
-    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96)
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96, 48)
   )), {
     targetThrough: 4495,
-    itemCount: 128
+    itemCount: 144
   });
+});
+
+test("an urgent seek leaves semantic runway after the visible target", () => {
+  const state = {
+    cursor: 1317, windowItems: 48, urgentTarget: 1381, targetThrough: 1397
+  };
+  const request = shared.semanticCommitRequestPlan(
+    state, 1317, 16, 160, true, 96, 48
+  );
+  const requestEnd = 1317 + request.itemCount - 1;
+  const translations = [
+    ...unit(1317, 1331),
+    ...unit(1332, 1373),
+    ...unit(1374, 1396),
+    ...unit(1397, 1414)
+  ];
+  const plan = shared.monotonicSemanticCommitPlan(
+    translations, 1317, requestEnd, 2000, 16, 1333
+  );
+
+  assert.equal(request.itemCount, 129);
+  assert.ok(plan.guardStart > 1396);
+  assert.ok(plan.units.some((entry) =>
+    entry.members[0] === 1374 && entry.members.at(-1) === 1396
+  ));
+  assert.ok(plan.translations.some((item) => Number(item.id) === 1381));
 });
 
 test("random segmentations never split a unit or commit inside the guard", () => {

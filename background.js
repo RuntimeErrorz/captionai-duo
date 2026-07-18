@@ -28,6 +28,7 @@ const sessionStore = (chrome.storage && chrome.storage.session) || null;
 const debugStore = sessionStore || (chrome.storage && chrome.storage.local) || null;
 const DEBUG_MAX = 1200;
 const DEBUG_MAX_CHARS = 4000000;
+const DEBUG_MAX_ENTRY_CHARS = 30000;
 let debugLogs = [];
 let debugChars = 0;
 let debugPending = [];
@@ -228,15 +229,30 @@ async function writeAiResponseCache(key, translations) {
 }
 
 function appendDebug(scope, event, data) {
-  const entry = {
+  let entry = {
     ts: new Date().toISOString(),
     scope: String(scope || "background"),
     event: String(event || "event"),
     data: data == null ? null : data
   };
+  let serialized = "";
+  try { serialized = JSON.stringify(entry); } catch (_e) { serialized = ""; }
+  if (!serialized || serialized.length > DEBUG_MAX_ENTRY_CHARS) {
+    entry = {
+      ts: entry.ts,
+      scope: entry.scope,
+      event: entry.event,
+      data: {
+        truncated: true,
+        originalChars: serialized.length,
+        keys: data && typeof data === "object" ? Object.keys(data).slice(0, 24) : []
+      }
+    };
+    serialized = JSON.stringify(entry);
+  }
   if (!debugReady) { debugPending.push(entry); return; }
   debugLogs.push(entry);
-  debugChars += JSON.stringify(entry).length;
+  debugChars += serialized.length;
   trimDebugLogs();
   if (!debugStore || debugFlushTimer) return;
   debugFlushTimer = setTimeout(() => {
@@ -975,16 +991,20 @@ async function deepseekTranslateBatch(
       return cached;
     }
     if (debug) appendDebug("background", "semantic-batch-request", {
+      requestId: requestMeta && requestMeta.requestId || "",
       model: config.model,
       endpointKind: config.endpointKind,
-      endpoint: config.endpoint,
       thinking: config.thinking,
       sourceLang,
       contextPast: config.contextPast,
       contextFuture: config.contextFuture,
-      items,
-      contextBefore,
-      contextAfter
+      currentRows: items.map((item) => [
+        String(item.id),
+        String(item.text || ""),
+        item.hardAfter ? "h" : item.softAfter ? "s" : ""
+      ]),
+      contextBefore: contextBefore.map((item) => [String(item.id), String(item.text || "")]),
+      contextAfter: contextAfter.map((item) => [String(item.id), String(item.text || "")])
     });
     let result;
     try {
@@ -1001,13 +1021,15 @@ async function deepseekTranslateBatch(
         durationMs: Date.now() - started,
         deferredIds: result.deferredIds || [],
         httpDiagnostics: result.httpDiagnostics || { attempts: [] },
-        units: Array.from(new Set(result.map((item) => item.unitId))).map((unitId) => ({
-          unitId,
-          ids: result.filter((item) => item.unitId === unitId).map((item) => item.id),
-          translation: result.find((item) => item.unitId === unitId).translation,
-          chunks: result.find((item) => item.unitId === unitId && item.alignedChunks)
-            ?.alignedChunks || []
-        }))
+        units: Array.from(new Set(result.map((item) => item.unitId))).map((unitId) => {
+          const first = result.find((item) => item.unitId === unitId);
+          const chunks = result.find((item) => item.unitId === unitId && item.alignedChunks)
+            ?.alignedChunks || [];
+          return {
+            unitId,
+            ...(chunks.length ? { chunks } : { translation: first && first.translation || "" })
+          };
+        })
       });
     } catch (err) {
       if (!(err && err.segmentInvalid)) throw err;
@@ -1044,8 +1066,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "debugLog") {
     let serialized = "";
     try { serialized = JSON.stringify(msg.data); } catch (_e) { /* rejected below */ }
-    if (!isYoutubeSender(sender) || serialized.length > 50000) {
+    if (!isYoutubeSender(sender) || !serialized) {
       sendResponse({ ok: false, error: "invalid debug message" });
+      return;
+    }
+    if (serialized.length > 50000) {
+      appendDebug("content", msg.event, {
+        truncated: true,
+        originalChars: serialized.length,
+        keys: msg.data && typeof msg.data === "object"
+          ? Object.keys(msg.data).slice(0, 24) : []
+      });
+      sendResponse({ ok: true, truncated: true });
       return;
     }
     appendDebug("content", msg.event, msg.data);
@@ -1132,9 +1164,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       requestClass: msg.urgent ? "urgent" : "prefetch",
       focusGeneration,
       itemCount: items.length,
-      items,
-      contextBefore,
-      contextAfter
+      sourceChars: items.reduce((sum, item) => sum + String(item.text || "").length, 0),
+      firstId: items.length ? String(items[0].id) : "",
+      lastId: items.length ? String(items[items.length - 1].id) : "",
+      contextBeforeCount: contextBefore.length,
+      contextAfterCount: contextAfter.length
     });
     const scope = `${sender.tab.id}:${String(msg.videoId || "").slice(0, 32)}:focus:${focusGeneration}`;
     deepseekTranslateBatch(
@@ -1158,9 +1192,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const httpDiagnostics = translations.httpDiagnostics || { attempts: [] };
         if (msg.debug) appendDebug("background", "batch-complete", {
           durationMs: Date.now() - batchStarted,
-          translations,
-          deferredIds,
-          httpDiagnostics,
+          translationCount: translations.length,
+          unitCount: new Set(translations.map((item) => item && item.unitId).filter(Boolean)).size,
+          deferredCount: deferredIds.length,
+          attemptCount: Array.isArray(httpDiagnostics.attempts) ? httpDiagnostics.attempts.length : 0,
+          streamPartial,
           failures: failures.map(String)
         });
         persistAiStatus(failures.length ? "partial" : "", failures[0]);

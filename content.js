@@ -132,10 +132,11 @@
   const DEEPSEEK_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
   const DEEPSEEK_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
   const DEEPSEEK_REQUEST_ITEMS = 80; // normal monotonic request window
-  const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // first visible-subtitle request cap
+  const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
   const DEEPSEEK_MAX_REQUEST_ITEMS = 160; // expansion cap for unusually long units
   const DEEPSEEK_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
   const DEEPSEEK_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
+  const DEEPSEEK_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
   const DEEPSEEK_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
   const DEEPSEEK_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
   const DEEPSEEK_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
@@ -164,6 +165,8 @@
   let nonceFallback = 0;
   let cueRecoveryTimer = null;
   let cueRecoveryAttempt = 0;
+  let lastDebugCueIdx = -1;
+  const INITIAL_CUE_RECOVERY_MS = 7000;
 
   function extensionContextAlive() {
     if (extensionContextInvalidated) return false;
@@ -323,10 +326,13 @@
         setTranslation("", "");
       }
       // A language change refreshes configuration; model/context changes reuse cues.
-      if (needRecue) sendConfig();
+      if (needRecue) sendConfig("settings-recue");
       else if (cueList) cueTick();
     }
-    if (enabledChanged && settings.enabled && !needRecue) sendConfig();
+    if (enabledChanged && settings.enabled && !needRecue) {
+      sendConfig("enabled");
+      scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
+    }
   });
 
   // Repaint the active AI translation immediately after the locally stored
@@ -749,6 +755,16 @@
     else restoreCaptionsIfWeEnabled();
   }
 
+  function captionButtonDebugState() {
+    const cc = document.querySelector(".ytp-subtitles-button");
+    if (!cc) return { present: false, pressed: "", disabled: "" };
+    return {
+      present: true,
+      pressed: String(cc.getAttribute("aria-pressed") || ""),
+      disabled: String(cc.getAttribute("aria-disabled") || "")
+    };
+  }
+
   function stopCueRecovery() {
     if (cueRecoveryTimer) { clearTimeout(cueRecoveryTimer); cueRecoveryTimer = null; }
     cueRecoveryAttempt = 0;
@@ -775,17 +791,32 @@
     }
   }
 
-  function scheduleCueRecovery() {
+  function scheduleCueRecovery(delayOverride) {
     if (cueRecoveryTimer || !settings.enabled || cueList) return;
-    const delay = Math.min(15000, 2500 + cueRecoveryAttempt * 1500);
+    const requestedDelay = Number(delayOverride);
+    const delay = Number.isFinite(requestedDelay) && requestedDelay > 0
+      ? Math.round(requestedDelay)
+      : Math.min(15000, 2500 + cueRecoveryAttempt * 1500);
+    emitDebug("cue-recovery-scheduled", {
+      attempt: cueRecoveryAttempt + 1,
+      delayMs: delay,
+      captionButton: captionButtonDebugState()
+    });
     cueRecoveryTimer = setTimeout(() => {
       cueRecoveryTimer = null;
       if (!settings.enabled || cueList) { stopCueRecovery(); return; }
       cueRecoveryAttempt++;
+      emitDebug("cue-recovery-attempt", {
+        attempt: cueRecoveryAttempt,
+        captionButton: captionButtonDebugState(),
+        nativeCaptionVisible: !!readNativeCaption()
+      });
       ensureCaptionsOn(6);
       // Recovery runs only while no cue list exists, so always ask the MAIN
       // bridge to retry the current video/config.
-      sendConfig();
+      // Reuse the current nonce: a lost bridge message is safely replayed, while
+      // an already-running slow cue fetch is not invalidated by the watchdog.
+      sendConfig("recovery", true);
       // Every second failed attempt, force YouTube to issue a fresh timedtext
       // request with a new pot instead of remaining stuck on a stale URL.
       if (!lastSource && cueRecoveryAttempt % 2 === 0) forceCaptionReload();
@@ -1001,6 +1032,7 @@
       if (activeCueIdx !== -1) {
         activeCueIdx = -1;
         activeGroupIdx = -1;              // no cue ⟹ no group (explicit invariant)
+        lastDebugCueIdx = -1;
         setOriginal("");
         setTranslation("", "");
       }
@@ -1023,15 +1055,17 @@
 
     const cue = cueList[idx];
     const displaySource = sourceForDisplayedCue(idx, cue);
-    emitDebug("cue-active", {
-      cueIdx: idx,
-      groupIdx: activeGroupIdx,
-      cueStartMs: cue.start,
-      cueEndMs: cue.end,
-      source: cue.text,
-      displaySource,
-      groupSource: activeGroupIdx >= 0 && sentGroups ? sentGroups[activeGroupIdx].text : ""
-    });
+    if (idx !== lastDebugCueIdx || eventType === "seeking" || seekJustSettled) {
+      lastDebugCueIdx = idx;
+      emitDebug("cue-active", {
+        cueIdx: idx,
+        groupIdx: activeGroupIdx,
+        cueStartMs: cue.start,
+        cueEndMs: cue.end,
+        source: cue.text,
+        displaySource
+      });
+    }
     setOriginal(displaySource);
     renderTranslationForCue(idx, cue, displaySource,
       deepseekSeekSettling || eventType === "seeking");
@@ -1839,7 +1873,8 @@
     // speculative target: visible text returns first, then preloading resumes.
     const requestPlan = YTDS_SHARED.semanticCommitRequestPlan(
       state, requestStart, DEEPSEEK_COMMIT_GUARD_ITEMS,
-      DEEPSEEK_MAX_REQUEST_ITEMS, requestUrgent, DEEPSEEK_URGENT_REQUEST_ITEMS
+      DEEPSEEK_MAX_REQUEST_ITEMS, requestUrgent, DEEPSEEK_URGENT_REQUEST_ITEMS,
+      DEEPSEEK_URGENT_TARGET_TAIL_ITEMS
     );
     const targetAwareItems = requestPlan.itemCount;
     let requestEnd = Math.min(limitEnd, requestStart + targetAwareItems - 1);
@@ -2115,6 +2150,7 @@
     cueVideoId = nextVideoId;
     cueTrackKind = nextTrackKind;
     cueSourceLang = nextSourceLang;
+    lastDebugCueIdx = -1;
 
     if (!cueList.length) { onNoCues(data); return; }
     buildHybridCueGroups(cueList);
@@ -2122,16 +2158,12 @@
       cueCount: cueList.length,
       trackKind: cueTrackKind,
       sourceLang: cueSourceLang,
-      groups: sentGroups ? sentGroups.map((g, id) => ({
-        id,
-        startMs: g.start,
-        endMs: g.end,
-        startCue: g.startIdx,
-        endCue: g.endIdx,
-        batchIndex: deepseekGroupToBatch[id],
-        hardAfter: !!g.hardAfter,
-        text: g.text
-      })) : []
+      groupCount: sentGroups ? sentGroups.length : 0,
+      batchCount: deepseekBatchWindows.length,
+      regionCount: deepseekCommitRegions.length,
+      firstCueStartMs: cueList.length ? cueList[0].start : 0,
+      lastCueEndMs: cueList.length ? cueList[cueList.length - 1].end : 0,
+      sourceChars: cueList.reduce((sum, cue) => sum + String(cue.text || "").length, 0)
     });
     startCueLoop();
   }
@@ -2240,6 +2272,11 @@
     cueTrackSignature = "";
     duplicateCueEvents = 0;
     clearPendingTimer();
+    emitDebug("cues-unavailable", {
+      reason: String(data.reason || "unknown"),
+      detail: String(data.detail || "").slice(0, 240),
+      captionButton: captionButtonDebugState()
+    });
     if (settings.enabled) {
       startFallback();
       scheduleCueRecovery();
@@ -2431,11 +2468,31 @@
   // =========================================================================
   // BRIDGE <- inject.js
   // =========================================================================
+  const INJECT_DIAGNOSTIC_EVENTS = new Set([
+    "bridge-config-received",
+    "timedtext-captured",
+    "cue-fetch-start",
+    "cue-fetch-success",
+    "cue-fetch-empty",
+    "cue-fetch-error",
+    "timedtext-watchdog-expired"
+  ]);
+
   function onInjectMessage(evt) {
     if (evt.source !== window) return;
     if (evt.origin !== location.origin) return;
     const d = evt.data;
     if (!d || d.source !== "ytds-inject") return;
+    if (d.type === "diagnostic") {
+      if (d.videoId !== currentVideoId || !settings.enabled ||
+          !INJECT_DIAGNOSTIC_EVENTS.has(d.event)) return;
+      emitDebug(`inject-${d.event}`, Object.assign({
+        messageNonce: Number(d.nonce) || 0,
+        currentNonce: configNonce,
+        staleNonce: d.nonce !== configNonce
+      }, d.data && typeof d.data === "object" ? d.data : {}));
+      return;
+    }
     if (!Number.isInteger(d.nonce) || d.nonce !== configNonce) return;
     if (d.videoId !== currentVideoId) return;
     if (!settings.enabled) return;
@@ -2444,10 +2501,16 @@
     else if (d.type === "nocues") onNoCues(d);
   }
 
-  function sendConfig() {
+  function sendConfig(reason, reuseNonce) {
     try {
-      const nonce = nextConfigNonce();
+      const nonce = reuseNonce && Number.isInteger(configNonce) && configNonce > 0
+        ? configNonce : nextConfigNonce();
       configNonce = nonce;
+      emitDebug("cue-config-sent", {
+        nonce,
+        reason: String(reason || "request"),
+        captionButton: captionButtonDebugState()
+      });
       window.postMessage({
         source: "ytds-content",
         type: "config",
@@ -2482,6 +2545,7 @@
     cueSourceLang = "";
     cueTrackSignature = "";
     duplicateCueEvents = 0;
+    lastDebugCueIdx = -1;
     clearPendingTimer();
     stopCueRecovery();
     nocuesFallback = false;
@@ -2499,7 +2563,7 @@
       // fallback fills it if we end up scraping.
       ensureOverlay();
       if (nocuesFallback) startFallback();
-      if (sendConfiguration) sendConfig();
+      if (sendConfiguration) sendConfig("state");
     }
   }
 
@@ -2517,7 +2581,9 @@
     teardownAll();
     if (settings.enabled) {
       ensureOverlay();
-      sendConfig();             // ask inject.js for cues on the new video
+      emitDebug("cue-navigation", { videoId: currentVideoId || "" });
+      sendConfig("navigation"); // ask inject.js for cues on the new video
+      scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
       syncCaptions();           // auto-turn on YouTube CC so subs actually show
     }
   }
@@ -2536,7 +2602,13 @@
 
   // ---- boot ----------------------------------------------------------------
   loadSettings().then(() => {
+    emitDebug("content-boot", {
+      enabled: !!settings.enabled,
+      currentVideoId: currentVideoId || "",
+      readyState: document.readyState
+    });
     applyStateToDom(true);
     syncCaptions();            // auto-enable YouTube CC so subtitles show on load
+    scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
   });
 })();

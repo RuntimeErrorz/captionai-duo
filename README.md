@@ -59,7 +59,7 @@ The overlay can be dragged vertically and stores its position as a percentage of
 ### Tools
 
 - **Token usage** shows session totals reported by the configured API: input, output, reasoning, prompt-cache hit/miss, and reported/unreported response counts. It can be cleared independently. Local response-cache hits make no API call and add no tokens.
-- **Debug log** is off by default. When enabled, it records caption-track selection, request windows, network attempts, structural validation failures, and pagination. Logs live in session storage and may contain subtitle text, so inspect them before sharing.
+- **Debug log** is off by default. When enabled, it records the caption startup handshake and recovery attempts, track selection, compact request windows, network attempts, structural validation failures, and pagination. Logs live in session storage and may contain subtitle text, so inspect them before sharing.
 - **SRT export** reads original entries from the full captured track. Translated and bilingual exports contain only translations that are already complete and structurally valid; exporting does not translate the rest of a video merely to fill the file.
 
 ## Translation pipeline
@@ -78,7 +78,7 @@ A cue gap of at least 900 ms is only a soft hint that the AI may cross when gram
 
 ### 3. Rolling requests and context
 
-Pending coordinates near playback enter a bounded rolling window: cold start normally begins with 48 lexical items, continuous work uses about 80, and unusually long cross-edge semantic units may expand the window up to 160. Current-coordinate text also has an 18,000-character ceiling, and a private trailing guard covers the last 16 items. Current text plus deduplicated context share an approximately 28,000-character budget; current content and the nearest context entries win when space is tight.
+Pending coordinates near playback enter a bounded rolling window: the base cold window is 48 lexical items and continuous work uses about 80. A visible or newly sought target receives 48 additional items of right-side semantic runway, followed by a separate 16-item private trailing guard, so the target is not placed directly against the guard and forced into a duplicate request. Unusually long cross-edge semantic units may still expand the total window up to 160. Current-coordinate text also has an 18,000-character ceiling. Current text plus deduplicated context share an approximately 28,000-character budget; current content and the nearest context entries win when space is tight.
 
 Every prompt distinguishes:
 
@@ -115,7 +115,7 @@ If JSONL fails before its first valid unit, the extension can still try the prev
 
 Visible playback work has priority, and future scopes are started according to Prefetch batches. A tab normally allows at most three simultaneous AI requests so speculative look-ahead cannot consume unbounded connections, quota, or cost. A request for the subtitle being watched or the new seek target is urgent and may bypass a limit already occupied by prefetch.
 
-Seeking to an uncached location clears the stale translation immediately and shows loading. A distant seek cancels obsolete focus work, reseeds near the target, and may use up to 80 earlier coordinates as boundary evidence; an unproven unit touching the new left edge is not displayed prematurely. Validated cached units are reused directly.
+Seeking to an uncached location clears the stale translation immediately and shows loading. A distant seek cancels obsolete focus work and reseeds a safety window around the target: left-side coordinates provide read-only boundary evidence, while independent right-side semantic runway separates the target from the final guard. The complete target unit can therefore normally commit during the first streamed response; exceptionally long units still expand the window. An unproven unit touching the new left edge is not displayed prematurely, and validated cached units are reused directly.
 
 If the full timed track is unavailable and rendered-caption fallback is used, only the latest translation request remains active; a caption change aborts the old request instead of merely ignoring its response. Validated complete-request results also enter a session LRU capped at 96 entries and about 2 MB. Its key includes endpoint, model, reasoning mode, languages, context configuration, and exact source content. Matching work can be reused after refresh, and the cache is cleared with the browser session.
 

@@ -204,6 +204,13 @@
     } catch (_e) { /* never throw */ }
   }
 
+  function postDiagnostic(event, data) {
+    post("diagnostic", {
+      event: String(event || "event"),
+      data: data && typeof data === "object" ? data : {}
+    });
+  }
+
   function clearNocuesTimer() {
     if (nocuesTimer) { clearTimeout(nocuesTimer); nocuesTimer = null; }
   }
@@ -258,6 +265,13 @@
     const myNonce = reqNonce;
     const kind = trackKindOf(mySourceUrl);
     const sourceLang = trackLanguageOf(mySourceUrl);
+    postDiagnostic("cue-fetch-start", {
+      force: !!force,
+      fetchNonce: myNonce,
+      sourceRevision: mySourceRevision,
+      trackKind: kind,
+      sourceLang
+    });
     try {
       const origJson = await fetchJson3(buildUrl(mySourceUrl));
       const cues = parseJson3(origJson);
@@ -268,21 +282,35 @@
 
       if (!cues.length) {
         producedForUrl = "";        // allow a retry if the track later yields cues
-        post("nocues", { nonce: myNonce });
+        postDiagnostic("cue-fetch-empty", { fetchNonce: myNonce, sourceRevision: mySourceRevision });
+        post("nocues", { nonce: myNonce, reason: "empty-track" });
         scheduleCueRetry();
         return;
       }
 
       cueRetryAttempt = 0;
       clearCueRetry();
+      postDiagnostic("cue-fetch-success", {
+        cueCount: cues.length,
+        fetchNonce: myNonce,
+        sourceRevision: mySourceRevision,
+        trackKind: kind,
+        sourceLang
+      });
       post("cues", { cues, trackKind: kind, sourceLang, nonce: myNonce });
-    } catch (_e) {
+    } catch (err) {
       // could not fetch/parse — let content.js fall back to scraping, but only
       // if we are still on the same video the fetch was started for.
       if (vid !== currentVideoId || sourceVid !== currentVideoId ||
           mySourceRevision !== sourceRevision || mySourceKey !== sourceKey) return;
       producedForUrl = "";          // allow a retry on next capture
-      post("nocues", { nonce: myNonce });
+      const detail = String(err && err.message || err || "cue fetch failed").slice(0, 240);
+      postDiagnostic("cue-fetch-error", {
+        fetchNonce: myNonce,
+        sourceRevision: mySourceRevision,
+        detail
+      });
+      post("nocues", { nonce: myNonce, reason: "fetch-error", detail });
       scheduleCueRetry();
     }
   }
@@ -309,6 +337,12 @@
         if (key !== sourceKey) {
           sourceKey = key;
           sourceRevision++;
+          postDiagnostic("timedtext-captured", {
+            sourceRevision,
+            sourceVideoMatches: sourceVid === currentVideoId,
+            trackKind: trackKindOf(url),
+            sourceLang: trackLanguageOf(url)
+          });
           onSourceCaptured();
         } else if (exactChanged && cfg && producedForUrl === "") {
           // Same track with a freshly rotated pot/signature after a failure.
@@ -350,7 +384,10 @@
       nocuesTimer = null;
       if (vid !== currentVideoId) return;
       if (nonceAtArm !== reqNonce) return;
-      if (!sourceUrl) post("nocues");      // never saw the player fetch captions
+      if (!sourceUrl) {
+        postDiagnostic("timedtext-watchdog-expired", { waitMs: 6000 });
+        post("nocues", { reason: "timedtext-not-seen" });
+      }
     }, 6000);
   }
 
@@ -375,6 +412,10 @@
         // Adopt the content-supplied nonce so our posts correlate to THIS
         // sendConfig(); content.js drops any reply with an older nonce.
         if (typeof d.nonce === "number") reqNonce = d.nonce;
+        postDiagnostic("bridge-config-received", {
+          hasCapturedSource: !!sourceUrl,
+          sourceVideoMatches: !!sourceUrl && sourceVid === currentVideoId
+        });
         producedForUrl = "";            // force re-produce under new config
         if (sourceUrl && sourceVid === currentVideoId) {
           produceCues(true);            // already captured for this video
