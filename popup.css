@@ -377,6 +377,65 @@ input:disabled {
 .debug-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .debug-actions button { min-height: 34px; color: var(--text); }
 
+.token-head { min-height: 24px; }
+.text-action {
+  padding: 2px 3px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.text-action:hover { color: var(--danger); }
+.token-summary {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 9px;
+}
+.token-total {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 9px;
+  background: var(--surface-active);
+  border: 1px solid rgba(8, 127, 117, .18);
+  border-radius: 8px;
+}
+.token-total strong {
+  overflow: hidden;
+  color: var(--signal-strong);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+}
+.token-total span,
+.token-grid span { color: var(--muted); font-size: 11.5px; }
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.token-grid > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 6px 7px;
+  background: #f8fafb;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.token-grid b {
+  margin-left: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.token-meta { margin: 0; color: var(--muted); font-size: 11.5px; }
+
 input[type="range"] {
   width: 100%;
   height: 4px;

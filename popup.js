@@ -322,6 +322,46 @@ async function onClearDebug() {
     : t("debugClearFailed", "清空失败，请重试。"), resp && resp.ok ? "ok" : "err");
 }
 
+// ---- Token usage ---------------------------------------------------------
+const tokenFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+
+function formatTokenCount(value) {
+  return tokenFormatter.format(Math.max(0, Math.round(Number(value) || 0)));
+}
+
+function paintAiTokenUsage(value) {
+  const usage = value && typeof value === "object" ? value : {};
+  $("tokenTotal").textContent = formatTokenCount(usage.totalTokens);
+  $("tokenInput").textContent = formatTokenCount(usage.promptTokens);
+  $("tokenOutput").textContent = formatTokenCount(usage.completionTokens);
+  $("tokenCacheHit").textContent = formatTokenCount(usage.cacheHitTokens);
+  $("tokenCacheMiss").textContent = formatTokenCount(usage.cacheMissTokens);
+  $("tokenReasoning").textContent = formatTokenCount(usage.reasoningTokens);
+  $("tokenRequests").textContent = formatTokenCount(
+    (Number(usage.reportedRequests) || 0) + (Number(usage.unreportedRequests) || 0)
+  );
+  const reported = formatTokenCount(usage.reportedRequests);
+  const unreported = Math.max(0, Math.round(Number(usage.unreportedRequests) || 0));
+  $("tokenMeta").textContent = `${reported} ${t("tokenReportedRequests", "reported responses")}` +
+    (unreported ? ` · ${formatTokenCount(unreported)} ${t("tokenUnreportedRequests", "unreported responses")}` : "");
+}
+
+async function refreshAiTokenUsage() {
+  const resp = await sendRuntime({ type: "getAiTokenUsage" });
+  if (resp && resp.ok) paintAiTokenUsage(resp.usage);
+}
+
+async function onResetTokenUsage() {
+  const resp = await sendRuntime({ type: "resetAiTokenUsage" });
+  if (resp && resp.ok) paintAiTokenUsage(resp.usage);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "session" && changes.ytdsAiTokenUsageV1) {
+    paintAiTokenUsage(changes.ytdsAiTokenUsageV1.newValue);
+  }
+});
+
 // ---- AI service status line ----------------------------------------------
 async function refreshEngineStatus() {
   const el = $("aiStatus");
@@ -539,6 +579,7 @@ function wire() {
   });
   $("copyDebug").addEventListener("click", onCopyDebug);
   $("clearDebug").addEventListener("click", onClearDebug);
+  $("resetTokenUsage").addEventListener("click", onResetTokenUsage);
 
   // segmented: order
   document.querySelectorAll("#order button").forEach((b) =>
@@ -704,5 +745,6 @@ chrome.storage.sync.get(null, (got) => {
     $("aiApiKey").value = scope ? String(keys[scope] || "") : "";
     wire();
     refreshEngineStatus();
+    refreshAiTokenUsage();
   });
 });

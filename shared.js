@@ -137,6 +137,75 @@
       part && typeof part.text === "string" ? part.text : "").join("");
   }
 
+  function nonNegativeTokenCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
+  }
+
+  // Normalize the OpenAI/DeepSeek usage shapes without estimating missing
+  // values. A null result means that the endpoint did not report token usage.
+  function normalizeAiTokenUsage(value) {
+    const usage = value && typeof value === "object" ? value : null;
+    if (!usage) return null;
+    const hasReportedCount = [
+      "prompt_tokens", "completion_tokens", "total_tokens",
+      "input_tokens", "output_tokens"
+    ].some((key) => Number.isFinite(Number(usage[key])));
+    if (!hasReportedCount) return null;
+    const promptTokens = nonNegativeTokenCount(
+      usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens
+    );
+    const completionTokens = nonNegativeTokenCount(
+      usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens
+    );
+    const totalTokens = nonNegativeTokenCount(
+      usage.total_tokens != null ? usage.total_tokens : promptTokens + completionTokens
+    );
+    const promptDetails = usage.prompt_tokens_details &&
+      typeof usage.prompt_tokens_details === "object" ? usage.prompt_tokens_details : {};
+    const completionDetails = usage.completion_tokens_details &&
+      typeof usage.completion_tokens_details === "object" ? usage.completion_tokens_details : {};
+    const cacheHitTokens = nonNegativeTokenCount(
+      usage.prompt_cache_hit_tokens != null
+        ? usage.prompt_cache_hit_tokens : promptDetails.cached_tokens
+    );
+    const explicitMiss = usage.prompt_cache_miss_tokens;
+    const cacheMissTokens = explicitMiss != null
+      ? nonNegativeTokenCount(explicitMiss)
+      : Math.max(0, promptTokens - cacheHitTokens);
+    const reasoningTokens = nonNegativeTokenCount(
+      completionDetails.reasoning_tokens != null
+        ? completionDetails.reasoning_tokens : usage.reasoning_tokens
+    );
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens: totalTokens || promptTokens + completionTokens,
+      cacheHitTokens,
+      cacheMissTokens,
+      reasoningTokens
+    };
+  }
+
+  // Prompt-only compact rows. Full timing metadata remains local for
+  // validation, rendering and SRT export; the model only needs lexical ids,
+  // text, the following pause and whether that edge is soft or hard.
+  function compactAiPromptCueRows(itemsValue) {
+    return (Array.isArray(itemsValue) ? itemsValue : []).filter(Boolean).map((item) => [
+      String(item.id),
+      String(item.text || ""),
+      Math.max(0, Math.round(Number(item.pauseAfterMs) || 0)),
+      item.hardAfter ? "h" : item.softAfter ? "s" : ""
+    ]);
+  }
+
+  function compactAiPromptContextRows(entriesValue) {
+    return (Array.isArray(entriesValue) ? entriesValue : []).filter(Boolean).map((entry) => [
+      String(entry.id || ""),
+      String(entry.text || "")
+    ]);
+  }
+
   function aiChatCompletionBody(configValue, messages, maxTokens, temperature) {
     const config = configValue && typeof configValue === "object" ? configValue : {};
     const endpointKind = aiEndpointKind(config.baseUrl);
@@ -146,7 +215,8 @@
       messages: Array.isArray(messages) ? messages : [],
       ...(endpointKind === "deepseek" ? {
         response_format: { type: "json_object" },
-        thinking: { type: thinkingEnabled ? "enabled" : "disabled" }
+        thinking: { type: thinkingEnabled ? "enabled" : "disabled" },
+        stream_options: { include_usage: true }
       } : {}),
       max_tokens: Math.max(1, Math.min(16384, Math.round(Number(maxTokens) || 2048))),
       model: String(config.model || "").trim(),
@@ -865,145 +935,7 @@
     return "";
   }
 
-  function baseLanguageCode(value) {
-    return String(value || "").trim().toLowerCase().split(/[-_]/)[0];
-  }
-
-  function targetScriptPattern(targetLang) {
-    switch (baseLanguageCode(targetLang)) {
-      case "zh": return /\p{Script=Han}/u;
-      case "ja": return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
-      case "ko": return /[\p{Script=Hangul}\p{Script=Han}]/u;
-      case "ru": return /\p{Script=Cyrillic}/u;
-      case "ar": return /\p{Script=Arabic}/u;
-      case "hi": return /\p{Script=Devanagari}/u;
-      case "th": return /\p{Script=Thai}/u;
-      default: return null;
-    }
-  }
-
-  function comparableTranslationText(value) {
-    let text = String(value || "");
-    try { text = text.normalize("NFKC"); } catch (_e) { /* old JS engine */ }
-    return (text.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || []).join("");
-  }
-
-  function looksLikeProperNameOnly(value) {
-    const words = String(value || "").match(/[\p{L}\p{M}][\p{L}\p{M}.'’_-]*/gu) || [];
-    if (!words.length || words.length > 4) return false;
-    return words.every((word) => /^[\p{Lu}]/u.test(word) || /^[\p{Lu}.]+$/u.test(word));
-  }
-
-  function protectedLiteralFacts(value) {
-    let text = String(value || "");
-    try { text = text.normalize("NFKC"); } catch (_e) { /* old JS engine */ }
-    const matches = text.match(
-      /(?:https?:\/\/|www\.)[^\s<>()\[\]{}"'“”‘’]+|[\p{L}\p{N}.%_+\-]+@[\p{L}\p{N}.\-]+\.[\p{L}]{2,}/giu
-    ) || [];
-    return Array.from(new Set(matches.map((part) =>
-      part.replace(/[.,;:!?。，；：！？]+$/u, "").toLocaleLowerCase()
-    ).filter(Boolean)));
-  }
-
-  function protectedNumericFacts(value) {
-    let text = String(value || "");
-    try { text = text.normalize("NFKC"); } catch (_e) { /* old JS engine */ }
-    // Dates and clock times are deliberately excluded: natural translations
-    // may reorder their components. Standalone numbers, decimals, grouped
-    // thousands and percentages are stable enough for deterministic checks.
-    text = text.replace(/\b\d{1,4}(?:[\/:\-]\d{1,4}){1,2}\b/g, " ");
-    const matches = text.match(/[+\-]?(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?:\s*[%‰°])?/g) || [];
-    return matches.map((part) => part.replace(/\s+/g, "").replace(/,/g, ""));
-  }
-
-  function containsFactMultiset(sourceFacts, translationFacts) {
-    const counts = new Map();
-    for (const fact of sourceFacts) counts.set(fact, (counts.get(fact) || 0) + 1);
-    for (const fact of translationFacts) counts.set(fact, (counts.get(fact) || 0) - 1);
-    return Array.from(counts.values()).every((count) => count <= 0);
-  }
-
-  // This is deliberately a small output contract, not a translation scorer.
-  // It catches only a model copying meaningful source text into a translation
-  // field. Fluent-but-wrong translations remain a model-quality problem and
-  // must not be guessed at with phrase-specific heuristics.
-  function translationQualityIssue(sourceValue, translationValue, targetLang, sourceLang) {
-    const source = String(sourceValue || "").trim();
-    const translation = String(translationValue || "").trim();
-    if (!translation) return "empty translation";
-    if (!source) return "";
-    const sourceLiterals = protectedLiteralFacts(source);
-    const translationLiterals = new Set(protectedLiteralFacts(translation));
-    const missingLiteral = sourceLiterals.find((fact) => !translationLiterals.has(fact));
-    if (missingLiteral) return `translation omits protected token ${missingLiteral}`;
-    const sourceNumbers = protectedNumericFacts(source);
-    const translationNumbers = protectedNumericFacts(translation);
-    if (!containsFactMultiset(sourceNumbers, translationNumbers)) {
-      return "translation changes numeric facts";
-    }
-    const targetBase = baseLanguageCode(targetLang);
-    const sourceBase = baseLanguageCode(sourceLang);
-    const comparableSource = comparableTranslationText(source);
-    const comparableTranslation = comparableTranslationText(translation);
-    const properNameOnly = looksLikeProperNameOnly(source);
-    if (!properNameOnly && comparableSource.length >= 24 &&
-        comparableTranslation.length < Math.max(2, Math.floor(comparableSource.length * 0.08))) {
-      return "translation is implausibly short";
-    }
-    if (targetBase && sourceBase && targetBase === sourceBase) return "";
-    const targetScript = targetScriptPattern(targetLang);
-    // When track metadata is unavailable, text already written in the target's
-    // distinctive script is allowed to remain unchanged.
-    if (!sourceBase && targetScript && targetScript.test(source)) return "";
-    if (comparableSource.length >= 6 && comparableSource === comparableTranslation && !properNameOnly) {
-      return "translation matches source text";
-    }
-    // For targets with a distinctive script, a non-name translation made only
-    // of foreign-script words is a contract violation even when the model
-    // paraphrased instead of copying byte-for-byte. Punctuation and numeric-only
-    // answers remain valid (for example, "100%").
-    if (targetScript && !targetScript.test(translation) && !properNameOnly &&
-        /\p{L}/u.test(translation)) {
-      return "translation does not use target language script";
-    }
-    return "";
-  }
-
-  function repairedUnitTranslationsFromJsonText(
-    value, unitsValue, targetLang, sourceLang, diagnostics
-  ) {
-    const reject = (reason) => {
-      if (diagnostics && typeof diagnostics === "object") diagnostics.reason = reason;
-      return null;
-    };
-    const units = Array.isArray(unitsValue) ? unitsValue.filter(Boolean) : [];
-    const parsed = jsonObjectFromText(value);
-    const translated = parsed && parsed.translations;
-    if (!units.length || !Array.isArray(translated) || translated.length !== units.length) {
-      return reject("invalid translation repair count");
-    }
-    const out = [];
-    for (let index = 0; index < units.length; index++) {
-      const expected = units[index];
-      const actual = translated[index];
-      const unitId = String(actual && actual.unitId || "");
-      const translation = String(actual && actual.translation || "").trim();
-      if (!unitId || unitId !== String(expected.unitId || "")) {
-        return reject(`unexpected translation repair unit ${unitId} at offset ${index}`);
-      }
-      const issue = translationQualityIssue(
-        expected.source, translation, targetLang, sourceLang
-      );
-      if (issue) return reject(`${issue} for ${unitId}`);
-      out.push({ unitId, translation });
-    }
-    if (diagnostics && typeof diagnostics === "object") diagnostics.reason = "";
-    return out;
-  }
-
-  function segmentedTranslationsFromJsonText(
-    value, items, diagnostics, targetLang, sourceLang
-  ) {
+  function segmentedTranslationsFromJsonText(value, items, diagnostics) {
     const reject = (reason) => {
       if (diagnostics && typeof diagnostics === "object") diagnostics.reason = reason;
       return null;
@@ -1046,11 +978,6 @@
       if (ids.length > 1 &&
           ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
         return reject(`oversized segment ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
-      }
-      if (targetLang) {
-        const source = mergeTimedCueTexts(items.slice(cursor, cursor + ids.length));
-        const issue = translationQualityIssue(source, translation, targetLang, sourceLang);
-        if (issue) return reject(`${issue} for semantic-${ids[0]}-${ids[ids.length - 1]}`);
       }
       const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
       for (const id of ids) translations.push({ id, translation, unitId });
@@ -1671,6 +1598,9 @@
     aiOriginPattern,
     aiCredentialScope,
     aiCompletionText,
+    normalizeAiTokenUsage,
+    compactAiPromptCueRows,
+    compactAiPromptContextRows,
     aiChatCompletionBody,
     normalizeDeepseekPrefetchBatches,
     normalizeAiContextCount,
@@ -1697,8 +1627,6 @@
     deepSeekConcurrencyStatus,
     jsonObjectFromText,
     translationFromJsonText,
-    translationQualityIssue,
-    repairedUnitTranslationsFromJsonText,
     joinTranslatedParts,
     segmentedTranslationsFromJsonText,
     alignedTranslationsFromJsonText,

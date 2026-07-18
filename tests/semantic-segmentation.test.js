@@ -57,99 +57,18 @@ test("semantic response enforces duration and source-size safety ceilings", () =
   assert.match(sizeDiagnostics.reason, /oversized segment/);
 });
 
-test("translation quality contract rejects copied source without phrase-specific rules", () => {
-  const source = "Let's move on to someone in the West Wing, J.D. Vance";
-  assert.match(
-    shared.translationQualityIssue(source, `${source}。`, "zh-CN", "en"),
-    /matches source text/
-  );
-  assert.match(
-    shared.translationQualityIssue(source, "We should ask another person.", "zh-CN", "en"),
-    /target language script/
-  );
-  assert.equal(
-    shared.translationQualityIssue(source, "我们换个话题，问问西翼的人——J.D. 万斯。", "zh-CN", "en"),
-    ""
-  );
-  // Names and same-language subtitle modes are valid unchanged output.
-  assert.equal(shared.translationQualityIssue("J.D. Vance", "J.D. Vance", "zh-CN", "en"), "");
-  assert.equal(shared.translationQualityIssue("Same language", "Same language", "en", "en"), "");
-});
-
-test("translation quality contract protects stable facts and obvious completeness", () => {
-  assert.match(
-    shared.translationQualityIssue(
-      "Revenue rose from 12.5% to 18%.", "收入从12.5%上升。", "zh-CN", "en"
-    ),
-    /numeric facts/
-  );
-  assert.equal(
-    shared.translationQualityIssue(
-      "Revenue rose from 12.5% to 18%.", "收入从12.5%上升至18%。", "zh-CN", "en"
-    ),
-    ""
-  );
-  assert.match(
-    shared.translationQualityIssue(
-      "Open https://example.com/docs for the full report.", "打开网站查看完整报告。", "zh-CN", "en"
-    ),
-    /protected token/
-  );
-  assert.match(
-    shared.translationQualityIssue(
-      "This complete sentence contains enough information to require a meaningful translation.",
-      "好", "zh-CN", "en"
-    ),
-    /implausibly short/
-  );
-});
-
-test("translation repair accepts only exact ordered units with non-copied output", () => {
-  const source = "Let's move on to someone in the West Wing";
-  const units = [{ unitId: "semantic-295-303", source }];
-  const acceptedDiagnostics = {};
-  const accepted = shared.repairedUnitTranslationsFromJsonText(
-    JSON.stringify({ translations: [
-      { unitId: "semantic-295-303", translation: "我们换个话题，问问西翼的人。" }
-    ] }),
-    units,
-    "zh-CN",
-    "en",
-    acceptedDiagnostics
-  );
-  assert.equal(JSON.stringify(accepted), JSON.stringify([
-    { unitId: "semantic-295-303", translation: "我们换个话题，问问西翼的人。" }
-  ]));
-  assert.equal(acceptedDiagnostics.reason, "");
-
-  for (const response of [
-    { translations: [{ unitId: "semantic-295-304", translation: "译文" }] },
-    { translations: [{ unitId: "semantic-295-303", translation: `${source}。` }] },
-    { translations: [] }
-  ]) {
-    const diagnostics = {};
-    assert.equal(shared.repairedUnitTranslationsFromJsonText(
-      JSON.stringify(response), units, "zh-CN", "en", diagnostics
-    ), null);
-    assert.notEqual(diagnostics.reason, "");
-  }
-});
-
-test("legacy semantic parser quality-gates copied translations before commit", () => {
+test("semantic parser accepts natural model translations without content heuristics", () => {
   const current = [
-    { id: "295", text: "Let's move on", startMs: 1000, endMs: 1800, hardAfter: false },
-    { id: "296", text: "to someone", startMs: 1800, endMs: 2400, hardAfter: false }
+    { id: "295", text: "This is pretty much a", startMs: 1000, endMs: 1800, hardAfter: false },
+    { id: "296", text: "10 out of 10.", startMs: 1800, endMs: 2400, hardAfter: false }
   ];
-  const diagnostics = {};
-  assert.equal(shared.segmentedTranslationsFromJsonText(
+  const output = shared.segmentedTranslationsFromJsonText(
     JSON.stringify({ segments: [{
       ids: ["295", "296"],
-      translation: "Let's move on to someone。"
+      translation: "这差不多是10分满分。"
     }] }),
-    current,
-    diagnostics,
-    "zh-CN",
-    "en"
-  ), null);
-  assert.match(diagnostics.reason, /matches source text/);
+    current
+  );
+  assert.equal(output.length, 2);
+  assert.equal(output[0].translation, "这差不多是10分满分。");
 });

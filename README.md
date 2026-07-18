@@ -58,8 +58,9 @@ The overlay can be dragged vertically and stores its position as a percentage of
 
 ### Tools
 
-- **Debug log** is off by default. When enabled, it records caption-track selection, request windows, network attempts, validation failures, and pagination. Logs live in session storage and may contain subtitle text, so inspect them before sharing.
-- **SRT export** reads original entries from the full captured track. Translated and bilingual exports contain only translations that are already complete and validated; exporting does not translate the rest of a video merely to fill the file.
+- **Token usage** shows session totals reported by the configured API: input, output, reasoning, prompt-cache hit/miss, and reported/unreported response counts. It can be cleared independently. Local response-cache hits make no API call and add no tokens.
+- **Debug log** is off by default. When enabled, it records caption-track selection, request windows, network attempts, structural validation failures, and pagination. Logs live in session storage and may contain subtitle text, so inspect them before sharing.
+- **SRT export** reads original entries from the full captured track. Translated and bilingual exports contain only translations that are already complete and structurally valid; exporting does not translate the rest of a video merely to fill the file.
 
 ## Translation pipeline
 
@@ -85,13 +86,15 @@ Every prompt distinguishes:
 - `CURRENT_CUES`, whose coordinates must be covered exactly and in order;
 - `FUTURE_CONTEXT`, controlled by Future context and read-only.
 
+To avoid repeating verbose field names for every word, current coordinates are transmitted as compact `[id, text, pauseAfterMs, boundary]` rows, where boundary is empty, soft, or hard. Context uses compact `[id, text]` rows. Full cue IDs and absolute timing remain local for validation, playback, pagination, and export.
+
 The AI first groups contiguous current coordinates into natural sentences or clauses, then returns coarse bilingual alignment chunks within each semantic unit. Context may inform interpretation but must never be translated, repeated, or merged into current output.
 
 ### 4. Streaming transport and model output
 
-Requests use Chat Completions JSON with `stream: true`. DeepSeek also receives JSON-output and thinking fields; a custom endpoint needs to accept the request and return OpenAI-style `choices`.
+Requests use Chat Completions JSON with `stream: true`. DeepSeek also receives JSON-output, thinking, and `stream_options.include_usage` fields; a custom endpoint needs to accept the request and return OpenAI-style `choices`.
 
-Because network chunks may split anywhere, the parser buffers through a blank-line-delimited SSE event before parsing its `data:` fields and joins content through `[DONE]`. A server that ignores streaming and returns ordinary JSON is also accepted. Streaming currently improves transport behavior and first-byte visibility; it **does not paint partial model text token by token**. The complete JSON must pass validation before anything is cached or displayed.
+Because network chunks may split anywhere, the parser buffers through a blank-line-delimited SSE event before parsing its `data:` fields and joins content through `[DONE]`. Usage-only SSE chunks are accumulated separately. A server that ignores streaming and returns ordinary JSON is also accepted, including its top-level `usage` object. Streaming currently improves transport behavior and first-byte visibility; it **does not paint partial model text token by token**. The complete JSON must pass validation before anything is cached or displayed.
 
 ### 5. Validation, monotonic commit, and fallback
 
@@ -100,13 +103,13 @@ A response is accepted only when:
 - every current coordinate appears exactly once and in order, with no omission, duplicate, or invented ID;
 - unresolved content is a contiguous suffix only;
 - semantic units do not cross hard boundaries or exceed duration/text safety ceilings;
-- alignment chunks are contiguous and complete inside their semantic unit, with non-empty translation;
-- output does not obviously copy meaningful source text or collapse into an implausibly short answer;
-- stable numeric facts, percentages, URLs, and email addresses from the source remain present.
+- alignment chunks are contiguous and complete inside their semantic unit, with non-empty translation.
+
+The extension no longer judges translation quality with numeric multiplicity, text length, script, source-similarity, URL, or email heuristics. Those requirements remain model instructions only; they cannot trigger repair requests or block structurally valid output.
 
 Even if the model calls the window tail complete, any unit touching the private 16-item guard is carried whole into the next, longer window. Each hard-boundary region commits only a contiguous prefix from left to right. A later response therefore cannot leave a hole or overwrite an earlier decision; fixed request edges do not split a cross-cue phrase.
 
-If aligned-chunk JSON is invalid, the extension tries a simpler whole-segment JSON contract. Copied text, missing stable facts, and obvious omissions trigger repair only for the affected alignment chunks; unaffected chunk IDs and pagination granularity remain intact. HTTP work receives up to three attempts with timeout, `429`, and temporary-server-error handling. Unvalidated output is never added to the cache.
+If aligned-chunk JSON is invalid, the extension tries a simpler whole-segment JSON contract. HTTP work receives up to three attempts with timeout, `429`, and temporary-server-error handling. Structurally invalid output is never added to the cache.
 
 ### 6. Playback, seek, prefetch, and concurrency
 
@@ -134,7 +137,7 @@ Existing translations are repaginated after font, window-size, fullscreen-size, 
 
 ## Privacy
 
-No accounts, analytics, or tracking. Caption text is sent only to the configured AI endpoint. Ordinary settings use `chrome.storage.sync`; endpoint-scoped API keys use `chrome.storage.local`; the bounded validated-translation cache uses `chrome.storage.session` and is cleared with the browser session.
+No accounts, analytics, or tracking. Caption text is sent only to the configured AI endpoint. Ordinary settings use `chrome.storage.sync`; endpoint-scoped API keys use `chrome.storage.local`; the bounded validated-translation cache and API-reported token totals use `chrome.storage.session` and are cleared with the browser session.
 
 ## Development
 
@@ -148,7 +151,7 @@ npm run check
 - `inject.js`: captures the caption-track request used by the player.
 - `content.js`: overlay, timeline, pagination, dragging, and export data.
 - `background.js`: AI requests, dynamic endpoint permission, retries, and SSE/JSON parsing.
-- `shared.js`: defaults, validation, and pure helpers.
+- `shared.js`: defaults, structural validation, and pure helpers.
 - `popup.html/.css/.js`: settings UI.
 
 ## License

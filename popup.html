@@ -116,6 +116,32 @@
       <p class="engine-msg" id="aiStatus" role="status" aria-live="polite" hidden></p>
     </section>
 
+    <!-- ============================ Token usage ============================ -->
+    <section class="card console-section" id="panel-token-usage"
+             data-workspace-panel="tools" hidden>
+      <div class="card-head token-head">
+        <h2 class="card-title" data-i18n="secTokenUsage">Token 用量</h2>
+        <button type="button" id="resetTokenUsage" class="text-action"
+                data-i18n="tokenReset">清零</button>
+      </div>
+      <div class="token-summary">
+        <div class="token-total">
+          <strong id="tokenTotal">0</strong>
+          <span data-i18n="tokenTotal">总 Token</span>
+        </div>
+        <div class="token-grid">
+          <div><span data-i18n="tokenInput">输入</span><b id="tokenInput">0</b></div>
+          <div><span data-i18n="tokenOutput">输出</span><b id="tokenOutput">0</b></div>
+          <div><span data-i18n="tokenCacheHit">缓存命中</span><b id="tokenCacheHit">0</b></div>
+          <div><span data-i18n="tokenCacheMiss">缓存未命中</span><b id="tokenCacheMiss">0</b></div>
+          <div><span data-i18n="tokenReasoning">推理</span><b id="tokenReasoning">0</b></div>
+          <div><span data-i18n="tokenRequests">API 响应</span><b id="tokenRequests">0</b></div>
+        </div>
+      </div>
+      <p class="token-meta" id="tokenMeta">0 个已报告响应</p>
+      <p class="engine-hint" data-i18n="tokenUsageHint">仅统计接口明确返回的 usage；本地缓存命中不会消耗 Token。</p>
+    </section>
+
     <!-- ============================ 调试日志 ============================ -->
     <section class="card console-section" id="panel-debug"
              data-workspace-panel="tools" hidden>
