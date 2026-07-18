@@ -98,6 +98,7 @@ test("J.D. Vance remains indivisible when an oversized model chunk falls back to
 test("display pagination protects lexical punctuation shapes without phrase exceptions", () => {
   const cases = [
     ["A long introduction before J. D. Vance and several words after the complete name.", "J. D. Vance"],
+    ["A long introduction before JD Vance and several words after the complete name.", "JD Vance"],
     ["A long introduction before the Ph.D. researcher and several words after the title.", "Ph.D."],
     ["The measured value before calibration is 3.14159 and the experiment continues afterward.", "3.14159"],
     ["The currently installed release is v3.25.3 and every existing setting remains compatible.", "v3.25.3"],

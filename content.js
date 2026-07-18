@@ -107,6 +107,8 @@
   const deepseekRetryCounts = new Map(); // bounded cold-worker retries per batch/epoch
   let deepseekFocusGeneration = 0; // increments when seeking to another semantic batch
   let deepseekFocusedBatchIndex = -1;
+  let deepseekSeekSettleTimer = null;
+  let deepseekSeekSettling = false;
   const ZERO_DUR_FLOOR_MS = 1000; // min visible window for a trailing zero-dur cue
   const MAX_CUE_COUNT = 50000;
   const MAX_CUE_TEXT_CHARS = 4000;
@@ -130,11 +132,13 @@
   const DEEPSEEK_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
   const DEEPSEEK_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
   const DEEPSEEK_REQUEST_ITEMS = 80; // normal monotonic request window
+  const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // first visible-subtitle request cap
   const DEEPSEEK_MAX_REQUEST_ITEMS = 160; // expansion cap for unusually long units
   const DEEPSEEK_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
   const DEEPSEEK_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
-  const DEEPSEEK_SEEK_BACKTRACK_ITEMS = 80; // read-only lead-in for random access
+  const DEEPSEEK_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
   const DEEPSEEK_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
+  const DEEPSEEK_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
   const DEEPSEEK_MAX_PREFETCH_BATCHES = 10;
   const DEEPSEEK_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
   const DEEPSEEK_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
@@ -880,6 +884,7 @@
   }
 
   function stopCueLoop() {
+    clearDeepseekSeekSettle();
     if (cueLoopVideo) {
       if (cueFrameId != null && typeof cueLoopVideo.cancelVideoFrameCallback === "function") {
         try { cueLoopVideo.cancelVideoFrameCallback(cueFrameId); } catch (_e) { /* ignore */ }
@@ -894,6 +899,14 @@
     cueFrameId = null;
     cueLoopVideo = null;
     activeCueIdx = -1;
+  }
+
+  function clearDeepseekSeekSettle() {
+    if (deepseekSeekSettleTimer) {
+      clearTimeout(deepseekSeekSettleTimer);
+      deepseekSeekSettleTimer = null;
+    }
+    deepseekSeekSettling = false;
   }
 
   function deepseekBatchIndexAtTime(timeMs) {
@@ -934,13 +947,48 @@
     }
   }
 
+  function beginDeepseekSeek(timeMs) {
+    if (deepseekSeekSettleTimer) clearTimeout(deepseekSeekSettleTimer);
+    deepseekSeekSettling = true;
+    focusDeepseekAfterSeek(timeMs);
+    deepseekSeekSettleTimer = setTimeout(() => {
+      deepseekSeekSettleTimer = null;
+      if (!deepseekSeekSettling) return;
+      deepseekSeekSettling = false;
+      const video = getVideo();
+      const settledTimeMs = video ? video.currentTime * 1000 : timeMs;
+      focusDeepseekAfterSeek(settledTimeMs);
+      emitDebug("deepseek-seek-settled", {
+        reason: "idle",
+        videoTimeMs: Math.round(Number(settledTimeMs) || 0)
+      });
+      cueTick({ type: "deepseek-seek-settled" });
+    }, DEEPSEEK_SEEK_SETTLE_MS);
+  }
+
+  function finishDeepseekSeek(timeMs) {
+    if (deepseekSeekSettleTimer) {
+      clearTimeout(deepseekSeekSettleTimer);
+      deepseekSeekSettleTimer = null;
+    }
+    deepseekSeekSettling = false;
+    focusDeepseekAfterSeek(timeMs);
+    emitDebug("deepseek-seek-settled", {
+      reason: "seeked",
+      videoTimeMs: Math.round(Number(timeMs) || 0)
+    });
+  }
+
   function cueTick(event) {
     if (!extensionContextAlive()) { stopForInvalidatedExtensionContext(); return; }
     if (!settings.enabled || !cueList) return;
     const video = getVideo();
     if (!video) return;
     const t = video.currentTime * 1000;
-    if (event && event.type === "seeking") focusDeepseekAfterSeek(t);
+    const eventType = event && event.type || "";
+    if (eventType === "seeking") beginDeepseekSeek(t);
+    else if (eventType === "seeked") finishDeepseekSeek(t);
+    const seekJustSettled = eventType === "seeked" || eventType === "deepseek-seek-settled";
 
     let idx = activeCueIdxAt(t);
     if (idx < 0) idx = semanticGapCueIdxAt(t);
@@ -962,6 +1010,12 @@
     const timedGroupIdx = deepseekGroupForCueAt(idx, t);
     if (idx === activeCueIdx && timedGroupIdx === activeGroupIdx) {
       maybeReflowSemanticDisplay();
+      if (seekJustSettled && activeGroupIdx >= 0 &&
+          !transCache.has(groupKey(activeGroupIdx))) {
+        armPendingTranslationIndicator(activeGroupIdx, true);
+        deepseekRequestBatch(activeGroupIdx, true, true);
+        prefetchFrom(idx);
+      }
       return;                             // same sentence — no re-render, no jitter
     }
     activeCueIdx = idx;
@@ -979,7 +1033,8 @@
       groupSource: activeGroupIdx >= 0 && sentGroups ? sentGroups[activeGroupIdx].text : ""
     });
     setOriginal(displaySource);
-    renderTranslationForCue(idx, cue, displaySource, !!(event && event.type === "seeking"));
+    renderTranslationForCue(idx, cue, displaySource,
+      deepseekSeekSettling || eventType === "seeking");
     prefetchFrom(idx);
   }
 
@@ -1156,7 +1211,8 @@
           settings.showTranslation ? twoLineCapacity : Number.MAX_SAFE_INTEGER,
           (text) => measureDisplayText(text, true),
           (text) => measureDisplayText(text, false),
-          settings.targetLang
+          settings.targetLang,
+          cueSourceLang
         );
         if (alignedPlan.pages.length && !alignedPlan.overflow) {
           displayPlan = {
@@ -1170,8 +1226,8 @@
       }
     }
     if (!displayPlan) {
-      // Pixel-aware safety path for individually translated/legacy responses
-      // and a model-aligned chunk that is itself wider than the viewport.
+      // Whole-unit safety path for responses without usable aligned chunks and
+      // the rare oversized chunk that cannot be locally paginated by its ids.
       const requestedPages = semanticDisplayPageCount(source, translation, members.length);
       displayPlan = YTDS_SHARED.semanticDisplayPlan(
         source,
@@ -1567,7 +1623,7 @@
         commitFloor: region.start,
         limitEnd: region.end,
         targetThrough: region.start - 1,
-        urgentThrough: region.start - 1,
+        urgentTarget: region.start - 1,
         windowItems: DEEPSEEK_INITIAL_REQUEST_ITEMS
       };
       deepseekCommitStateByRegion.set(regionIndex, state);
@@ -1615,7 +1671,7 @@
       : Math.min(targetGroup, requestStart + DEEPSEEK_SEEK_LEFT_GUARD_ITEMS);
     state.limitEnd = Math.max(targetGroup, limitEnd);
     state.targetThrough = requestStart - 1;
-    state.urgentThrough = requestStart - 1;
+    state.urgentTarget = requestStart - 1;
     state.windowItems = DEEPSEEK_INITIAL_REQUEST_ITEMS;
     emitDebug("semantic-commit-reseeded", {
       regionIndex,
@@ -1777,13 +1833,13 @@
     const requestStart = state.cursor;
     const commitFloor = state.commitFloor;
     const limitEnd = state.limitEnd;
-    const requestUrgent = !!urgent || state.urgentThrough >= requestStart;
+    const requestUrgent = !!urgent || state.urgentTarget >= requestStart;
     // Put the requested playback/prefetch target before the private guard when
     // the cap allows it. Urgent work deliberately ignores the farther
     // speculative target: visible text returns first, then preloading resumes.
     const requestPlan = YTDS_SHARED.semanticCommitRequestPlan(
       state, requestStart, DEEPSEEK_COMMIT_GUARD_ITEMS,
-      DEEPSEEK_MAX_REQUEST_ITEMS, requestUrgent
+      DEEPSEEK_MAX_REQUEST_ITEMS, requestUrgent, DEEPSEEK_URGENT_REQUEST_ITEMS
     );
     const targetAwareItems = requestPlan.itemCount;
     let requestEnd = Math.min(limitEnd, requestStart + targetAwareItems - 1);
@@ -1942,13 +1998,16 @@
   // Extend one hard-boundary-delimited stream's desired prefix. Transport
   // batches only define how far to preload; they never own semantic output.
   function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false) {
+    if (deepseekSeekSettling) return;
     if (!sentGroups || gIdx < 0 || gIdx >= sentGroups.length) return;
     const regionIndex = deepseekGroupToCommitRegion[gIdx];
     const region = deepseekCommitRegions[regionIndex];
     let state = deepseekCommitState(regionIndex);
     if (!region || !state) return;
     const currentMissing = !transCache.has(groupKey(gIdx));
-    const randomAccessDistance = DEEPSEEK_MAX_REQUEST_ITEMS - DEEPSEEK_COMMIT_GUARD_ITEMS;
+    const randomAccessDistance = (urgent
+      ? DEEPSEEK_URGENT_REQUEST_ITEMS : DEEPSEEK_MAX_REQUEST_ITEMS) -
+      DEEPSEEK_COMMIT_GUARD_ITEMS;
     if (YTDS_SHARED.shouldReseedSemanticCommitState(
       currentMissing, gIdx, state, randomAccessDistance, urgent, activeGroupIdx >= 0
     )) {
@@ -1959,7 +2018,7 @@
     const targetThrough = Math.min(state.limitEnd, batch ? batch.end : gIdx);
     state.targetThrough = Math.max(state.targetThrough, targetThrough);
     if (urgent) {
-      state.urgentThrough = Math.max(state.urgentThrough, targetThrough);
+      state.urgentTarget = gIdx;
       if (Number.isInteger(batchIndex)) deepseekFocusedBatchIndex = batchIndex;
     }
     pumpDeepseekCommitRegion(regionIndex, urgent);

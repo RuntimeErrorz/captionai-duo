@@ -698,25 +698,32 @@
     return outsideIsland && (!!urgent || !playbackActive);
   }
 
-  // Urgent playback work is sized only through the active batch. Speculative
-  // targetThrough may be much farther ahead and is resumed after this response;
-  // including it here delays the visible subtitle for work nobody can see yet.
+  // Urgent playback work is sized around the one subtitle currently needed.
+  // Speculative targetThrough may be much farther ahead and is resumed after
+  // that subtitle is covered. The urgent cap grows only when a previous window
+  // could not produce an immutable prefix.
   function semanticCommitRequestPlan(
-    state, requestStartValue, guardItemsValue, maxItemsValue, urgent
+    state, requestStartValue, guardItemsValue, maxItemsValue, urgent,
+    initialUrgentItemsValue
   ) {
     const requestStart = Math.max(0, Math.floor(Number(requestStartValue) || 0));
     const guardItems = Math.max(0, Math.floor(Number(guardItemsValue) || 0));
     const maxItems = Math.max(1, Math.floor(Number(maxItemsValue) || 1));
     const windowItems = Math.max(1, Math.floor(Number(state && state.windowItems) || 1));
+    const initialUrgentItems = Math.max(1,
+      Math.floor(Number(initialUrgentItemsValue) || maxItems));
     const target = Math.floor(Number(urgent
-      ? state && state.urgentThrough : state && state.targetThrough));
+      ? state && state.urgentTarget : state && state.targetThrough));
     const targetThrough = Number.isFinite(target) ? Math.max(requestStart - 1, target) : requestStart - 1;
     const targetItems = Math.max(0, targetThrough - requestStart + 1) + guardItems;
+    const effectiveMaxItems = urgent
+      ? Math.min(maxItems, Math.max(windowItems, initialUrgentItems))
+      : maxItems;
     return {
       targetThrough,
       // windowItems is also the adaptive recovery size. Never clamp it back to
       // the cold-start size after a guard-crossing unit requested expansion.
-      itemCount: Math.min(maxItems, Math.max(windowItems, targetItems))
+      itemCount: Math.min(effectiveMaxItems, Math.max(windowItems, targetItems))
     };
   }
 
@@ -1302,7 +1309,7 @@
 
   function alignedChunkDisplayPlan(
     chunksValue, maxSourceWidthValue, maxTranslationWidthValue,
-    measureSource, measureTranslation, targetLang
+    measureSource, measureTranslation, targetLang, sourceLocale
   ) {
     const chunks = (Array.isArray(chunksValue) ? chunksValue : []).map((chunk) => ({
       ids: Array.isArray(chunk && chunk.ids) ? chunk.ids.map(String) : [],
@@ -1330,29 +1337,105 @@
       return { source, translation };
     };
 
-    const pageChunks = [];
+    const memberPages = {};
+    const pages = [];
     let current = [];
+    const flushCurrent = () => {
+      if (!current.length) return;
+      const page = pages.length;
+      const text = textFor(current);
+      const ids = current.flatMap((chunk) => chunk.ids);
+      for (const id of ids) memberPages[id] = page;
+      pages.push({ ...text, ids, chunkCount: current.length });
+      current = [];
+    };
+
+    const splitOversizedChunk = (chunk) => {
+      if (chunk.ids.length < 2) return null;
+      const text = textFor([chunk]);
+      const sourceWidth = sourceMeasure(text.source);
+      const translationWidth = translationMeasure(text.translation);
+      const minimumPages = Math.max(2,
+        Math.ceil(sourceWidth / sourceLimit),
+        Math.ceil(translationWidth / translationLimit));
+      const maximumPages = chunk.ids.length;
+      for (let requested = Math.min(maximumPages, minimumPages);
+           requested <= maximumPages; requested++) {
+        const localPlan = semanticDisplayPlan(
+          text.source,
+          text.translation,
+          chunk.cues.map((cue) => String(cue && cue.text || "")),
+          requested,
+          sourceMeasure,
+          translationMeasure,
+          sourceLocale,
+          targetLang
+        );
+        const sourcePages = localPlan.sourcePages;
+        const translationPages = localPlan.translationPages;
+        const pageCount = Math.max(sourcePages.length, translationPages.length);
+        if (pageCount < 2) continue;
+        const localPages = Array.from({ length: pageCount }, (_value, page) => {
+          const sourcePage = sourcePages.length <= 1 ? 0
+            : Math.round(page * (sourcePages.length - 1) / (pageCount - 1));
+          const translationPage = translationPages.length <= 1 ? 0
+            : Math.round(page * (translationPages.length - 1) / (pageCount - 1));
+          return {
+            source: sourcePages[sourcePage] && sourcePages[sourcePage].text || text.source,
+            translation: translationPages[translationPage] &&
+              translationPages[translationPage].text || text.translation,
+            ids: [],
+            chunkCount: 1,
+            splitChunk: true
+          };
+        });
+        for (let ordinal = 0; ordinal < chunk.ids.length; ordinal++) {
+          const sourcePage = Number(localPlan.assignments[ordinal]);
+          const page = sourcePages.length > 1 && Number.isInteger(sourcePage)
+            ? Math.round(sourcePage * (pageCount - 1) / (sourcePages.length - 1))
+            : Math.min(pageCount - 1,
+              Math.floor(ordinal * pageCount / chunk.ids.length));
+          localPages[page].ids.push(chunk.ids[ordinal]);
+        }
+        if (localPages.some((page) => !page.ids.length)) continue;
+        const stillOverflows = localPages.some((page) =>
+          sourceMeasure(page.source) > sourceLimit ||
+          translationMeasure(page.translation) > translationLimit
+        );
+        if (!stillOverflows) return localPages;
+      }
+      return null;
+    };
+
     for (const chunk of chunks) {
+      const chunkText = textFor([chunk]);
+      const chunkOverflows = sourceMeasure(chunkText.source) > sourceLimit ||
+        translationMeasure(chunkText.translation) > translationLimit;
+      if (chunkOverflows) {
+        flushCurrent();
+        const splitPages = splitOversizedChunk(chunk);
+        if (splitPages) {
+          for (const splitPage of splitPages) {
+            const page = pages.length;
+            for (const id of splitPage.ids) memberPages[id] = page;
+            pages.push(splitPage);
+          }
+        } else {
+          const page = pages.length;
+          for (const id of chunk.ids) memberPages[id] = page;
+          pages.push({ ...chunkText, ids: chunk.ids.slice(), chunkCount: 1 });
+        }
+        continue;
+      }
       const candidate = [...current, chunk];
       const candidateText = textFor(candidate);
-      const overflows = sourceMeasure(candidateText.source) > sourceLimit ||
+      const candidateOverflows = sourceMeasure(candidateText.source) > sourceLimit ||
         translationMeasure(candidateText.translation) > translationLimit;
-      if (current.length && overflows) {
-        pageChunks.push(current);
-        current = [chunk];
-      } else {
-        current = candidate;
-      }
+      if (current.length && candidateOverflows) flushCurrent();
+      current.push(chunk);
     }
-    if (current.length) pageChunks.push(current);
+    flushCurrent();
 
-    const memberPages = {};
-    const pages = pageChunks.map((members, page) => {
-      const text = textFor(members);
-      const ids = members.flatMap((chunk) => chunk.ids);
-      for (const id of ids) memberPages[id] = page;
-      return { ...text, ids, chunkCount: members.length };
-    });
     const overflow = pages.some((page) =>
       sourceMeasure(page.source) > sourceLimit ||
       translationMeasure(page.translation) > translationLimit
@@ -1387,6 +1470,8 @@
       // Initial/acronym chains plus an optional proper-name word:
       // J.D. Vance, J. D. Vance, U.S. Government, Ph.D.
       /(?:\p{L}{1,4}\.\s*){2,}(?:\p{Lu}[\p{L}\p{M}'’\-]+)?/gu,
+      // Undotted initialisms followed by a capitalized name/title.
+      /\b\p{Lu}{2,}\s+\p{Lu}[\p{L}\p{M}'’\-]+/gu,
       // Decimal numbers, times, dates and versions.
       /\bv?[+\-]?\p{N}+(?:[.,:/\-]\p{N}+)+(?:[%°]|\p{L}+)?/giu,
       // An ellipsis is one punctuation token, not several sentence endings.
@@ -1423,9 +1508,10 @@
     }
   }
 
-  // Legacy safety pagination for responses without aligned model chunks.
-  // Locale-aware sentence boundaries win over clause/word boundaries. Lexical
-  // protected spans are never split even when doing so would balance widths.
+  // Pixel-aware safety pagination for responses without aligned model chunks
+  // and for the interior of a single oversized chunk. Locale-aware sentence
+  // boundaries win over clause/word boundaries. Lexical protected spans are
+  // never split even when doing so would balance widths.
   function splitTextForDisplay(value, pageCount, measureText, locale) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     const requested = Math.max(1, Math.floor(Number(pageCount) || 1));

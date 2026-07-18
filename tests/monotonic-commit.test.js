@@ -121,10 +121,10 @@ test("gap prewarming can relocate an idle safety island", () => {
 
 test("urgent request sizing ignores a farther speculative target but preserves throughput", () => {
   const state = {
-    cursor: 4416, windowItems: 80, urgentThrough: 4447, targetThrough: 4575
+    cursor: 4416, windowItems: 80, urgentTarget: 4447, targetThrough: 4575
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
-    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true)
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96)
   )), {
     targetThrough: 4447,
     itemCount: 80
@@ -133,7 +133,7 @@ test("urgent request sizing ignores a farther speculative target but preserves t
 
 test("non-urgent continuation still consumes the requested preload range", () => {
   const state = {
-    cursor: 4416, windowItems: 80, urgentThrough: 4447, targetThrough: 4575
+    cursor: 4416, windowItems: 80, urgentTarget: 4447, targetThrough: 4575
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
     shared.semanticCommitRequestPlan(state, 4416, 16, 160, false)
@@ -145,13 +145,37 @@ test("non-urgent continuation still consumes the requested preload range", () =>
 
 test("guard-crossing recovery expansion is not clamped back to the cold window", () => {
   const state = {
-    cursor: 4743, windowItems: 80, urgentThrough: 4753, targetThrough: 4831
+    cursor: 4743, windowItems: 80, urgentTarget: 4753, targetThrough: 4831
   };
   assert.deepEqual(JSON.parse(JSON.stringify(
-    shared.semanticCommitRequestPlan(state, 4743, 16, 160, true)
+    shared.semanticCommitRequestPlan(state, 4743, 16, 160, true, 96)
   )), {
     targetThrough: 4753,
     itemCount: 80
+  });
+});
+
+test("first urgent window covers the visible target without absorbing speculative preload", () => {
+  const state = {
+    cursor: 4416, windowItems: 48, urgentTarget: 4495, targetThrough: 4575
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96)
+  )), {
+    targetThrough: 4495,
+    itemCount: 96
+  });
+});
+
+test("urgent window can expand after an unsafe prefix while remaining globally bounded", () => {
+  const state = {
+    cursor: 4416, windowItems: 128, urgentTarget: 4495, targetThrough: 4575
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96)
+  )), {
+    targetThrough: 4495,
+    itemCount: 128
   });
 });
 

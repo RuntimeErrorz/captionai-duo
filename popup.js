@@ -310,16 +310,13 @@ async function onCopyDebug() {
     return;
   }
   const ok = await copyText(resp.logs);
-  showDebugMsg(ok
-    ? t("debugCopied", "日志已复制，可以直接发给我。")
-    : t("debugCopyFailed", "复制失败，请重试。"), ok ? "ok" : "err");
+  showDebugMsg(ok ? "" : t("debugCopyFailed", "复制失败，请重试。"), ok ? null : "err");
 }
 
 async function onClearDebug() {
   const resp = await sendRuntime({ type: "clearDebugLogs" });
-  showDebugMsg(resp && resp.ok
-    ? t("debugCleared", "日志已清空。")
-    : t("debugClearFailed", "清空失败，请重试。"), resp && resp.ok ? "ok" : "err");
+  showDebugMsg(resp && resp.ok ? "" :
+    t("debugClearFailed", "清空失败，请重试。"), resp && resp.ok ? null : "err");
 }
 
 // ---- Token usage ---------------------------------------------------------
@@ -340,10 +337,6 @@ function paintAiTokenUsage(value) {
   $("tokenRequests").textContent = formatTokenCount(
     (Number(usage.reportedRequests) || 0) + (Number(usage.unreportedRequests) || 0)
   );
-  const reported = formatTokenCount(usage.reportedRequests);
-  const unreported = Math.max(0, Math.round(Number(usage.unreportedRequests) || 0));
-  $("tokenMeta").textContent = `${reported} ${t("tokenReportedRequests", "reported responses")}` +
-    (unreported ? ` · ${formatTokenCount(unreported)} ${t("tokenUnreportedRequests", "unreported responses")}` : "");
 }
 
 async function refreshAiTokenUsage() {

@@ -192,7 +192,7 @@ test("cross-cue phrases remain indivisible aligned chunks", () => {
   assert.equal(plan.memberPages["42"], plan.memberPages["43"]);
 });
 
-test("coarse model alignment stays valid and delegates overflow to pixel-aware pagination", () => {
+test("coarse model alignment stays valid and only its oversized chunk is paginated", () => {
   const words = ("No tax on tips, no tax on overtime, and no tax on social security for our great " +
     "seniors, along with the interest deduction on a loan used to purchase a car, but only if that " +
     "car is made in America and a 100% expensing for our job creating businesses.").split(/\s+/);
@@ -220,7 +220,11 @@ test("coarse model alignment stays valid and delegates overflow to pixel-aware p
     ...coarseResult[0].alignedChunks[0],
     cues: items
   }], 100, 40, lengthMeasure, lengthMeasure, "zh-CN");
-  assert.equal(coarsePlan.overflow, true);
+  assert.equal(coarsePlan.overflow, false);
+  assert.ok(coarsePlan.pages.length >= 2);
+  assert.ok(coarsePlan.pages.every((page) => page.splitChunk === true));
+  assert.deepEqual(Array.from(coarsePlan.pages.flatMap((page) => page.ids)), ids);
+  assert.ok(coarsePlan.memberPages[ids[0]] < coarsePlan.memberPages[ids.at(-1)]);
 
   const ranges = [[0, 15], [15, 32], [32, items.length]];
   const chunks = ranges.map(([from, to], index) => ({
@@ -246,7 +250,7 @@ test("coarse model alignment stays valid and delegates overflow to pixel-aware p
   assert.ok(plan.pages.every((page) => page.source.length <= 110));
 });
 
-test("aligned chunk packing preserves structure across randomized timelines", () => {
+test("aligned chunk packing preserves fitting chunks and locally splits only oversized ones", () => {
   let state = 0x51f15e5d;
   const random = () => {
     state = Math.imul(state ^ (state >>> 15), 1 | state);
@@ -286,13 +290,50 @@ test("aligned chunk packing preserves structure across randomized timelines", ()
     const actualIds = plan.pages.flatMap((page) => Array.from(page.ids));
 
     assert.deepEqual(Array.from(actualIds), expectedIds);
+    assert.equal(plan.overflow, false);
     assert.ok(plan.pages.every((page) => page.source && page.translation && page.chunkCount >= 1));
     for (const chunk of chunks) {
       const pages = new Set(chunk.ids.map((id) => plan.memberPages[id]));
-      assert.equal(pages.size, 1);
+      const source = shared.mergeTimedCueTexts(chunk.cues);
+      const individuallyFits = lengthMeasure(source) <= sourceLimit &&
+        lengthMeasure(chunk.translation) <= translationLimit;
+      if (individuallyFits) assert.equal(pages.size, 1);
+      else assert.ok(pages.size >= 1);
     }
     for (let id = 1; id < expectedIds.length; id++) {
       assert.ok(plan.memberPages[String(id)] >= plan.memberPages[String(id - 1)]);
     }
   }
+});
+
+test("an oversized middle chunk does not discard neighboring alignment boundaries", () => {
+  const cue = (id, text) => ({ id: String(id), text, startMs: id * 1000, endMs: (id + 1) * 1000 });
+  const chunks = [
+    { ids: ["0"], cues: [cue(0, "Short opening.")], translation: "开场。" },
+    {
+      ids: ["1", "2", "3", "4", "5", "6"],
+      cues: [
+        cue(1, "This deliberately long middle"),
+        cue(2, "chunk contains several natural"),
+        cue(3, "phrases that need local"),
+        cue(4, "pagination without changing"),
+        cue(5, "the chunks on either"),
+        cue(6, "side of it.")
+      ],
+      translation: "这个较长的中间区块包含多个自然短语，需要单独分页，同时保留两侧区块。"
+    },
+    { ids: ["7"], cues: [cue(7, "Short ending.")], translation: "结尾。" }
+  ];
+  const plan = shared.alignedChunkDisplayPlan(
+    chunks, 55, 18, lengthMeasure, lengthMeasure, "zh-CN", "en"
+  );
+
+  assert.equal(plan.overflow, false);
+  assert.equal(plan.memberPages["0"], 0);
+  assert.ok(plan.memberPages["1"] > plan.memberPages["0"]);
+  assert.ok(plan.memberPages["6"] > plan.memberPages["1"]);
+  assert.ok(plan.memberPages["7"] > plan.memberPages["6"]);
+  assert.equal(plan.pages[0].source, "Short opening.");
+  assert.equal(plan.pages.at(-1).source, "Short ending.");
+  assert.ok(plan.pages.slice(1, -1).every((page) => page.splitChunk === true));
 });
