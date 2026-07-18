@@ -1,0 +1,16 @@
+node_modules/
+tmp/
+coverage/
+test-results/
+playwright-report/
+
+.env
+.env.*
+!.env.example
+
+*.zip
+*.crx
+*.pem
+
+.DS_Store
+Thumbs.db

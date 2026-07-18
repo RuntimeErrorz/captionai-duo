@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- ============================ HEADER ============================ -->
+  <header class="hd">
+    <img class="hd-mark" src="icons/icon48.png" alt="" aria-hidden="true" />
+    <div class="hd-text">
+      <h1>CaptionAI Duo</h1>
+    </div>
+    <label class="switch" title="启用 / 禁用" data-i18n-title="enableTitle">
+      <input type="checkbox" id="enabled" aria-label="启用扩展" data-i18n-aria="enableAria" />
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+    </label>
+  </header>
+
+  <nav class="workspace-tabs" aria-label="设置分类" data-i18n-aria="workspaceTabsAria">
+    <button class="workspace-tab on" id="workspace-translation" type="button"
+            data-workspace="translation" aria-pressed="true"
+            data-i18n="workspaceTranslation">翻译</button>
+    <button class="workspace-tab" id="workspace-display" type="button"
+            data-workspace="display" aria-pressed="false"
+            data-i18n="workspaceDisplay">显示</button>
+    <button class="workspace-tab" id="workspace-tools" type="button"
+            data-workspace="tools" aria-pressed="false"
+            data-i18n="workspaceTools">工具</button>
+  </nav>
+
+  <main class="ctrl">
+    <!-- ============================ 翻译 ============================ -->
+    <section class="card console-section" id="panel-translation"
+             data-workspace-panel="translation">
+      <h2 class="card-title" data-i18n="secTranslation">翻译</h2>
+
+      <div class="field inline-field">
+        <label for="targetLang" data-i18n="targetLang">目标语言</label>
+        <select id="targetLang">
+          <option value="zh-CN">中文（简体）</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="ko">한국어</option>
+          <option value="es">Español</option>
+          <option value="fr">Français</option>
+          <option value="de">Deutsch</option>
+          <option value="ru">Русский</option>
+          <option value="pt">Português</option>
+          <option value="it">Italiano</option>
+          <option value="ar">العربية</option>
+          <option value="hi">हिन्दी</option>
+          <option value="id">Indonesia</option>
+          <option value="th">ไทย</option>
+          <option value="vi">Tiếng Việt</option>
+        </select>
+      </div>
+
+      <div id="aiSettings" class="ai-settings">
+        <div class="field">
+          <label for="aiBaseUrl" data-i18n="aiBaseUrl">API Base URL</label>
+          <div class="api-base-row">
+            <input id="aiBaseUrl" type="text" inputmode="url" autocomplete="off"
+                   spellcheck="false" placeholder="https://api.deepseek.com" />
+            <button id="authorizeAiBase" type="button" data-i18n="aiAuthorize">授权</button>
+          </div>
+        </div>
+
+        <div class="compact-grid grid-2 ai-model-grid">
+          <div class="field">
+            <label for="aiModel" data-i18n="aiModel">模型</label>
+            <input id="aiModel" type="text" autocomplete="off"
+                   spellcheck="false" placeholder="model-name" />
+          </div>
+          <div class="field">
+            <label for="aiThinking" data-i18n="aiThinking">推理强度</label>
+            <select id="aiThinking">
+              <option value="disabled" data-i18n="aiThinkingOff">关闭</option>
+              <option value="high" data-i18n="aiThinkingHigh">High</option>
+              <option value="max" data-i18n="aiThinkingMax">Max</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="aiApiKey" data-i18n="aiApiKey">API Key（仅保存在本机）</label>
+          <div class="api-key-row">
+            <input id="aiApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
+            <button id="toggleApiKey" type="button" data-i18n="showApiKey">显示</button>
+            <button id="clearApiKey" type="button" data-i18n="clearApiKey">删除</button>
+          </div>
+        </div>
+
+        <div class="compact-grid grid-3">
+          <div class="field">
+            <label for="deepseekContextPast" data-i18n="aiContextPast">上文条数</label>
+            <input id="deepseekContextPast" type="number" min="0" max="20" step="1" inputmode="numeric" />
+          </div>
+          <div class="field">
+            <label for="deepseekContextFuture" data-i18n="aiContextFuture">下文条数</label>
+            <input id="deepseekContextFuture" type="number" min="0" max="20" step="1" inputmode="numeric" />
+          </div>
+          <div class="field">
+            <label for="deepseekPrefetchBatches" data-i18n="aiPrefetchBatches">预加载批数</label>
+            <input id="deepseekPrefetchBatches" type="number" min="0" max="10" step="1" inputmode="numeric" />
+          </div>
+        </div>
+
+        <details class="settings-help">
+          <summary data-i18n="parameterHelp">参数说明</summary>
+          <p class="engine-hint" data-i18n="aiPrefetchHint">0 表示关闭预加载；数值越大，提前缓存越多，但并发请求和费用也可能增加。</p>
+          <p class="engine-hint" data-i18n="aiHint">字幕按有上限的词元窗口滚动翻译；窗口尾部的完整语义单元会自动延续到下一窗口，避免边界切句。前后文设置控制窗口之外的额外参考内容。</p>
+        </details>
+      </div>
+      <p class="engine-msg" id="aiStatus" role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <!-- ============================ 调试日志 ============================ -->
+    <section class="card console-section" id="panel-debug"
+             data-workspace-panel="tools" hidden>
+      <div class="card-head">
+        <h2 class="card-title" data-i18n="secDebug">调试日志</h2>
+        <label class="chk">
+          <input type="checkbox" id="debugEnabled" />
+          <span data-i18n="debugEnable">启用调试日志</span>
+        </label>
+      </div>
+      <div class="debug-actions">
+        <button type="button" id="copyDebug" data-i18n="debugCopy">复制日志</button>
+        <button type="button" id="clearDebug" data-i18n="debugClear">清空日志</button>
+      </div>
+      <p class="export-msg" id="debugMsg" role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <!-- ============================ 布局 ============================ -->
+    <section class="card console-section" id="panel-layout"
+             data-workspace-panel="display" hidden>
+      <h2 class="card-title" data-i18n="secLayout">布局</h2>
+
+      <div class="layout-row">
+        <div class="field">
+          <div class="seg" id="order" role="group" aria-label="上下顺序" data-i18n-aria="orderLabel">
+            <button data-val="trans-top" type="button" data-i18n="orderTransTop">译文在上</button>
+            <button data-val="orig-top" type="button" data-i18n="orderOrigTop">原文在上</button>
+          </div>
+        </div>
+        <div class="gap-control">
+          <label for="rowGap" data-i18n="rowGap">行间距</label>
+          <input type="range" id="rowGap" min="0" max="30" step="1" />
+          <b id="rowGapV">4px</b>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================== 行样式（标签页） ====================== -->
+    <section class="card console-section" id="panel-style"
+             data-workspace-panel="display" hidden>
+      <div class="line-tabs-row">
+        <div class="tabs" id="lineTabs" role="tablist" aria-label="字幕行" data-i18n-aria="lineTabsAria">
+          <button class="tab" id="tab-trans" data-line="trans" type="button" role="tab"
+                  aria-controls="lineEditor" aria-selected="true" data-i18n="tabTrans">译文</button>
+          <button class="tab" id="tab-orig" data-line="orig" type="button" role="tab"
+                  aria-controls="lineEditor" aria-selected="false" data-i18n="tabOrig">原文</button>
+        </div>
+        <label class="chk compact-check">
+          <input type="checkbox" id="lineShow" />
+          <span id="lineShowLabel" data-i18n="lineShow">显示该行</span>
+        </label>
+      </div>
+
+      <div id="lineEditor" role="tabpanel" aria-labelledby="tab-trans">
+        <div class="field inline-field font-field">
+          <label for="lineFont" data-i18n="fontLabel">字体</label>
+          <select id="lineFont">
+            <option value="system" data-i18n="fontSystem">系统默认</option>
+            <option value="roboto">Roboto</option>
+            <option value="noto">Noto Sans</option>
+            <option value="arial">Arial</option>
+            <option value="georgia">Georgia</option>
+            <option value="times">Times New Roman</option>
+            <option value="mono" data-i18n="fontMono">等宽 Mono</option>
+            <option value="cjk" data-i18n="fontCjk">适合中文</option>
+          </select>
+        </div>
+
+        <div class="compact-grid grid-2 range-grid">
+          <div class="field">
+            <label for="lineSize"><span data-i18n="windowSizeLabel">窗口字号</span> <b id="lineSizeV">24px</b></label>
+            <input type="range" id="lineSize" min="12" max="48" step="1" />
+          </div>
+          <div class="field">
+            <label for="lineFullscreenSize"><span data-i18n="fullscreenSizeLabel">全屏字号</span> <b id="lineFullscreenSizeV">34px</b></label>
+            <input type="range" id="lineFullscreenSize" min="12" max="72" step="1" />
+          </div>
+        </div>
+
+        <div class="grid3">
+          <div class="stack">
+            <label for="lineColor" data-i18n="colText">文字</label>
+            <input type="color" id="lineColor" aria-label="文字颜色" data-i18n-aria="colTextAria" />
+          </div>
+          <div class="stack">
+            <label for="lineBg" data-i18n="colBg">背景</label>
+            <input type="color" id="lineBg" aria-label="背景颜色" data-i18n-aria="colBgAria" />
+          </div>
+          <div class="stack">
+            <label for="lineStroke" data-i18n="colStroke">描边</label>
+            <input type="color" id="lineStroke" aria-label="描边颜色" data-i18n-aria="colStrokeAria" />
+          </div>
+        </div>
+
+        <div class="compact-grid grid-3 range-grid appearance-grid">
+          <div class="field">
+            <label for="lineBgOpacity"><span data-i18n="bgOpacity">背景不透明度</span> <b id="lineBgOpacityV">60%</b></label>
+            <input type="range" id="lineBgOpacity" min="0" max="1" step="0.05" />
+          </div>
+          <div class="field">
+            <label for="lineStrokeOpacity"><span data-i18n="strokeOpacity">描边不透明度</span> <b id="lineStrokeOpacityV">0%</b></label>
+            <input type="range" id="lineStrokeOpacity" min="0" max="1" step="0.05" />
+          </div>
+          <div class="field">
+            <label for="lineStrokeWidth"><span data-i18n="strokeWidth">描边宽度</span> <b id="lineStrokeWidthV">4.0px</b></label>
+            <input type="range" id="lineStrokeWidth" min="0" max="8" step="0.5" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ 导出 ============================ -->
+    <section class="card console-section" id="panel-export"
+             data-workspace-panel="tools" hidden>
+      <h2 class="card-title" data-i18n="secExport">导出字幕</h2>
+
+      <div class="row">
+        <div class="seg" id="exportVariant" role="group" aria-label="导出字幕" data-i18n-aria="secExport">
+          <button data-val="bi" type="button" class="on" data-i18n="exportBi">双语</button>
+          <button data-val="orig" type="button" data-i18n="exportOrig">原文</button>
+          <button data-val="trans" type="button" data-i18n="exportTrans">译文</button>
+        </div>
+      </div>
+
+      <button id="exportBtn" type="button" class="export-btn" data-i18n="exportSrt">
+        下载 SRT 字幕
+      </button>
+      <p class="engine-hint" data-i18n="exportSourceHint">译文与双语导出仅使用已经完整缓存的 DeepSeek 译文。</p>
+      <p class="export-msg" id="exportMsg" role="status" aria-live="polite" hidden></p>
+    </section>
+  </main>
+
+  <!-- ============================ FOOTER ============================ -->
+  <footer class="ft" id="toolsFooter" hidden>
+    <button id="reset" type="button" class="reset" data-i18n="resetAll">重置全部设置</button>
+  </footer>
+
+  <script src="shared.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "captionai-duo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check shared.js && node --check background.js && node --check inject.js && node --check content.js && node --check popup.js && npm test"
+  }
+}
