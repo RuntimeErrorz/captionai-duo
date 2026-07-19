@@ -86,6 +86,7 @@ assert.equal(typeof shared.splitAlignedSentencesForDisplay, "function");
 assert.equal(typeof shared.displayPageAssignments, "function");
 assert.equal(typeof shared.semanticDisplayPlan, "function");
 assert.equal(typeof shared.shouldBridgeSemanticCueGap, "function");
+assert.equal(typeof shared.semanticDisplayClusters, "function");
 assert.equal(typeof shared.semanticBatchWindows, "function");
 assert.equal(typeof shared.semanticPrefetchBatchStarts, "function");
 assert.equal(typeof shared.deepSeekConcurrencyStatus, "function");
@@ -290,7 +291,7 @@ assert.ok((content.match(
   /resetDeepseekCommitTimeline\(\);\s*if \(sentGroups && sentGroups\.length\) buildDeepseekCommitRegions\(\);/g
 ) || []).length >= 2, "settings and credential changes must rebuild semantic commit regions");
 assert.match(background, /alignedTranslationsFromJsonText/);
-assert.match(background, /prompt-v24-jsonl-stream/);
+assert.match(background, /prompt-v25-jsonl-cursor-done/);
 assert.match(background, /MAX_PROMPT_SOURCE_CHARS = 28000/);
 assert.match(background, /preparePromptContexts/);
 assert.match(background, /cleanContext\(msg\.contextAfter, 20, "future"\)/);
@@ -300,7 +301,8 @@ assert.doesNotMatch(background, /semantic-translation-repair/);
 assert.doesNotMatch(sharedSource, /translationQualityIssue/);
 assert.match(content, /sourceLang: cueSourceLang/);
 assert.match(background, /one completed semantic unit per physical JSONL line/i);
-assert.match(background, /"type":"done","deferred_ids"/);
+assert.match(background, /final line \{"type":"done"\}/);
+assert.doesNotMatch(background, /final line shaped \{"type":"done","deferred_ids"/);
 assert.match(background, /jsonLines: true/);
 assert.match(background, /semantic-jsonl-unit/);
 assert.match(background, /translationBatchProgress/);
@@ -403,7 +405,8 @@ assert.match(content, /deepseek-request-promoted/);
 assert.match(background, /fetchAiStreamWithTimeout/);
 assert.match(background, /deepseek-http-first-byte/);
 assert.match(background, /deepseek-http-body-complete/);
-assert.match(background, /deferred_ids/);
+assert.match(background, /semantic-jsonl-legacy-done-stopped/);
+assert.match(background, /DEEPSEEK_STREAM_COMPLETION_GRACE_MS = 750/);
 const fullBodyTimeout = background.slice(
   background.indexOf("async function fetchAiStreamWithTimeout"),
   background.indexOf("function registerDeepSeekController")
@@ -411,6 +414,7 @@ const fullBodyTimeout = background.slice(
 assert.match(fullBodyTimeout, /response\.body\.getReader\(\)/);
 assert.match(fullBodyTimeout, /deepSeekSseEvents\(buffer, !!part\.done\)/);
 assert.match(fullBodyTimeout, /event === "\[DONE\]"/);
+assert.match(fullBodyTimeout, /reader\.cancel\(earlyStopReason\)/);
 assert.match(sharedSource, /stream: true/);
 assert.match(sharedSource, /stream_options: \{ include_usage: true \}/);
 assert.match(background, /chunk && chunk\.usage/);
@@ -443,6 +447,8 @@ assert.match(content, /function stopForInvalidatedExtensionContext/);
 assert.match(content, /function sendRuntimeMessage/);
 assert.match(content, /function semanticGapCueIdxAt/);
 assert.match(content, /DEEPSEEK_DISPLAY_GAP_BRIDGE_MS = 2200/);
+assert.match(content, /DEEPSEEK_MIN_DISPLAY_UNIT_MS = 650/);
+assert.match(content, /semantic-display-smoothed/);
 assert.match(content, /if \(idx < 0\) idx = semanticGapCueIdxAt\(t\)/);
 assert.match(content, /if \(!extensionContextAlive\(\)\) \{ stopForInvalidatedExtensionContext\(\); return; \}/);
 assert.equal((content.match(/chrome\.runtime\.sendMessage/g) || []).length, 1);

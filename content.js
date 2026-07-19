@@ -145,6 +145,7 @@
   const DEEPSEEK_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
   const DEEPSEEK_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross
   const DEEPSEEK_DISPLAY_GAP_BRIDGE_MS = 2200; // keep one semantic page across short cue holes
+  const DEEPSEEK_MIN_DISPLAY_UNIT_MS = 650; // co-display imperceptibly short units from one raw cue
   const DEEPSEEK_COLD_RETRY_DELAYS_MS = Object.freeze([400, 1200, 2500]);
   const DEEPSEEK_RATE_RETRY_LIMIT = 6;
   const PENDING_ELLIPSIS_MS = 400; // show "…" if the active group is still in flight
@@ -1212,15 +1213,26 @@
     return Math.max(1, Math.min(memberCount, Math.max(sourcePages, translationPages)));
   }
 
-  function cacheSemanticDisplayUnit(members, logPages) {
-    if (!sentGroups || !members || !members.length) return;
+  function cacheSemanticDisplayCluster(unitsValue, logPages) {
+    if (!sentGroups) return;
+    const units = (Array.isArray(unitsValue) ? unitsValue : [])
+      .map((unit) => ({
+        unitId: String(unit && unit.unitId || ""),
+        members: Array.isArray(unit && unit.members) ? unit.members.slice() : []
+      })).filter((unit) => unit.members.length);
+    const members = units.flatMap((unit) => unit.members);
+    if (!members.length) return;
     const parts = members.map((id) => sentGroups[id]).filter(Boolean);
     if (!parts.length) return;
-    const source = deepseekSourceCache.get(groupKey(members[0])) || mergeCueTexts(parts);
-    const translation = transCache.get(groupKey(members[0])) || "";
+    const source = mergeCueTexts(parts);
+    const translation = YTDS_SHARED.joinTranslatedParts(
+      units.map((unit) => transCache.get(groupKey(unit.members[0])) || ""),
+      settings.targetLang
+    );
     if (!source || !translation) return;
-    const unitId = deepseekUnitCache.get(groupKey(members[0])) || "";
-    const alignedChunks = deepseekAlignedChunksCache.get(unitId);
+    const unitIds = units.map((unit) => unit.unitId).filter(Boolean);
+    const alignedChunks = unitIds.flatMap((unitId) =>
+      deepseekAlignedChunksCache.get(unitId) || []);
     let displayPlan = null;
     let alignedByChunks = false;
     if (Array.isArray(alignedChunks) && alignedChunks.length) {
@@ -1293,7 +1305,7 @@
     }
     if (logPages && sourcePages.length > 1) {
       emitDebug("semantic-display-pages", {
-        unitId: deepseekUnitCache.get(groupKey(members[0])) || "",
+        unitIds,
         members,
         widthPx: semanticDisplayWidth(),
         alignedByChunks,
@@ -1302,6 +1314,50 @@
         sourcePages: sourcePages.map((page) => page.text),
         translationPages: translationPages.map((page) => page.text)
       });
+    }
+    if (logPages && units.length > 1) {
+      const first = sentGroups[members[0]];
+      const last = sentGroups[members[members.length - 1]];
+      emitDebug("semantic-display-smoothed", {
+        unitIds,
+        members,
+        sourceCueIndex: first && first.startIdx,
+        durationMs: Math.max(0, Number(last && last.end) - Number(first && first.start)),
+        minimumMs: DEEPSEEK_MIN_DISPLAY_UNIT_MS
+      });
+    }
+  }
+
+  function deepseekSemanticDisplayUnits() {
+    if (!sentGroups) return [];
+    const units = new Map();
+    for (let id = 0; id < sentGroups.length; id++) {
+      const unitId = deepseekUnitCache.get(groupKey(id));
+      if (!unitId) continue;
+      const unit = units.get(unitId) || { unitId, members: [] };
+      unit.members.push(id);
+      units.set(unitId, unit);
+    }
+    return Array.from(units.values());
+  }
+
+  function deepseekSemanticDisplayClusters() {
+    return YTDS_SHARED.semanticDisplayClusters(
+      deepseekSemanticDisplayUnits(), sentGroups, DEEPSEEK_MIN_DISPLAY_UNIT_MS
+    );
+  }
+
+  function cacheDeepseekDisplayNeighborhood(changedMembers, logPages) {
+    const changed = new Set((Array.isArray(changedMembers) ? changedMembers : []).map(Number));
+    const cueIndexes = new Set(Array.from(changed).map((id) =>
+      Number(sentGroups && sentGroups[id] && sentGroups[id].startIdx)).filter(Number.isInteger));
+    const unitById = new Map(deepseekSemanticDisplayUnits().map((unit) => [unit.unitId, unit]));
+    for (const cluster of deepseekSemanticDisplayClusters()) {
+      const relevant = cluster.members.some((id) => changed.has(id) ||
+        cueIndexes.has(Number(sentGroups && sentGroups[id] && sentGroups[id].startIdx)));
+      if (!relevant) continue;
+      const units = cluster.unitIds.map((unitId) => unitById.get(unitId)).filter(Boolean);
+      cacheSemanticDisplayCluster(units, logPages);
     }
   }
 
@@ -1325,15 +1381,11 @@
     deepseekDisplayCache.clear();
     semanticLayoutWidth = semanticDisplayWidth();
     if (!sentGroups) return;
-    const units = new Map();
-    for (let id = 0; id < sentGroups.length; id++) {
-      const unitId = deepseekUnitCache.get(groupKey(id));
-      if (!unitId) continue;
-      const members = units.get(unitId) || [];
-      members.push(id);
-      units.set(unitId, members);
+    const unitById = new Map(deepseekSemanticDisplayUnits().map((unit) => [unit.unitId, unit]));
+    for (const cluster of deepseekSemanticDisplayClusters()) {
+      const units = cluster.unitIds.map((unitId) => unitById.get(unitId)).filter(Boolean);
+      cacheSemanticDisplayCluster(units, false);
     }
-    for (const members of units.values()) cacheSemanticDisplayUnit(members, false);
     if (repaint && activeCueIdx >= 0 && activeGroupIdx >= 0 && cueList) {
       const cue = cueList[activeCueIdx];
       const source = sourceForDisplayedCue(activeCueIdx, cue);
@@ -1775,7 +1827,7 @@
         deepseekAlignedChunksCache.set(unit.unitId, unit.alignedChunks);
       }
     }
-    for (const unit of units) cacheSemanticDisplayUnit(unit.members, true);
+    cacheDeepseekDisplayNeighborhood(units.flatMap((unit) => unit.members), true);
     semanticLayoutWidth = semanticDisplayWidth();
     emitDebug("semantic-prefix-committed", {
       regionIndex,

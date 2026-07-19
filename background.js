@@ -11,12 +11,13 @@ const DEEPSEEK_BATCH_INFLIGHT = new Map();
 
 const DEEPSEEK_TIMEOUT_FAST_MS = 30000;
 const DEEPSEEK_TIMEOUT_THINKING_MS = 90000;
+const DEEPSEEK_STREAM_COMPLETION_GRACE_MS = 750;
 const DEEPSEEK_MAX_ATTEMPTS = 3;
 const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 3;
 const MAX_TRANSLATE_CHARS = 4000;
 const MAX_BATCH_ITEMS = 160;
 const MAX_PROMPT_SOURCE_CHARS = 28000;
-const AI_PROMPT_CACHE_VERSION = "prompt-v24-jsonl-stream";
+const AI_PROMPT_CACHE_VERSION = "prompt-v25-jsonl-cursor-done";
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";
 const AI_RESPONSE_CACHE_MAX_ENTRIES = 96;
 const AI_RESPONSE_CACHE_MAX_CHARS = 2000000;
@@ -446,11 +447,51 @@ async function fetchAiStreamWithTimeout(
     let content = "";
     let usage = null;
     let done = false;
+    let stopDeadline = 0;
+    let earlyStopped = false;
+    let earlyStopReason = "";
+    const applyStreamControl = (control) => {
+      if (!control || typeof control !== "object") return false;
+      if ((control.coverageComplete || control.protocolDone) && !stopDeadline) {
+        stopDeadline = Date.now() + DEEPSEEK_STREAM_COMPLETION_GRACE_MS;
+      }
+      if (control.stop) {
+        earlyStopped = true;
+        earlyStopReason = String(control.reason || "observer-stop");
+        return true;
+      }
+      return false;
+    };
+    const readNextPart = async () => {
+      if (!stopDeadline) return reader.read();
+      const remainingMs = stopDeadline - Date.now();
+      if (remainingMs <= 0) return { ytdsGraceExpired: true };
+      let graceTimer = null;
+      try {
+        return await Promise.race([
+          reader.read(),
+          new Promise((resolve) => {
+            graceTimer = setTimeout(
+              () => resolve({ ytdsGraceExpired: true }), remainingMs
+            );
+          })
+        ]);
+      } finally {
+        if (graceTimer) clearTimeout(graceTimer);
+      }
+    };
     while (!done) {
-      const part = await reader.read();
+      const part = await readNextPart();
+      if (part && part.ytdsGraceExpired) {
+        earlyStopped = true;
+        earlyStopReason = "completion-grace-expired";
+        try { await reader.cancel(earlyStopReason); } catch (_e) { /* already closed */ }
+        break;
+      }
       buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
       const parsed = YTDS_SHARED.deepSeekSseEvents(buffer, !!part.done);
       buffer = parsed.rest;
+      let observerStopped = false;
       for (const event of parsed.events) {
         if (event === "[DONE]") {
           done = true;
@@ -462,18 +503,28 @@ async function fetchAiStreamWithTimeout(
         if (chunk && chunk.usage) usage = chunk.usage;
         const delta = YTDS_SHARED.aiCompletionText(chunk);
         content += delta;
-        if (delta && typeof onTextDelta === "function") onTextDelta(delta, false);
+        if (delta && typeof onTextDelta === "function" &&
+            applyStreamControl(onTextDelta(delta, false))) {
+          observerStopped = true;
+          break;
+        }
+      }
+      if (observerStopped) {
+        try { await reader.cancel(earlyStopReason); } catch (_e) { /* already closed */ }
+        break;
       }
       if (part.done) break;
     }
     // Some compatible servers close a valid SSE body without a final [DONE].
     if (!done && !content) throw new Error("AI SSE stream ended without content");
-    if (typeof onTextDelta === "function") onTextDelta("", true);
+    if (!earlyStopped && typeof onTextDelta === "function") onTextDelta("", true);
     return {
       response,
       text: content,
       usage,
       streamed: true,
+      earlyStopped,
+      earlyStopReason,
       firstByteMs,
       totalMs: Date.now() - started
     };
@@ -643,6 +694,8 @@ async function aiRawCompletion(
       attemptInfo.totalMs = result.totalMs;
       attemptInfo.bodyMs = Math.max(0, result.totalMs - result.firstByteMs);
       attemptInfo.responseChars = responseText.length;
+      attemptInfo.earlyStopped = !!result.earlyStopped;
+      attemptInfo.earlyStopReason = String(result.earlyStopReason || "");
       if (trace.debug) appendDebug("background", "deepseek-http-body-complete", {
         requestId: trace.requestId || "",
         requestClass: trace.requestClass || "",
@@ -651,7 +704,9 @@ async function aiRawCompletion(
         firstByteMs: result.firstByteMs,
         bodyMs: attemptInfo.bodyMs,
         totalMs: result.totalMs,
-        responseChars: responseText.length
+        responseChars: responseText.length,
+        earlyStopped: attemptInfo.earlyStopped,
+        earlyStopReason: attemptInfo.earlyStopReason
       });
     } catch (cause) {
       attemptInfo.phase = cause && cause.phase || "unknown";
@@ -735,6 +790,12 @@ async function aiRawCompletion(
 function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
   let state = YTDS_SHARED.createAiJsonlTranslationState(items, targetLang);
   let lineBuffer = "";
+  const status = (stop, reason) => ({
+    stop: !!stop,
+    reason: String(reason || ""),
+    coverageComplete: state.cursor === state.expected.length,
+    protocolDone: !!state.done
+  });
   const reset = () => {
     state = YTDS_SHARED.createAiJsonlTranslationState(items, targetLang);
     lineBuffer = "";
@@ -753,7 +814,10 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
       if (!state.translations.length) reset();
     },
     onTextDelta(delta, flush) {
-      if (state.error) return;
+      if (state.error) return status(true, "invalid-jsonl");
+      // Once done is accepted, model text has no remaining authority. Ignore
+      // any prose after it while the HTTP layer briefly waits for usage/[DONE].
+      if (state.done) return status(false, "");
       const parsed = YTDS_SHARED.aiJsonlLines(lineBuffer + String(delta || ""), !!flush);
       lineBuffer = parsed.rest;
       for (const line of parsed.lines) {
@@ -761,12 +825,16 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
         if (decoded.ignored) continue;
         if (!decoded.record) {
           fail(decoded.error, line);
-          return;
+          return status(true, "invalid-jsonl");
         }
         const accepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, decoded.record);
         if (!accepted.ok) {
           fail(accepted.error, line);
-          return;
+          return status(true, "invalid-jsonl");
+        }
+        if (accepted.type === "done") {
+          lineBuffer = "";
+          break;
         }
         if (accepted.type === "unit") {
           if (trace && trace.debug) appendDebug("background", "semantic-jsonl-unit", {
@@ -779,6 +847,25 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
           }
         }
       }
+      // Compatibility and circuit breaker: old models may begin the removed
+      // deferred_ids form and then enumerate thousands of invented numbers.
+      // The cursor already determines the suffix, so stop as soon as that
+      // obsolete prefix is recognizable instead of waiting for a newline.
+      if (!state.done && YTDS_SHARED.aiJsonlLegacyDonePrefix(lineBuffer)) {
+        const accepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, { type: "done" });
+        if (!accepted.ok) {
+          fail(accepted.error, lineBuffer);
+          return status(true, "invalid-jsonl");
+        }
+        if (trace && trace.debug) appendDebug("background", "semantic-jsonl-legacy-done-stopped", {
+          requestId: trace.requestId || "",
+          completedItems: state.cursor,
+          deferredCount: state.expected.length - state.cursor
+        });
+        lineBuffer = "";
+        return status(true, "legacy-deferred-list");
+      }
+      return status(false, "");
     },
     hasProgress() {
       return state.translations.length > 0;
@@ -833,7 +920,7 @@ async function deepseekSegmentBatchFetch(
 
 CURRENT_CUES is an ordered JSON array of compact lexical rows shaped [id,text,pauseAfterMs,boundary]. boundary is "" for no boundary, "s" for a soft timing hint, or "h" for a hard boundary. Token ids are reference coordinates, not player cue boundaries and not semantic hints. First choose natural semantic sentence or clause segments by grouping one or more CONTIGUOUS token ids. Use grammar, punctuation, discourse continuity and timing. A soft boundary or pause alone does not require a split; merge tokens that form one sentence across it. Do not over-merge separate completed sentences. A segment must never cross a row whose boundary is "h".
 
-CURRENT_CUES begins at the caller's first still-uncommitted token. The caller commits only an immutable prefix and automatically carries every semantic unit touching its private trailing safety area into the next, longer window. Do not treat either edge of CURRENT_CUES as a sentence boundary. deferred_ids remains useful, but correctness does not depend on predicting the caller's safety area.
+CURRENT_CUES begins at the caller's first still-uncommitted token. The caller commits only an immutable prefix and automatically carries every semantic unit touching its private trailing safety area into the next, longer window. Do not treat either edge of CURRENT_CUES as a sentence boundary.
 
 Inside every segment, create a small number of useful bilingual alignment chunks. Each chunk groups contiguous token ids whose source meaning corresponds directly to that chunk's translation. Chunks are linguistic alignment spans, not player cues and not final screen pages. Prefer a complete phrase or short clause, normally roughly 35-90 source characters when the grammar allows. A longer multi-clause sentence should usually contain multiple chunks at its natural clause or coordinated-phrase boundaries. Never create token-sized or original-cue-sized fragments merely to make chunks short. Keep every grammatically or semantically inseparable expression in one chunk. Do not isolate function words or leave a source phrase's meaning in a different chunk. Use the whole segment for translation quality, while making each chunk's translation complete and natural for its own ids.
 
@@ -841,7 +928,7 @@ Token and player cue boundaries are not semantic boundaries. If rolling-caption 
 
 Stream one completed semantic unit per physical JSONL line. A unit line has exactly this shape: {"type":"unit","chunks":[{"ids":["12","13"],"translation":"..."},{"ids":["14"],"translation":"..."}]}. Each unit line must be independently valid, compact JSON on ONE line, with no Markdown fence, blank line, prefix or explanation. Emit a unit only after its complete sentence or clause is finalized; never revise an emitted unit later.
 
-Coverage is strict across all unit lines plus the final done line: every CURRENT_CUES token id must occur exactly once, always in original order. Put a token in a unit when its natural semantic segment is complete inside this window. If and only if the final sentence or clause is incomplete, defer that entire unresolved CONTIGUOUS suffix. After all unit lines, emit exactly one final line shaped {"type":"done","deferred_ids":["15","16"]}; use an empty array when nothing is deferred. deferred_ids must be the exact remaining suffix and must not appear in unit lines. Never defer a completed sentence merely because it is last. No omissions, duplicates or invented ids. PAST_CONTEXT and FUTURE_CONTEXT rows are [id,text], reference-only for names, pronouns, tone and terminology. Never translate or repeat context-only content.
+Coverage is a strict ordered prefix across the unit lines. Put each CURRENT_CUES token id in exactly one unit when its natural semantic segment is complete inside this window. If and only if the final sentence or clause is incomplete, stop before that entire unresolved CONTIGUOUS suffix. After the last completed unit, emit exactly one final line {"type":"done"}. The caller derives the remaining suffix from the first id not covered by unit lines. Never put ids or any other field in the done object; never enumerate deferred or future ids. Never defer a completed sentence merely because it is last. No omissions, duplicates or invented ids inside unit lines. PAST_CONTEXT and FUTURE_CONTEXT rows are [id,text], reference-only for names, pronouns, tone and terminology. Never translate or repeat context-only content.
 
 Translate all chunks completely into the requested target language. Preserve every fact, name, number, negation and completed clause. Keep stable Arabic-number strings, percentages, URLs and email addresses present in the source. Natural target-language compression is allowed only inside the aligned chunk that carries the same meaning. Return JSONL lines only.`
     },

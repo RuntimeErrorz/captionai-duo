@@ -146,6 +146,54 @@ test("same semantic unit bridges a short raw cue hole but not a real break", () 
   ), false);
 });
 
+test("an imperceptible tail unit is co-displayed with the preceding unit from the same cue", () => {
+  const groups = [
+    { startIdx: 525, start: 1088560, end: 1088800 },
+    { startIdx: 525, start: 1088800, end: 1089300 },
+    { startIdx: 525, start: 1089300, end: 1089700 },
+    { startIdx: 525, start: 1089700, end: 1089914 },
+    { startIdx: 525, start: 1089914, end: 1090160 }
+  ];
+  const clusters = shared.semanticDisplayClusters([
+    { unitId: "semantic-3365-3368", members: [0, 1, 2, 3] },
+    { unitId: "semantic-3369-3369", members: [4] }
+  ], groups, 650);
+
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(Array.from(clusters[0].unitIds),
+    ["semantic-3365-3368", "semantic-3369-3369"]);
+  assert.deepEqual(Array.from(clusters[0].members), [0, 1, 2, 3, 4]);
+  assert.equal(clusters[0].smoothed, true);
+});
+
+test("display smoothing never merges semantic units across raw cues", () => {
+  const clusters = shared.semanticDisplayClusters([
+    { unitId: "answer", members: [0] },
+    { unitId: "next-speaker", members: [1] }
+  ], [
+    { startIdx: 7, start: 1000, end: 1200 },
+    { startIdx: 8, start: 1200, end: 1450 }
+  ], 650);
+
+  assert.equal(clusters.length, 2);
+  assert.deepEqual(Array.from(clusters, (cluster) => Array.from(cluster.unitIds)),
+    [["answer"], ["next-speaker"]]);
+});
+
+test("a short leading unit is co-displayed forward within its raw cue", () => {
+  const clusters = shared.semanticDisplayClusters([
+    { unitId: "short", members: [0] },
+    { unitId: "complete", members: [1, 2] }
+  ], [
+    { startIdx: 12, start: 2000, end: 2200 },
+    { startIdx: 12, start: 2200, end: 2800 },
+    { startIdx: 12, start: 2800, end: 3500 }
+  ], 650);
+
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(Array.from(clusters[0].members), [0, 1, 2]);
+});
+
 test("display planning preserves structural invariants across randomized timelines", () => {
   let state = 0x6d2b79f5;
   const random = () => {

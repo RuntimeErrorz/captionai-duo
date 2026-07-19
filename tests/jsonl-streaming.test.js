@@ -19,7 +19,7 @@ test("JSONL line buffering survives arbitrary network splits", () => {
   const first = shared.aiJsonlLines('{"type":"unit","chunks":[{"ids":["0"],', false);
   assert.equal(first.lines.length, 0);
   const second = shared.aiJsonlLines(
-    first.rest + '"translation":"译文"}]}\r\n{"type":"done","deferred_ids":[]}\n',
+    first.rest + '"translation":"译文"}]}\r\n{"type":"done"}\n',
     false
   );
   assert.equal(second.rest, "");
@@ -28,7 +28,19 @@ test("JSONL line buffering survives arbitrary network splits", () => {
   assert.equal(shared.aiJsonlRecordFromLine(second.lines[1]).record.type, "done");
 });
 
-test("JSONL state accepts ordered semantic units and an exact deferred suffix", () => {
+test("legacy enumerated done is recognized before its numeric list is generated", () => {
+  const prefix = '{"type":"done","deferred_ids":';
+  for (let index = 0; index < prefix.length; index++) {
+    assert.equal(shared.aiJsonlLegacyDonePrefix(prefix.slice(0, index)), false);
+  }
+  assert.equal(shared.aiJsonlLegacyDonePrefix(prefix), true);
+  assert.equal(shared.aiJsonlLegacyDonePrefix(
+    prefix + '["5818","5819","5820","5821"'
+  ), true);
+  assert.equal(shared.aiJsonlLegacyDonePrefix('{"type":"done"}'), false);
+});
+
+test("JSONL state derives the deferred suffix from its coverage cursor", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   const first = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
@@ -43,9 +55,7 @@ test("JSONL state accepts ordered semantic units and an exact deferred suffix", 
     chunks: [{ ids: ["2"], translation: "他们帮助了我们。" }]
   });
   assert.equal(second.ok, true);
-  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "done", deferred_ids: ["3"]
-  }).ok, true);
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, { type: "done" }).ok, true);
 
   const result = shared.aiJsonlTranslationResult(state, false);
   assert.equal(result.length, 3);
@@ -53,7 +63,7 @@ test("JSONL state accepts ordered semantic units and an exact deferred suffix", 
   assert.equal(result.streamPartial, false);
 });
 
-test("JSONL state rejects reordered ids, hard-boundary crossings and a wrong done suffix", () => {
+test("JSONL state rejects reordered ids, hard-boundary crossings and records after done", () => {
   const reordered = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(reordered, {
     type: "unit", chunks: [{ ids: ["1", "0"], translation: "乱序" }]
@@ -66,10 +76,36 @@ test("JSONL state rejects reordered ids, hard-boundary crossings and a wrong don
     type: "unit", chunks: [{ ids: ["0", "1"], translation: "越界" }]
   }).error, /hard boundary/);
 
-  const wrongDone = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
-  assert.match(shared.pushAiJsonlTranslationRecord(wrongDone, {
-    type: "done", deferred_ids: ["2", "3"]
-  }).error, /deferred suffix/);
+  const afterDone = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  assert.equal(shared.pushAiJsonlTranslationRecord(afterDone, { type: "done" }).ok, true);
+  assert.match(shared.pushAiJsonlTranslationRecord(afterDone, {
+    type: "unit", chunks: [{ ids: ["0"], translation: "多余" }]
+  }).error, /after done/);
+});
+
+test("legacy deferred id lists are ignored instead of inviting numeric continuation", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [{ ids: ["0", "1"], translation: "已完成" }]
+  }).ok, true);
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
+    type: "done", deferred_ids: ["999", "1000", "1001"]
+  }).ok, true);
+  assert.deepEqual(shared.aiJsonlTranslationResult(state, false).deferredIds, ["2", "3"]);
+});
+
+test("complete ordered coverage is final even when the model omits done", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [{ ids: ["0", "1"], translation: "前半" }]
+  }).ok, true);
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [{ ids: ["2", "3"], translation: "后半" }]
+  }).ok, true);
+  const result = shared.aiJsonlTranslationResult(state, false);
+  assert.equal(result.length, 4);
+  assert.deepEqual(result.deferredIds, []);
+  assert.equal(result.streamPartial, false);
 });
 
 test("a malformed tail preserves every previously valid JSONL unit", () => {
@@ -99,8 +135,6 @@ test("JSONL structural validation does not reject natural numeric wording", () =
     type: "unit",
     chunks: [{ ids: ["295", "296"], translation: "这差不多是十分满分。" }]
   }).ok, true);
-  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "done", deferred_ids: []
-  }).ok, true);
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, { type: "done" }).ok, true);
   assert.equal(shared.aiJsonlTranslationResult(state, false).length, 2);
 });

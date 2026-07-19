@@ -1036,6 +1036,11 @@
     }
   }
 
+  function aiJsonlLegacyDonePrefix(value) {
+    return /^\s*\{\s*"type"\s*:\s*"done"\s*,\s*"deferred_ids"\s*:/
+      .test(String(value || ""));
+  }
+
   function createAiJsonlTranslationState(itemsValue, targetLang) {
     const items = Array.isArray(itemsValue) ? itemsValue.filter(Boolean) : [];
     return {
@@ -1044,7 +1049,6 @@
       targetLang: String(targetLang || ""),
       cursor: 0,
       translations: [],
-      deferredIds: [],
       done: false,
       error: ""
     };
@@ -1065,16 +1069,12 @@
     if (!record) return reject("missing JSONL record");
 
     if (record.type === "done") {
-      const deferredIds = Array.isArray(record.deferred_ids)
-        ? record.deferred_ids.map(String) : [];
       const remaining = state.expected.slice(state.cursor);
-      if (deferredIds.length !== remaining.length ||
-          deferredIds.some((id, index) => id !== remaining[index])) {
-        return reject("invalid JSONL deferred suffix");
-      }
-      state.deferredIds = deferredIds;
       state.done = true;
-      return { ok: true, type: "done", deferredIds: deferredIds.slice(), translations: [] };
+      // The stream cursor is the source of truth. Older models may still attach
+      // a deferred_ids array, but reading or trusting an enumerated suffix only
+      // invites numeric continuation and cannot add any coverage information.
+      return { ok: true, type: "done", deferredIds: remaining, translations: [] };
     }
 
     if (record.type !== "unit") return reject("unknown JSONL record type");
@@ -1127,10 +1127,10 @@
   function aiJsonlTranslationResult(stateValue, allowPartial) {
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
     if (!state || !Array.isArray(state.translations) || !Array.isArray(state.expected)) return null;
-    const partial = !state.done || !!state.error;
+    const coverageComplete = state.cursor === state.expected.length;
+    const partial = (!state.done && !coverageComplete) || !!state.error;
     if (partial && (!allowPartial || !state.translations.length)) return null;
-    const deferredIds = state.done
-      ? state.deferredIds.slice() : state.expected.slice(state.cursor);
+    const deferredIds = state.expected.slice(state.cursor);
     const out = state.translations.slice();
     Object.defineProperties(out, {
       deferredIds: { value: deferredIds },
@@ -1774,6 +1774,75 @@
     return gap >= 0 && gap <= maxGap && time >= previousEnd && time < nextStart;
   }
 
+  // AI semantic boundaries describe meaning, not how long a player will keep a
+  // subtitle on screen. A trailing semantic unit can therefore receive only a
+  // few frames when it occupies the end of an overlapping YouTube cue. Group
+  // such units with an adjacent unit from the SAME raw cue for presentation.
+  // Translation/cache ownership stays unchanged; this is only a display plan.
+  function semanticDisplayClusters(unitsValue, groupsValue, minVisibleMsValue) {
+    const groups = Array.isArray(groupsValue) ? groupsValue : [];
+    const minimum = Math.max(0, Number(minVisibleMsValue) || 0);
+    const units = (Array.isArray(unitsValue) ? unitsValue : [])
+      .map((unit) => {
+        const members = Array.from(new Set((Array.isArray(unit && unit.members)
+          ? unit.members : []).map(Number).filter(Number.isInteger))).sort((a, b) => a - b);
+        return { unitId: String(unit && unit.unitId || ""), members };
+      })
+      .filter((unit) => unit.members.length)
+      .sort((a, b) => a.members[0] - b.members[0]);
+
+    const cueIndexFor = (members) => {
+      let cueIndex = null;
+      for (const id of members) {
+        const group = groups[id];
+        const value = Number(group && group.startIdx);
+        if (!Number.isInteger(value)) return null;
+        if (cueIndex == null) cueIndex = value;
+        else if (cueIndex !== value) return null;
+      }
+      return cueIndex;
+    };
+    const durationFor = (members) => {
+      if (!members.length) return Number.POSITIVE_INFINITY;
+      const first = groups[members[0]];
+      const last = groups[members[members.length - 1]];
+      const start = Number(first && first.start);
+      const end = Number(last && last.end);
+      return Number.isFinite(start) && Number.isFinite(end)
+        ? Math.max(0, end - start) : Number.POSITIVE_INFINITY;
+    };
+    const canJoin = (left, right) => {
+      const leftLast = left.members[left.members.length - 1];
+      const rightFirst = right.members[0];
+      return leftLast + 1 === rightFirst && left.cueIndex != null &&
+        left.cueIndex === right.cueIndex;
+    };
+
+    const clusters = [];
+    for (const unit of units) {
+      const next = {
+        unitIds: [unit.unitId],
+        members: unit.members.slice(),
+        cueIndex: cueIndexFor(unit.members)
+      };
+      const previous = clusters[clusters.length - 1];
+      if (previous && canJoin(previous, next) &&
+          (durationFor(previous.members) < minimum || durationFor(next.members) < minimum)) {
+        previous.unitIds.push(...next.unitIds);
+        previous.members.push(...next.members);
+      } else {
+        clusters.push(next);
+      }
+    }
+    return clusters.map((cluster) => ({
+      unitIds: cluster.unitIds,
+      members: cluster.members,
+      cueIndex: cluster.cueIndex,
+      durationMs: durationFor(cluster.members),
+      smoothed: cluster.unitIds.length > 1
+    }));
+  }
+
   function causalCueGroups(cues) {
     return cues.map((cue, index) => ({
       startIdx: index,
@@ -1860,6 +1929,7 @@
     translationFromJsonText,
     aiJsonlLines,
     aiJsonlRecordFromLine,
+    aiJsonlLegacyDonePrefix,
     createAiJsonlTranslationState,
     pushAiJsonlTranslationRecord,
     aiJsonlTranslationResult,
@@ -1875,6 +1945,7 @@
     sourceRangeForDisplayMember,
     semanticDisplayPlan,
     shouldBridgeSemanticCueGap,
+    semanticDisplayClusters,
     causalCueGroups,
     deepSeekSseEvents
   });
