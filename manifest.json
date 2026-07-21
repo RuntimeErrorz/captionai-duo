@@ -5,11 +5,11 @@
   "version": "1.0.0",
   "description": "__MSG_extDesc__",
   "minimum_chrome_version": "111",
-  "permissions": ["storage"],
-  "host_permissions": [
-    "https://api.deepseek.com/*"
+  "permissions": [
+    "storage",
+    "webRequest"
   ],
-  "optional_host_permissions": [
+  "host_permissions": [
     "https://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
@@ -19,16 +19,46 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["shared.js", "inject.js"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "shared/core.js",
+        "shared/cues.js",
+        "shared/translation.js",
+        "shared/display.js",
+        "shared/stream.js",
+        "shared.js",
+        "inject.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
     },
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["shared.js", "content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "shared/core.js",
+        "shared/cues.js",
+        "shared/translation.js",
+        "shared/display.js",
+        "shared/stream.js",
+        "shared.js",
+        "content/state-ui.js",
+        "content/session.js",
+        "content/cue-playback.js",
+        "content/display.js",
+        "content/semantic.js",
+        "content/fallback.js",
+        "content/export.js",
+        "content/bridge.js",
+        "content/lifecycle.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

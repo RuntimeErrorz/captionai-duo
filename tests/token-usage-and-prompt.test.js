@@ -42,6 +42,37 @@ test("OpenAI-compatible cached input details are accepted", () => {
   });
 });
 
+test("Gemini usage metadata and Interactions token fields are normalized", () => {
+  assert.deepEqual(plain(shared.normalizeAiTokenUsage({ usageMetadata: {
+    promptTokenCount: 900,
+    candidatesTokenCount: 140,
+    totalTokenCount: 1100,
+    cachedContentTokenCount: 300,
+    thoughtsTokenCount: 60
+  } })), {
+    promptTokens: 900,
+    completionTokens: 140,
+    totalTokens: 1100,
+    cacheHitTokens: 300,
+    cacheMissTokens: 600,
+    reasoningTokens: 60
+  });
+  assert.deepEqual(plain(shared.normalizeAiTokenUsage({
+    total_input_tokens: 700,
+    total_output_tokens: 120,
+    total_tokens: 900,
+    total_cached_tokens: 256,
+    total_thought_tokens: 80
+  })), {
+    promptTokens: 700,
+    completionTokens: 120,
+    totalTokens: 900,
+    cacheHitTokens: 256,
+    cacheMissTokens: 444,
+    reasoningTokens: 80
+  });
+});
+
 test("compact prompt rows retain the semantic boundary contract with much less JSON", () => {
   const items = Array.from({ length: 80 }, (_, index) => ({
     id: String(index),

@@ -1,0 +1,46 @@
+name: Runtime bug
+description: Report a reproducible caption, translation, network, or popup failure
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What appeared on screen, including exact loading/translation behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: State the observable acceptance criterion, not an implementation idea.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include fresh browser/first video, seek/fullscreen state, provider/model, and video position when relevant. Never include an API key.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted debug evidence
+      description: Paste the smallest relevant event range. Remove private subtitle text if needed and verify that no API key or Authorization header is present.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Extension commit/version
+      placeholder: commit hash or release version
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and operating system
+      placeholder: Chrome 140 / Windows 11
+    validations:
+      required: true

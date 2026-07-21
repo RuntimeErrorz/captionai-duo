@@ -38,7 +38,7 @@ body {
   line-height: 1.35;
 }
 
-button, select, input { font: inherit; }
+button, select, input, textarea { font: inherit; }
 button { color: inherit; }
 
 body::-webkit-scrollbar { width: 7px; }
@@ -48,6 +48,7 @@ body::-webkit-scrollbar-track { background: transparent; }
 button:focus-visible,
 select:focus-visible,
 input:focus-visible,
+textarea:focus-visible,
 summary:focus-visible,
 .switch:focus-within .switch-track {
   outline: 2px solid var(--signal);
@@ -262,7 +263,8 @@ summary:focus-visible,
 select,
 input[type="text"],
 input[type="password"],
-input[type="number"] {
+input[type="number"],
+textarea {
   width: 100%;
   min-height: 34px;
   padding: 7px 9px;
@@ -278,25 +280,30 @@ select { cursor: pointer; }
 select:hover,
 input[type="text"]:hover,
 input[type="password"]:hover,
-input[type="number"]:hover { border-color: #8fa6b5; }
+input[type="number"]:hover,
+textarea:hover { border-color: #8fa6b5; }
 select:focus,
 input[type="text"]:focus,
 input[type="password"]:focus,
-input[type="number"]:focus {
+input[type="number"]:focus,
+textarea:focus {
   border-color: var(--signal);
   background: #ffffff;
   box-shadow: 0 0 0 3px var(--signal-soft);
 }
+textarea {
+  min-height: 82px;
+  line-height: 1.42;
+  resize: vertical;
+}
+textarea[aria-invalid="true"] { border-color: var(--danger); }
 
-.api-key-row,
-.api-base-row {
+.api-key-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
 }
-.api-base-row { grid-template-columns: minmax(0, 1fr) auto; }
 .api-key-row button,
-.api-base-row button,
 .debug-actions button {
   padding: 0 10px;
   color: var(--muted);
@@ -308,13 +315,11 @@ input[type="number"]:focus {
   transition: color .14s ease, border-color .14s ease, background-color .14s ease;
 }
 .api-key-row button:hover,
-.api-base-row button:hover,
 .debug-actions button:hover {
   color: var(--signal-strong);
   border-color: rgba(8, 127, 117, .42);
   background: var(--surface-active);
 }
-.api-base-row button[hidden] { display: none; }
 input:disabled {
   color: var(--muted);
   background: var(--surface-raised);
@@ -353,6 +358,8 @@ input:disabled {
 }
 
 .engine-hint { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.48; }
+.engine-hint.warn { color: var(--danger); }
+.engine-hint.ok { color: var(--signal-strong); }
 .engine-msg { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .engine-msg.warn { color: var(--amber); }
 .engine-msg.ok { color: var(--signal-strong); }
@@ -373,6 +380,61 @@ input:disabled {
 .settings-help[open] summary { color: var(--signal-strong); }
 .settings-help[open] summary { margin-bottom: 7px; }
 .settings-help .engine-hint + .engine-hint { margin-top: 6px; }
+.ai-advanced-settings .field { gap: 7px; }
+.ai-extra-actions { display: flex; justify-content: flex-end; }
+.ai-extra-actions button {
+  min-height: 32px;
+  padding: 5px 12px;
+  color: var(--signal-strong);
+  background: var(--signal-soft);
+  border: 1px solid rgba(8, 127, 117, .28);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.ai-profile-manager {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: linear-gradient(145deg, rgba(8, 127, 117, .075), rgba(8, 127, 117, .025));
+  border: 1px solid rgba(8, 127, 117, .18);
+  border-radius: 9px;
+}
+.ai-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ai-profile-head label { color: var(--text); font-size: 13px; font-weight: 600; }
+.ai-profile-head span {
+  color: var(--signal-strong);
+  font-size: 11px;
+  letter-spacing: .02em;
+}
+.ai-profile-switch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+.ai-profile-switch-row button {
+  padding: 0 10px;
+  color: var(--signal-strong);
+  background: rgba(255, 255, 255, .72);
+  border: 1px solid rgba(8, 127, 117, .24);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ai-profile-switch-row button:hover { background: #fff; border-color: rgba(8, 127, 117, .5); }
+.ai-profile-switch-row button:disabled { color: var(--muted); opacity: .55; cursor: default; }
+.ai-profile-name-field {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+}
+.ai-profile-name-field label { margin: 0; }
+.ai-extra-actions button:hover { border-color: rgba(8, 127, 117, .52); }
+.ai-extra-actions button:disabled { opacity: .55; cursor: default; }
 
 .debug-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .debug-actions button { min-height: 34px; color: var(--text); }

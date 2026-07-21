@@ -29,15 +29,17 @@ Chrome, Edge, or another Chromium browser version 111 or newer is required.
 | --- | --- | --- |
 | Enabled | On | Controls the overlay and translation work. Turning it off cancels this video's requests and restores YouTube CC if the extension enabled it. |
 | Target language | Simplified Chinese | The requested AI output language. Changing it clears this video's old translation and retranslates in the new language. |
-| API Base URL | `https://api.deepseek.com` | The base of the request URL. `/chat/completions` is appended unless already present. Remote URLs must use HTTPS; `localhost` and `127.0.0.1` may use HTTP. A custom origin must be granted access with **Authorize**. |
+| Connection profile | `DeepSeek` | One profile contains its name, Base URL, model, reasoning effort, API key, and extra request parameters. Profiles can be created, renamed, deleted, and switched from one selector. The complete profiles stay local, and switching retranslates the current video with the selected configuration. |
+| API Base URL | `https://api.deepseek.com` | The base of the request URL. `/chat/completions` is appended unless already present. Remote URLs must use HTTPS; `localhost` and `127.0.0.1` may use HTTP. All supported API origins are available without a separate authorization step. |
 | Model | `deepseek-v4-flash` | Sent unchanged as the Chat Completions `model`; it must exactly match a model offered by the endpoint. |
 | Reasoning effort | Off / `High` / `Max` | Off uses ordinary generation; DeepSeek receives its explicit thinking-off field and compatible endpoints receive normal `temperature`. `High` and `Max` send `reasoning_effort`, and also enable thinking for DeepSeek. Leave this off if the endpoint does not accept those fields. Reasoning is generally slower and more expensive, and extends the request timeout from 30 to 90 seconds. |
 | API key | Empty | Stored separately for the normalized Base URL in `chrome.storage.local`, never synced, and sent as `Authorization: Bearer …`. It can be empty for an unauthenticated local endpoint; DeepSeek requires it. |
+| Extra request parameters | `{}` | A JSON object stored locally per Base URL and model for provider-specific options such as `enable_thinking`. Ordinary generation options may be overridden, but core protocol fields such as `model`, `messages`, `stream`, token limits, and structured-output controls are protected. |
 | Previous context | `1`, range `0–20` | Adds original YouTube cues before the request as read-only reference for names, pronouns, terminology, and tone. Rolling-caption duplicates are removed first, and context remains subject to the aggregate input budget. |
 | Future context | `1`, range `0–20` | Adds original cues after the request as explicitly marked, read-only future reference. It can disambiguate current text but reveals more future material; duplicates and distant entries that exceed the aggregate budget are dropped. |
 | Prefetch batches | `1`, range `0–10` | Starts that many future scheduling ranges ahead of playback; `0` disables prefetch. A batch is a scope of about 32 lexical coordinates, not 32 subtitle cues and not necessarily one HTTP call. Higher values may reduce playback waits but increase concurrency, traffic, and cost. |
 
-Changing the Base URL, model, reasoning effort, or either context count retranslates the current video. Changing only prefetch depth cancels obsolete speculative work and continues with the new distance; already validated translations remain reusable.
+Changing the Base URL, model, reasoning effort, extra request parameters, or either context count retranslates the current video. Changing only prefetch depth cancels obsolete speculative work and continues with the new distance; already validated translations remain reusable.
 
 ### Display
 
@@ -58,8 +60,8 @@ The overlay can be dragged vertically and stores its position as a percentage of
 
 ### Tools
 
-- **Token usage** shows session totals reported by the configured API: input, output, reasoning, prompt-cache hit/miss, and reported/unreported response counts. It can be cleared independently. Local response-cache hits make no API call and add no tokens.
-- **Debug log** is off by default. When enabled, it records the caption startup handshake and recovery attempts, track selection, compact request windows, network attempts, structural validation failures, and pagination. Logs live in session storage and may contain subtitle text, so inspect them before sharing.
+- **Token usage** shows session totals reported by the configured API: input, output, reasoning, prompt-cache hit/miss, and reported/unreported response counts. Both standard OpenAI `usage` and Gemini `usageMetadata` fields are normalized. It can be cleared independently. Local response-cache hits make no API call and add no tokens.
+- **Debug log** is off by default. When enabled, it records the caption startup handshake and recovery attempts, track selection, compact request windows, network attempts, Chromium `net::ERR_*` transport failures, structural validation failures, and pagination. Urgent requests retry if no response headers arrive within 8 seconds; speculative prefetch uses 12 seconds, while a healthy response body retains the normal model deadline. Logs live in session storage and may contain subtitle text, so inspect them before sharing.
 - **SRT export** reads original entries from the full captured track. Translated and bilingual exports contain only translations that are already complete and structurally valid; exporting does not translate the rest of a video merely to fill the file.
 
 ## Translation pipeline
@@ -92,7 +94,7 @@ The AI first groups contiguous current coordinates into natural sentences or cla
 
 ### 4. Streaming transport and model output
 
-Requests use Chat Completions JSON with `stream: true`. The primary translation contract is JSONL: each finalized semantic unit occupies one physical line, followed only by `{"type":"done"}`. The extension derives the unresolved suffix from its validated coverage cursor, so the model never has to repeat an ID list or spend output tokens enumerating it. DeepSeek receives thinking controls and `stream_options.include_usage`; the JSONL request deliberately omits the single-object `response_format`. A custom compatible endpoint only needs to accept the request and return OpenAI-style `choices`.
+Requests use Chat Completions JSON with `stream: true` and `stream_options.include_usage: true`. The primary translation contract is JSONL: each finalized semantic unit occupies one physical line, followed only by `{"type":"done"}`. The extension derives the unresolved suffix from its validated coverage cursor, so the model never has to repeat an ID list or spend output tokens enumerating it. DeepSeek also receives thinking controls; the JSONL request deliberately omits the single-object `response_format`. A custom compatible endpoint also receives the extra parameters saved for the current URL and model, and only needs to return OpenAI-style `choices`.
 
 Both SSE network chunks and model tokens may split at arbitrary byte positions, so buffering happens in two layers: first through a complete blank-line-delimited SSE event, then through a complete JSONL newline. A unit reaches the immutable cache and page immediately only after that whole line parses independently with ordered, structurally complete IDs. Half a JSON string, half a sentence, or an arbitrary token delta is never painted. Usage-only events are accumulated separately. After all current IDs are covered or `done` arrives, the extension allows at most 750ms for usage and `[DONE]`, then cancels an abnormal tail. If an older model starts the removed `deferred_ids` form, the stream is stopped as soon as that field prefix is recognizable, before any numeric list is read. A server that ignores SSE and returns ordinary JSON is accepted, including top-level `usage`; the previous complete-JSON schema remains a compatibility path.
 
@@ -138,7 +140,7 @@ Existing translations are repaginated after font, window-size, fullscreen-size, 
 
 ## Privacy
 
-No accounts, analytics, or tracking. Caption text is sent only to the configured AI endpoint. Ordinary settings use `chrome.storage.sync`; endpoint-scoped API keys use `chrome.storage.local`; the bounded validated-translation cache and API-reported token totals use `chrome.storage.session` and are cleared with the browser session.
+No accounts, analytics, or tracking. Caption text is sent only to the configured AI endpoint. Ordinary settings use `chrome.storage.sync`; connection profiles, including API keys and extra request parameters, use `chrome.storage.local` and are never synced; the bounded validated-translation cache and API-reported token totals use `chrome.storage.session` and are cleared with the browser session.
 
 ## Development
 
@@ -150,10 +152,23 @@ npm run check
 ```
 
 - `inject.js`: captures the caption-track request used by the player.
-- `content.js`: overlay, timeline, pagination, dragging, and export data.
-- `background.js`: AI requests, dynamic endpoint permission, retries, and SSE/JSON parsing.
-- `shared.js`: defaults, structural validation, and pure helpers.
-- `popup.html/.css/.js`: settings UI.
+- `content/`: overlay/state, playback, display, semantic translation, fallback,
+  export, bridge, and lifecycle modules loaded in manifest order.
+- `background/`: AI state, HTTP transport, translation pipeline, and message
+  routing; `background.js` is the service-worker assembler.
+- `shared/`: defaults, structural validation, and pure helpers; `shared.js`
+  assembles their immutable cross-context API.
+- `popup/` and `popup.html/.css/.js`: local connection profiles and settings UI.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and automated
+architecture checks. Agent and human changes follow [AGENTS.md](AGENTS.md) and
+the [verified development loop](docs/VERIFIED_DEVELOPMENT.md). Every push and
+pull request runs the same `npm run check` gate on Linux and Windows.
+
+For the complete workflow—from specification and Codex Plan/Goal/Review to
+desktop/CLI shortcuts, context engineering, root-cause fixes, verification
+evidence, and Git integration—see the Chinese
+[Vibe Coding with Codex handbook](docs/VIBE_CODING_WITH_CODEX.md).
 
 ## License
 

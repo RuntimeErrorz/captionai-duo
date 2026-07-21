@@ -47,6 +47,30 @@ test("the carried phrase commits once a later window contains its natural comple
   ]);
 });
 
+test("a guard-blocking unit can recover an immutable prefix from model-aligned chunks", () => {
+  const chunks = [
+    { ids: Array.from({ length: 40 }, (_value, offset) => String(offset)), translation: "第一段" },
+    { ids: Array.from({ length: 40 }, (_value, offset) => String(40 + offset)), translation: "第二段" },
+    { ids: Array.from({ length: 40 }, (_value, offset) => String(80 + offset)), translation: "第三段" },
+    { ids: Array.from({ length: 40 }, (_value, offset) => String(120 + offset)), translation: "尾部" }
+  ];
+  const translations = unit(0, 159, "整段");
+  translations[0].alignedChunks = chunks;
+
+  const blocked = shared.monotonicSemanticCommitPlan(translations, 0, 159, 500, 16);
+  assert.equal(blocked.commitThrough, -1);
+
+  const recovered = shared.semanticUnitsFromAlignedChunks(translations);
+  const plan = shared.monotonicSemanticCommitPlan(recovered, 0, 159, 500, 16);
+  assert.deepEqual(Array.from(plan.units, (entry) => [
+    entry.members[0], entry.members[entry.members.length - 1]
+  ]), [[0, 39], [40, 79], [80, 119]]);
+  assert.equal(plan.commitThrough, 119);
+  assert.equal(plan.carryStart, 120);
+  assert.equal(recovered[0].translation, "第一段");
+  assert.equal(recovered[40].translation, "第二段");
+});
+
 test("only a contiguous prefix can commit; a hole cannot be repaired by a later unit", () => {
   const translations = [
     ...unit(10, 14),
@@ -232,5 +256,42 @@ test("random segmentations never split a unit or commit inside the guard", () =>
     })), expected);
     assert.ok(plan.commitThrough < guardStart);
     assert.equal(plan.carryStart, plan.commitThrough + 1);
+  }
+});
+
+test("random aligned-chunk recovery preserves exact coverage and the trailing guard", () => {
+  let seed = 0x8f29c4d1;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  for (let run = 0; run < 500; run++) {
+    const requestEnd = 159;
+    const translations = unit(0, requestEnd, "oversized");
+    const chunks = [];
+    let cursor = 0;
+    while (cursor <= requestEnd) {
+      const last = Math.min(requestEnd, cursor + 1 + Math.floor(random() * 23));
+      chunks.push({
+        ids: Array.from({ length: last - cursor + 1 }, (_value, offset) =>
+          String(cursor + offset)),
+        translation: `chunk-${cursor}`
+      });
+      cursor = last + 1;
+    }
+    translations[0].alignedChunks = chunks;
+    const recovered = shared.semanticUnitsFromAlignedChunks(translations);
+    const plan = shared.monotonicSemanticCommitPlan(recovered, 0, requestEnd, 500, 16);
+    const expected = chunks
+      .map((chunk) => [Number(chunk.ids[0]), Number(chunk.ids.at(-1))])
+      .filter((range) => range[1] < plan.guardStart);
+
+    assert.deepEqual(Array.from(plan.units, (entry) => [
+      entry.members[0], entry.members[entry.members.length - 1]
+    ]), expected, `recovery boundaries changed at seed run ${run}`);
+    assert.equal(recovered.length, requestEnd + 1);
+    assert.deepEqual(Array.from(recovered, (item) => Number(item.id)),
+      Array.from({ length: requestEnd + 1 }, (_value, id) => id));
+    assert.ok(plan.commitThrough < plan.guardStart);
   }
 });

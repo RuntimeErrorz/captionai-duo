@@ -58,13 +58,28 @@
       </div>
 
       <div id="aiSettings" class="ai-settings">
+        <div class="ai-profile-manager">
+          <div class="ai-profile-head">
+            <label for="aiProfileSelect" data-i18n="aiProfileLabel">连接配置</label>
+            <span data-i18n="aiProfileLocal">保存在本机</span>
+          </div>
+          <div class="ai-profile-switch-row">
+            <select id="aiProfileSelect" aria-label="连接配置"
+                    data-i18n-aria="aiProfileLabel"></select>
+            <button id="newAiProfile" type="button" data-i18n="aiProfileNew">新建</button>
+            <button id="deleteAiProfile" type="button" data-i18n="aiProfileDelete">删除</button>
+          </div>
+          <div class="field ai-profile-name-field">
+            <label for="aiProfileName" data-i18n="aiProfileName">配置名称</label>
+            <input id="aiProfileName" type="text" maxlength="60" autocomplete="off"
+                   spellcheck="false" placeholder="Gemini" />
+          </div>
+        </div>
+
         <div class="field">
           <label for="aiBaseUrl" data-i18n="aiBaseUrl">API Base URL</label>
-          <div class="api-base-row">
-            <input id="aiBaseUrl" type="text" inputmode="url" autocomplete="off"
-                   spellcheck="false" placeholder="https://api.deepseek.com" />
-            <button id="authorizeAiBase" type="button" data-i18n="aiAuthorize">授权</button>
-          </div>
+          <input id="aiBaseUrl" type="text" inputmode="url" autocomplete="off"
+                 spellcheck="false" placeholder="https://api.deepseek.com" />
         </div>
 
         <div class="compact-grid grid-2 ai-model-grid">
@@ -91,6 +106,20 @@
             <button id="clearApiKey" type="button" data-i18n="clearApiKey">删除</button>
           </div>
         </div>
+
+        <details class="settings-help ai-advanced-settings">
+          <summary data-i18n="aiExtraBodySummary">高级请求参数</summary>
+          <div class="field">
+            <label for="aiExtraBody" data-i18n="aiExtraBody">额外请求参数（JSON）</label>
+            <textarea id="aiExtraBody" rows="4" autocomplete="off" spellcheck="false"
+                      placeholder='{"enable_thinking":false}'></textarea>
+            <div class="ai-extra-actions">
+              <button id="saveAiExtraBody" type="button" data-i18n="aiExtraBodySave">保存参数</button>
+            </div>
+            <p id="aiExtraBodyMsg" class="engine-hint" role="status" aria-live="polite"
+               data-i18n="aiExtraBodyHint">按当前 API 地址和模型保存在本机，用于传入供应商专有参数。</p>
+          </div>
+        </details>
 
         <div class="compact-grid grid-3">
           <div class="field">
@@ -277,7 +306,13 @@
     <button id="reset" type="button" class="reset" data-i18n="resetAll">重置全部设置</button>
   </footer>
 
+  <script src="shared/core.js"></script>
+  <script src="shared/cues.js"></script>
+  <script src="shared/translation.js"></script>
+  <script src="shared/display.js"></script>
+  <script src="shared/stream.js"></script>
   <script src="shared.js"></script>
+  <script src="popup/ai-profiles.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

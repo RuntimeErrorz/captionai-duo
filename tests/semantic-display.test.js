@@ -114,6 +114,30 @@ test("display pagination protects lexical punctuation shapes without phrase exce
   }
 });
 
+test("Chinese word remains indivisible when an oversized chunk is split by pixel width", () => {
+  const text = "CLE 是那些出售杠杆的人在他们刚刚装满烟花的建筑物需要撤离时所购买的火灾保险。";
+  const cjkDoubleWidth = (value) => Array.from(String(value)).reduce((width, character) =>
+    width + (/[⺀-鿿]/.test(character) ? 2 : 1), 0);
+  const pages = shared.splitTextForDisplay(text, 2, cjkDoubleWidth, "zh-CN");
+
+  assert.equal(pages.length, 2, JSON.stringify(pages));
+  assert.ok(pages.some((page) => page.text.includes("烟花")), JSON.stringify(pages));
+  assert.ok(pages.every((page) => !page.text.endsWith("烟") && !page.text.startsWith("花")),
+    JSON.stringify(pages));
+  assert.equal(pages.map((page) => page.text).join(""), text);
+});
+
+test("a truly oversized word falls back to grapheme-safe pagination", () => {
+  const familyEmoji = "👨‍👩‍👧‍👦";
+  const text = "x".repeat(16) + familyEmoji + "x".repeat(16);
+  const pages = shared.splitTextForDisplay(text, 3, lengthMeasure, "en");
+
+  assert.equal(pages.length, 3, JSON.stringify(pages));
+  assert.ok(pages.every((page) => page.text.length > 0));
+  assert.ok(pages.some((page) => page.text.includes(familyEmoji)), JSON.stringify(pages));
+  assert.equal(pages.map((page) => page.text).join(""), text);
+});
+
 test("a cue crossing a page boundary advances so no boundary word is orphaned", () => {
   const plan = shared.semanticDisplayPlan(
     "and to see what's going on and to commentate and try to give color and life to what's happening inside the octagon. And I don't I try not to dwell",
@@ -132,18 +156,50 @@ test("a cue crossing a page boundary advances so no boundary word is orphaned", 
   assert.match(second.translation, /我尽量不/);
 });
 
-test("same semantic unit bridges a short raw cue hole but not a real break", () => {
-  const previous = { start: 135936, end: 138205 };
-  const next = { start: 139706, end: 142576 };
+test("one semantic unit remains continuously visible across a non-hard raw cue hole", () => {
+  const previous = { start: 273759, end: 276759 };
+  const next = { start: 279600, end: 282919 };
   assert.equal(shared.shouldBridgeSemanticCueGap(
-    previous, next, 138234, "semantic-60-62", "semantic-60-62", 2200
-  ), true);
+    previous, next, 276784, "semantic-545-547", "semantic-545-547", true
+  ), true, "a 2841ms soft boundary must not clear and repaint one semantic page");
   assert.equal(shared.shouldBridgeSemanticCueGap(
-    previous, next, 138234, "semantic-60", "semantic-61", 2200
-  ), false);
+    previous, next, 276784, "semantic-545", "semantic-546", true
+  ), false, "distinct semantic units must remain distinct even across a short hole");
   assert.equal(shared.shouldBridgeSemanticCueGap(
-    previous, { start: 141000, end: 142000 }, 139000, "same", "same", 2200
-  ), false);
+    previous, next, 276784, "same", "same", false
+  ), false, "a hard semantic boundary must never be bridged");
+  assert.equal(shared.shouldBridgeSemanticCueGap(
+    previous, next, 279600, "same", "same", true
+  ), false, "the bridge applies only inside the raw cue hole");
+});
+
+test("semantic gap continuity depends on semantic ownership, not raw gap duration", () => {
+  let state = 0x47c2a91d;
+  const random = () => {
+    state = Math.imul(state ^ (state >>> 15), 1 | state);
+    state ^= state + Math.imul(state ^ (state >>> 7), 61 | state);
+    return ((state ^ (state >>> 14)) >>> 0) / 4294967296;
+  };
+
+  for (let run = 0; run < 500; run++) {
+    const previousEnd = Math.floor(random() * 60 * 60 * 1000);
+    const gap = 1 + Math.floor(random() * 12000);
+    const nextStart = previousEnd + gap;
+    const time = previousEnd + Math.floor(random() * gap);
+    const sameUnit = random() < 0.5;
+    const boundaryOpen = random() < 0.5;
+    const previousUnit = "unit-a";
+    const nextUnit = sameUnit ? previousUnit : "unit-b";
+
+    assert.equal(shared.shouldBridgeSemanticCueGap(
+      { start: previousEnd - 1000, end: previousEnd },
+      { start: nextStart, end: nextStart + 1000 },
+      time,
+      previousUnit,
+      nextUnit,
+      boundaryOpen
+    ), sameUnit && boundaryOpen, `timeline invariant failed for seed run ${run}`);
+  }
 });
 
 test("an imperceptible tail unit is co-displayed with the preceding unit from the same cue", () => {

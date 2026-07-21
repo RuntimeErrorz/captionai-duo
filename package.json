@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "test": "node --test",
-    "check": "node --check shared.js && node --check background.js && node --check inject.js && node --check content.js && node --check popup.js && npm test"
+    "check:architecture": "node scripts/check-architecture.js",
+    "check": "npm run check:architecture && npm test"
   }
 }

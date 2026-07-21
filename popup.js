@@ -181,69 +181,6 @@ function sendRuntime(msg) {
   });
 }
 
-function containsOriginPermission(origin) {
-  return new Promise((resolve) => {
-    if (!origin || !chrome.permissions) { resolve(false); return; }
-    try {
-      chrome.permissions.contains({ origins: [origin] }, (granted) => {
-        if (chrome.runtime.lastError) { resolve(false); return; }
-        resolve(!!granted);
-      });
-    } catch (_e) { resolve(false); }
-  });
-}
-
-function requestOriginPermission(origin) {
-  return new Promise((resolve) => {
-    if (!origin || !chrome.permissions) { resolve(false); return; }
-    try {
-      chrome.permissions.request({ origins: [origin] }, (granted) => {
-        if (chrome.runtime.lastError) { resolve(false); return; }
-        resolve(!!granted);
-      });
-    } catch (_e) { resolve(false); }
-  });
-}
-
-function paintAiBaseUrl() {
-  const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(state.aiBaseUrl);
-  $("authorizeAiBase").hidden =
-    YTDS_SHARED.aiEndpointKind(baseUrl) === "deepseek";
-}
-
-async function readAiCredentialState() {
-  const stored = await chrome.storage.local.get({
-    aiApiKeys: {}, aiApiKey: "", deepseekApiKey: ""
-  });
-  const keys = stored.aiApiKeys && typeof stored.aiApiKeys === "object"
-    ? { ...stored.aiApiKeys } : {};
-  if (!keys.deepseek && (stored.aiApiKey || stored.deepseekApiKey)) {
-    keys.deepseek = String(stored.aiApiKey || stored.deepseekApiKey).trim();
-  }
-  return keys;
-}
-
-async function loadCurrentAiApiKey() {
-  const keys = await readAiCredentialState();
-  const scope = YTDS_SHARED.aiCredentialScope(state.aiBaseUrl);
-  $("aiApiKey").value = scope ? String(keys[scope] || "") : "";
-  return String(scope && keys[scope] || "").trim();
-}
-
-async function saveCurrentAiApiKey(value) {
-  const scope = YTDS_SHARED.aiCredentialScope(state.aiBaseUrl);
-  if (!scope) return false;
-  const keys = await readAiCredentialState();
-  const key = String(value || "").trim();
-  if (key) keys[scope] = key;
-  else delete keys[scope];
-  await chrome.storage.local.set({ aiApiKeys: keys });
-  if (scope === "deepseek") {
-    await chrome.storage.local.remove(["aiApiKey", "deepseekApiKey"]);
-  }
-  return true;
-}
-
 function setAiStatus(text, kind) {
   const el = $("aiStatus");
   if (!el) return;
@@ -251,27 +188,6 @@ function setAiStatus(text, kind) {
   el.classList.toggle("warn", kind === "warn");
   el.classList.toggle("ok", kind === "ok");
   el.hidden = !text;
-}
-
-async function authorizeCurrentAiBase() {
-  const normalized = YTDS_SHARED.normalizeAiBaseUrl(state.aiBaseUrl);
-  if (!normalized) {
-    setAiStatus(t("aiBaseMissing", "请输入有效的 API Base URL。"), "warn");
-    return false;
-  }
-  if (normalized !== state.aiBaseUrl) {
-    setKey("aiBaseUrl", normalized);
-    $("aiBaseUrl").value = normalized;
-  }
-  const origin = YTDS_SHARED.aiOriginPattern(normalized);
-  // Call request() directly from the button gesture. Asking for an already
-  // granted origin is harmless and avoids losing Chrome's user-gesture token.
-  const granted = origin === "https://api.deepseek.com/*"
-    ? true : await requestOriginPermission(origin);
-  setAiStatus(granted
-    ? t("aiPermissionGranted", "API 地址已授权。")
-    : t("aiPermissionDenied", "未获得 API 地址授权。"), granted ? "ok" : "warn");
-  return granted;
 }
 
 function showDebugMsg(text, kind) {
@@ -376,15 +292,6 @@ async function refreshEngineStatus() {
     el.classList.add("warn");
     el.hidden = false;
     return;
-  }
-  if (endpointKind === "compatible") {
-    const origin = YTDS_SHARED.aiOriginPattern(baseUrl);
-    if (!await containsOriginPermission(origin)) {
-      el.textContent = t("aiPermissionMissing", "请授权访问当前 API 地址。");
-      el.classList.add("warn");
-      el.hidden = false;
-      return;
-    }
   }
   try {
     if (chrome.storage.session) {
@@ -496,34 +403,44 @@ function bindUI() {
   $("rowGapV").textContent = state.rowGap + "px";
   paintSegs();
   paintExportSeg();
-  paintAiBaseUrl();
+  paintAiConfigProfileManager();
   bindLineControls();
   activateWorkspace(activeWorkspace, false);
 }
 
 // ---- wire events ---------------------------------------------------------
 function wire() {
+  wireAiConfigProfileManager();
   document.querySelectorAll(".workspace-tab").forEach((button) => {
     button.addEventListener("click", () => activateWorkspace(button.dataset.workspace, true));
   });
   $("enabled").addEventListener("change", (e) => setKey("enabled", e.target.checked));
   $("targetLang").addEventListener("change", (e) => setKey("targetLang", e.target.value));
 
-  $("aiBaseUrl").addEventListener("change", (e) => {
+  $("aiBaseUrl").addEventListener("change", async (e) => {
     const value = e.target.value.trim();
     const normalized = YTDS_SHARED.normalizeAiBaseUrl(value);
     setKey("aiBaseUrl", normalized || value);
     e.target.value = state.aiBaseUrl;
-    paintAiBaseUrl();
-    loadCurrentAiApiKey().then(refreshEngineStatus);
-  });
-  $("authorizeAiBase").addEventListener("click", authorizeCurrentAiBase);
-  $("aiModel").addEventListener("change", (e) => {
-    setKey("aiModel", e.target.value.trim());
+    const [apiKey, extraBody] = await Promise.all([
+      loadCurrentAiApiKey(), loadCurrentAiExtraBody()
+    ]);
+    await updateActiveAiConfigProfile({
+      baseUrl: state.aiBaseUrl, apiKey, extraBody
+    });
     refreshEngineStatus();
   });
-  $("aiThinking").addEventListener("change", (e) =>
-    setKey("aiThinking", YTDS_SHARED.normalizeAiThinking(e.target.value)));
+  $("aiModel").addEventListener("change", async (e) => {
+    setKey("aiModel", e.target.value.trim());
+    const extraBody = await loadCurrentAiExtraBody();
+    await updateActiveAiConfigProfile({ model: state.aiModel, extraBody });
+    refreshEngineStatus();
+  });
+  $("aiThinking").addEventListener("change", (e) => {
+    const thinking = YTDS_SHARED.normalizeAiThinking(e.target.value);
+    setKey("aiThinking", thinking);
+    updateActiveAiConfigProfile({ thinking });
+  });
 
   $("aiApiKey").addEventListener("change", async (e) => {
     if (await saveCurrentAiApiKey(e.target.value)) {
@@ -547,6 +464,14 @@ function wire() {
     $("aiApiKey").type = "password";
     $("toggleApiKey").textContent = t("showApiKey", "显示");
     refreshEngineStatus();
+  });
+  $("saveAiExtraBody").addEventListener("click", () =>
+    saveCurrentAiExtraBody($("aiExtraBody").value));
+  $("aiExtraBody").addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      saveCurrentAiExtraBody(e.currentTarget.value);
+    }
   });
   $("deepseekContextPast").addEventListener("change", (e) => {
     const value = YTDS_SHARED.normalizeAiContextCount(e.target.value, state.deepseekContextPast);
@@ -625,10 +550,17 @@ function wire() {
   $("exportBtn").addEventListener("click", onExportClick);
 
   // reset all
-  $("reset").addEventListener("click", () => {
-    state = { ...DEFAULTS };
-    chrome.storage.sync.set(DEFAULTS);
+  $("reset").addEventListener("click", async () => {
+    const revision = Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1;
+    state = { ...DEFAULTS, aiExtraBodyRevision: revision };
+    await Promise.all([
+      chrome.storage.sync.set(state),
+      chrome.storage.local.remove(["aiExtraBodyProfiles", AI_CONFIG_PROFILE_STORE_KEY])
+    ]);
+    aiConfigProfileReady = false;
+    await initializeAiConfigProfiles();
     bindUI();
+    await loadCurrentAiExtraBody();
     refreshEngineStatus();
   });
 }
@@ -725,17 +657,20 @@ chrome.storage.sync.get(null, (got) => {
   if (Object.prototype.hasOwnProperty.call(got, "aiProvider")) {
     chrome.storage.sync.remove("aiProvider");
   }
-  chrome.storage.local.get({ aiApiKeys: {}, aiApiKey: "", deepseekApiKey: "" }, (local) => {
+  chrome.storage.local.get({
+    aiApiKeys: {}, aiApiKey: "", deepseekApiKey: "", aiExtraBodyProfiles: {},
+    [AI_CONFIG_PROFILE_STORE_KEY]: null
+  }, async (local) => {
     const keys = local.aiApiKeys && typeof local.aiApiKeys === "object" ? { ...local.aiApiKeys } : {};
     if (!keys.deepseek && (local.aiApiKey || local.deepseekApiKey)) {
       keys.deepseek = String(local.aiApiKey || local.deepseekApiKey).trim();
-      chrome.storage.local.set({ aiApiKeys: keys }, () => {
-        chrome.storage.local.remove(["aiApiKey", "deepseekApiKey"]);
-      });
+      await chrome.storage.local.set({ aiApiKeys: keys });
+      await chrome.storage.local.remove(["aiApiKey", "deepseekApiKey"]);
+      local.aiApiKeys = keys;
     }
+    await initializeAiConfigProfiles(local);
     bindUI();
-    const scope = YTDS_SHARED.aiCredentialScope(state.aiBaseUrl);
-    $("aiApiKey").value = scope ? String(keys[scope] || "") : "";
+    await Promise.all([loadCurrentAiApiKey(), loadCurrentAiExtraBody()]);
     wire();
     refreshEngineStatus();
     refreshAiTokenUsage();
