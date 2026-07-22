@@ -169,18 +169,18 @@
       </div>
     </section>
 
-    <!-- ============================ 调试日志 ============================ -->
+    <!-- ============================ 诊断包 ============================== -->
     <section class="card console-section" id="panel-debug"
              data-workspace-panel="tools" hidden>
       <div class="card-head">
-        <h2 class="card-title" data-i18n="secDebug">调试日志</h2>
+        <h2 class="card-title" data-i18n="secDebug">诊断包</h2>
         <label class="chk">
           <input type="checkbox" id="debugEnabled" />
-          <span data-i18n="debugEnable">启用调试日志</span>
+          <span data-i18n="debugEnable">启用诊断记录</span>
         </label>
       </div>
       <div class="debug-actions">
-        <button type="button" id="copyDebug" data-i18n="debugCopy">复制日志</button>
+        <button type="button" id="copyDebug" data-i18n="debugCopy">复制诊断包</button>
         <button type="button" id="clearDebug" data-i18n="debugClear">清空日志</button>
       </div>
       <p class="export-msg" id="debugMsg" role="status" aria-live="polite" hidden></p>
@@ -307,6 +307,7 @@
   </footer>
 
   <script src="shared/core.js"></script>
+  <script src="shared/diagnostics.js"></script>
   <script src="shared/cues.js"></script>
   <script src="shared/translation.js"></script>
   <script src="shared/display.js"></script>

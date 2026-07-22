@@ -9,7 +9,8 @@ const { loadShared } = require("./helpers");
 
 const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
-const semanticSource = fs.readFileSync(path.join(root, "content/semantic.js"), "utf8");
+const semanticSource = ["content/semantic-requests.js", "content/semantic.js"].map((file) =>
+  fs.readFileSync(path.join(root, file), "utf8")).join("\n");
 const playbackSource = fs.readFileSync(path.join(root, "content/cue-playback.js"), "utf8");
 const fallbackSource = fs.readFileSync(path.join(root, "content/fallback.js"), "utf8");
 const networkSource = fs.readFileSync(path.join(root, "background/network.js"), "utf8");
@@ -143,6 +144,8 @@ function loadSemanticCommitHarness(translations, retryAttempt) {
     DEEPSEEK_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
     DEEPSEEK_RATE_RETRY_LIMIT: 6,
     emitDebug: (event, data) => debug.push({ event, data }),
+    emitCaptionStateTransition: (machine, transition, data) =>
+      debug.push({ event: "state-transition", data: { machine, transition, ...data } }),
     mergeCueTexts: (items) => items.map((item) => item.text).join(" "),
     cacheDeepseekDisplayNeighborhood: () => {},
     semanticDisplayWidth: () => 1000,
@@ -249,7 +252,8 @@ test("promoting a live prefetch reuses it instead of cancelling it", () => {
       cueVideoId: "video"
     },
     sendRuntimeMessage: (message) => messages.push(message),
-    emitDebug: () => {}
+    emitDebug: () => {},
+    emitCaptionStateTransition: () => {}
   };
   const existing = { requestId: "commit:4:10:1-80", urgent: false };
   context.captionSession.deepseekRequestMeta.set("dsb:1", existing);
@@ -443,6 +447,7 @@ test("an invalidated fallback session cannot repaint unchanged source text", () 
     captureCaptionSession: () => sessionToken,
     isCaptionSessionCurrent: (token) => token === sessionToken,
     sendRuntimeMessage: (_message, callback) => callbacks.push(callback),
+    emitCaptionStateTransition: () => {},
     setTranslation: (translation) => painted.push(translation)
   };
   vm.createContext(context);

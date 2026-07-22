@@ -7,12 +7,13 @@ in `manifest.json` in order, and the service worker loads its modules through
 
 ## Module boundaries
 
-- `shared/` contains pure, cross-context helpers. `shared.js` is the final API
-  assembler and exposes the frozen `YTDS_SHARED` object.
+- `shared/` contains pure, cross-context helpers, including the mandatory
+  diagnostic redaction boundary. `shared.js` is the final API assembler and
+  exposes the frozen `YTDS_SHARED` object.
 - `content/` contains the isolated-world subtitle runtime: UI state, the explicit
   `captionSession` owner for video/track/playback/request/display/fallback state,
-  its opaque identity and reset boundary, semantic translation, export, bridge,
-  and lifecycle.
+  its opaque identity and reset boundary, versioned diagnostics, semantic
+  request/retry ownership, semantic translation, export, bridge, and lifecycle.
 - `background/` contains service-worker state, Chromium network diagnostics,
   HTTP transport, translation, and message routing. `background.js` only
   declares their deterministic order.

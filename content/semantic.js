@@ -130,135 +130,6 @@ function cueTrackFingerprint(videoId, trackKind, sourceLang, cues) {
   return `${cues.length}:${hash >>> 0}`;
 }
 
-function deepseekBatchRetryKey(start, end, videoId, epoch) {
-  return `${videoId}:${epoch}:${start}:${end}`;
-}
-
-function beginDeepseekRequest(inflightKey, kind, start, end, urgent) {
-  const existing = captionSession.deepseekRequestMeta.get(inflightKey);
-  if (existing) {
-    if (!urgent || existing.urgent) return "";
-    // Priority matters while waiting for a local slot, not after Fetch has
-    // started. Reuse the speculative request so promotion cannot throw away a
-    // nearly completed stream or restart a temporarily slow connection.
-    existing.urgent = true;
-    existing.promotedAt = Date.now();
-    emitDebug("deepseek-request-promoted", {
-      kind,
-      start,
-      end,
-      reusedRequestId: existing.requestId
-    });
-    return "";
-  } else if (captionSession.transInflight.has(inflightKey)) {
-    return "";
-  }
-  const requestId = `${kind}:${captionSession.deepseekFocusGeneration}:${++captionSession.deepseekRequestSerial}:${start}-${end}`;
-  captionSession.deepseekRequestMeta.set(inflightKey, {
-    requestId,
-    urgent: !!urgent,
-    progressTranslations: []
-  });
-  captionSession.transInflight.add(inflightKey);
-  return requestId;
-}
-
-function finishDeepseekRequest(inflightKey, requestId) {
-  const current = captionSession.deepseekRequestMeta.get(inflightKey);
-  if (!current || current.requestId !== requestId) return null;
-  captionSession.deepseekRequestMeta.delete(inflightKey);
-  captionSession.transInflight.delete(inflightKey);
-  return current;
-}
-
-function deepseekRequestById(requestId) {
-  const wanted = String(requestId || "");
-  if (!wanted) return null;
-  for (const [inflightKey, request] of captionSession.deepseekRequestMeta.entries()) {
-    if (request && request.requestId === wanted) return { inflightKey, request };
-  }
-  return null;
-}
-
-function cancelDeepseekPrefetchRequests() {
-  for (const [inflightKey, request] of Array.from(captionSession.deepseekRequestMeta.entries())) {
-    if (!request || request.urgent) continue;
-    sendRuntimeMessage({
-      type: "cancelDeepSeekRequest",
-      videoId: captionSession.cueVideoId,
-      requestId: request.requestId
-    });
-    captionSession.deepseekRequestMeta.delete(inflightKey);
-    captionSession.transInflight.delete(inflightKey);
-  }
-}
-
-function scheduleDeepSeekBatchRetry(
-  gIdx, start, end, videoId, epoch, reason, retryOptions
-) {
-  const key = deepseekBatchRetryKey(start, end, videoId, epoch);
-  const attempt = captionSession.deepseekRetryCounts.get(key) || 0;
-  const rateLimited = !!(retryOptions && retryOptions.rateLimited);
-  const maxAttempts = rateLimited
-    ? DEEPSEEK_RATE_RETRY_LIMIT : DEEPSEEK_COLD_RETRY_DELAYS_MS.length;
-  if (attempt >= maxAttempts) {
-    const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
-    if (Number.isInteger(regionIndex)) {
-      captionSession.deepseekExhaustedRegions.set(regionIndex, {
-        start, end, videoId, epoch, reason: String(reason || "")
-      });
-    }
-    emitDebug("batch-retry-exhausted", { start, end, reason: String(reason || "") });
-    if (captionSession.activeGroupIdx >= 0 && captionSession.deepseekGroupToCommitRegion[captionSession.activeGroupIdx] === regionIndex &&
-        captionSession.activeCueIdx >= 0 && captionSession.cueList) {
-      clearPendingTimer();
-      const source = sourceForDisplayedCue(captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]);
-      setTranslation(t("translationUnavailable", "Translation temporarily unavailable"), source);
-    }
-    return;
-  }
-  const requestedDelay = Number(retryOptions && retryOptions.retryAfterMs);
-  const delayMs = rateLimited
-    ? Math.max(500, Math.min(61000,
-        Number.isFinite(requestedDelay) && requestedDelay > 0 ? Math.ceil(requestedDelay) : 1500))
-    : DEEPSEEK_COLD_RETRY_DELAYS_MS[attempt];
-  const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
-  // One lock per semantic region, not per request range. The target may grow
-  // while a request is running; a range-shaped key would then admit another
-  // request with the same commit cursor and violate the single-writer model.
-  const inflightKey = `dsb:${regionIndex}`;
-  const scheduledFocusGeneration = captionSession.deepseekFocusGeneration;
-  const scheduledSessionToken = captureCaptionSession();
-  captionSession.deepseekRetryCounts.set(key, attempt + 1);
-  // Keep the batch marked as pending during the cooldown. cueTick runs many
-  // times per second; without this lock it would repeatedly hit the worker
-  // while local concurrency or the remote API is still rate-limited.
-  captionSession.transInflight.add(inflightKey);
-  emitDebug("batch-retry", {
-    start,
-    end,
-    attempt: attempt + 1,
-    delayMs,
-    rateLimited,
-    reason: String(reason || "")
-  });
-  setTimeout(() => {
-    captionSession.transInflight.delete(inflightKey);
-    if (!isCaptionSessionCurrent(scheduledSessionToken) ||
-        epoch !== captionSession.cueEpoch || videoId !== captionSession.cueVideoId) {
-      captionSession.deepseekRetryCounts.delete(key);
-      return;
-    }
-    if (scheduledFocusGeneration !== captionSession.deepseekFocusGeneration) {
-      captionSession.deepseekRetryCounts.delete(key);
-      return;
-    }
-    deepseekRequestBatch(gIdx, true, !!(retryOptions && retryOptions.urgent), {
-      bypassCache: !!(retryOptions && retryOptions.bypassCache)
-    });
-  }, delayMs);
-}
-
 function deepseekContextsForRange(requestStart, requestEnd) {
   const startCue = Math.max(0,
     Number(captionSession.sentGroups[requestStart] && captionSession.sentGroups[requestStart].startIdx) || 0);
@@ -448,12 +319,22 @@ function handleDeepseekTranslationProgress(msg) {
     }
   }
   const found = deepseekRequestById(msg && msg.requestId);
-  if (!found) return false;
+  if (!found) {
+    emitCaptionStateTransition("semantic-progress", "discarded", {
+      requestId: String(msg && msg.requestId || ""),
+      reason: "request-owner-missing"
+    });
+    return false;
+  }
   const request = found.request;
   if (String(msg.videoId || "") !== request.reqVid ||
       Number(msg.focusGeneration) !== request.focusGeneration ||
       request.reqEpoch !== captionSession.cueEpoch || request.reqVid !== captionSession.cueVideoId ||
       !isCaptionSessionCurrent(request.sessionToken)) {
+    emitCaptionStateTransition("semantic-progress", "discarded", {
+      requestId: String(msg && msg.requestId || ""),
+      reason: "session-track-or-focus-invalidated"
+    });
     return false;
   }
   const incoming = Array.isArray(msg.translations) ? msg.translations.filter(Boolean) : [];
@@ -590,7 +471,14 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
     contextAfter
   }, (resp, runtimeError) => {
     const finishedRequest = finishDeepseekRequest(inflightKey, requestId);
-    if (!finishedRequest || !isCaptionSessionCurrent(requestSessionToken)) return;
+    if (!finishedRequest) return;
+    if (!isCaptionSessionCurrent(requestSessionToken)) {
+      emitCaptionStateTransition("semantic-response", "discarded", {
+        requestId,
+        reason: "session-invalidated"
+      });
+      return;
+    }
     const effectiveUrgent = requestUrgent || !!finishedRequest.urgent;
     const progressedCursor = state.cursor;
     if (runtimeError) {
@@ -607,7 +495,13 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
       }
       return;
     }
-    if (reqEpoch !== captionSession.cueEpoch || reqVid !== captionSession.cueVideoId) return;
+    if (reqEpoch !== captionSession.cueEpoch || reqVid !== captionSession.cueVideoId) {
+      emitCaptionStateTransition("semantic-response", "discarded", {
+        requestId,
+        reason: "track-invalidated"
+      });
+      return;
+    }
     if (!resp || !resp.ok || !Array.isArray(resp.translations)) {
       const error = resp && resp.error || "empty background response";
       emitDebug("batch-rejected", {
@@ -617,6 +511,11 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
         rateLimited: !!(resp && resp.rateLimited),
         retryAfterMs: Number(resp && resp.retryAfterMs) || 0,
         limitReason: String(resp && resp.limitReason || "")
+      });
+      emitCaptionStateTransition("semantic-response", "rejected", {
+        requestId,
+        reason: String(error || "rejected"),
+        retryable: !!(!resp || resp.netfail || resp.timeout || resp.rateLimited)
       });
       if (progressedCursor > requestStart) {
         repaintActiveDeepseekTranslation();
@@ -642,6 +541,11 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
       urgent: effectiveUrgent,
       modelDeferredIds: Array.isArray(resp.deferredIds) ? resp.deferredIds : [],
       httpDiagnostics: resp.httpDiagnostics || { attempts: [] }
+    });
+    emitCaptionStateTransition("semantic-response", "accepted", {
+      requestId,
+      translationCount: resp.translations.length,
+      partial: !!resp.partial
     });
     const finalStart = state.cursor;
     const finalTranslations = resp.translations.filter(

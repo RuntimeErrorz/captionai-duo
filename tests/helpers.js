@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 const SHARED_FILES = Object.freeze([
   "shared/core.js",
+  "shared/diagnostics.js",
   "shared/cues.js",
   "shared/translation.js",
   "shared/display.js",
@@ -15,9 +16,11 @@ const SHARED_FILES = Object.freeze([
 
 const CONTENT_FILES = Object.freeze([
   "content/state-ui.js",
+  "content/diagnostics.js",
   "content/session.js",
   "content/cue-playback.js",
   "content/display.js",
+  "content/semantic-requests.js",
   "content/semantic.js",
   "content/fallback.js",
   "content/export.js",

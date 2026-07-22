@@ -73,6 +73,31 @@ function createCaptionSessionState(initialVideoId) {
 
 let captionSession = createCaptionSessionState(videoIdFromLocation());
 
+function captionSessionDiagnosticContext() {
+  return {
+    sessionRevision: Math.max(0, Number(captionSession.revision) || 0),
+    sessionReason: String(captionSession.token && captionSession.token.reason || ""),
+    cueEpoch: Math.max(0, Number(captionSession.cueEpoch) || 0),
+    focusGeneration: Math.max(0, Number(captionSession.deepseekFocusGeneration) || 0),
+    requestSerial: Math.max(0, Number(captionSession.deepseekRequestSerial) || 0),
+    inflightRequests: captionSession.deepseekRequestMeta.size,
+    activeGroup: Number(captionSession.activeGroupIdx),
+    activeCue: Number(captionSession.activeCueIdx)
+  };
+}
+
+if (typeof setContentDebugContextProvider === "function") {
+  setContentDebugContextProvider(captionSessionDiagnosticContext);
+}
+
+function emitCaptionStateTransition(machine, transition, data) {
+  if (typeof emitDebug !== "function") return;
+  emitDebug("state-transition", Object.assign({
+    machine: String(machine || "caption-session"),
+    transition: String(transition || "changed")
+  }, data || {}));
+}
+
 function captureCaptionSession() {
   return captionSession.token;
 }
@@ -84,6 +109,8 @@ function isCaptionSessionCurrent(token) {
 // Rotate one opaque identity for every event that revokes asynchronous repaint
 // authority. Serialized fields remain transport identity and diagnostics only.
 function invalidateCaptionSession(reason) {
+  const previousToken = captionSession.token;
+  const previousInflightRequests = captionSession.deepseekRequestMeta.size;
   captionSession.revision++;
   captionSession.cueEpoch++;
   captionSession.token = Object.freeze({
@@ -91,6 +118,13 @@ function invalidateCaptionSession(reason) {
     reason: String(reason || "invalidated"),
     videoId: String(captionSession.cueVideoId || captionSession.currentVideoId || ""),
     focusGeneration: Math.max(0, Number(captionSession.deepseekFocusGeneration) || 0)
+  });
+  emitCaptionStateTransition("caption-session", "invalidated", {
+    reason: String(reason || "invalidated"),
+    previousRevision: Math.max(0, Number(previousToken && previousToken.revision) || 0),
+    nextRevision: captionSession.revision,
+    previousReason: String(previousToken && previousToken.reason || ""),
+    revokedInflightRequests: previousInflightRequests
   });
   return captionSession.token;
 }

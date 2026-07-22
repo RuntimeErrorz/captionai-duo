@@ -5,6 +5,9 @@
 // STATE / TEARDOWN / SPA NAV
 // =========================================================================
 function teardownAll(reason) {
+  emitCaptionStateTransition("content-lifecycle", "teardown", {
+    reason: String(reason || "teardown")
+  });
   stopCueLoop();
   stopFallback();
   resetCaptionSessionState(reason || "teardown");
@@ -43,6 +46,9 @@ function onNav() {
   captionSession.currentVideoId = videoIdFromLocation();
   captionSession.weEnabledCC = false;        // fresh video — re-evaluate caption state
   teardownAll("navigation");
+  emitCaptionStateTransition("content-lifecycle", "navigation", {
+    videoId: captionSession.currentVideoId || ""
+  });
   if (settings.enabled) {
     ensureOverlay();
     emitDebug("cue-navigation", { videoId: captionSession.currentVideoId || "" });
@@ -66,6 +72,10 @@ if (document.fonts && typeof document.fonts.addEventListener === "function") {
 
 // ---- boot ----------------------------------------------------------------
 loadSettings().then(() => {
+  emitCaptionStateTransition("content-lifecycle", "booted", {
+    enabled: !!settings.enabled,
+    readyState: document.readyState
+  });
   emitDebug("content-boot", {
     enabled: !!settings.enabled,
     currentVideoId: captionSession.currentVideoId || "",

@@ -104,5 +104,6 @@ assert.equal(typeof shared.cueReferenceAtoms, "function");
 assert.equal(typeof shared.alignedTranslationsFromJsonText, "function");
 assert.equal(typeof shared.semanticDisplayPlan, "function");
 assert.equal(typeof shared.deepSeekSseEvents, "function");
+assert.equal(typeof shared.sanitizeDiagnosticValue, "function");
 
 console.log(`Architecture checks passed: ${runtimeFiles.length} files, max ${MAX_RUNTIME_LINES} lines.`);

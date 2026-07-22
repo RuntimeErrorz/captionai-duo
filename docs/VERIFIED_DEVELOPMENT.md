@@ -49,6 +49,9 @@ Perform the relevant checks whenever behavior crosses the browser boundary:
   one cancellation. Token totals and diagnostics must reflect the real outcome.
 - Inspect extension storage and copied debug logs: no API key or complete secret
   profile may appear outside local storage.
+- For lifecycle bugs, the copied diagnostic bundle must show ordered
+  `state-transition` events with session revision, request ID, and the explicit
+  reason whenever a stale callback or timer is discarded.
 
 Record which checks were run in the pull request. If a check cannot be run, say
 why and describe the residual risk rather than calling the change fully verified.

@@ -1,6 +1,7 @@
 // MV3 service-worker entry: deterministic module order, no bundler required.
 importScripts(
   "shared/core.js",
+  "shared/diagnostics.js",
   "shared/cues.js",
   "shared/translation.js",
   "shared/display.js",

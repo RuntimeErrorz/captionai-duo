@@ -21,5 +21,7 @@
   units, translations, request coverage, or cache identity.
 - Loading state must be observable: an active untranslated cue is either backed
   by a live/retryable request or displays a loading/error state.
+- Diagnostic events use the versioned `state-transition` protocol and include
+  only serialized session identity. Never expose the opaque ownership token.
 - Bug fixes derived from playback logs need a reduced behavioral fixture in the
   closest semantic, playback, display, or track-stability test.

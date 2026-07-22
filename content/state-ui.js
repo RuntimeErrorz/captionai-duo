@@ -256,21 +256,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // ---- generic helpers -----------------------------------------------------
-function emitDebug(event, data) {
-  if (!settings.debugEnabled) return;
-  try {
-    sendRuntimeMessage({
-      type: "debugLog",
-      scope: "content",
-      event,
-      data: Object.assign({
-        videoId: captionSession.cueVideoId || captionSession.currentVideoId || "",
-        videoTimeMs: Math.round(((getVideo() && getVideo().currentTime) || 0) * 1000)
-      }, data || {})
-    });
-  } catch (_e) { /* debug logging must never affect playback */ }
-}
-
 function videoIdFromLocation() {
   return YTDS_SHARED.videoIdFromUrl(location.href);
 }

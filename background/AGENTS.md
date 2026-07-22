@@ -12,5 +12,7 @@
   in-flight work rather than duplicate it.
 - Never log Authorization headers, API keys, complete local profile objects, or
   unredacted provider error payloads that may echo credentials.
+- Treat stored and incoming diagnostic entries as untrusted legacy data. Apply
+  shared recursive redaction before persistence and again when exporting.
 - Any new external origin requires explicit user authorization and a permission
   review; do not broaden manifest host permissions as a convenience.

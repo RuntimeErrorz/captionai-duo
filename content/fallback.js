@@ -6,10 +6,15 @@
 // =========================================================================
 function cancelFallbackRequest() {
   if (!captionSession.fallbackRequestId) return;
+  const requestId = captionSession.fallbackRequestId;
   sendRuntimeMessage({
     type: "cancelDeepSeekRequest",
     videoId: captionSession.currentVideoId,
     requestId: captionSession.fallbackRequestId
+  });
+  emitCaptionStateTransition("fallback-request", "cancelled", {
+    requestId,
+    reason: "owner-reset"
   });
   captionSession.fallbackRequestId = "";
   captionSession.fallbackSessionToken = null;
@@ -28,6 +33,7 @@ function scheduleTranslate(text) {
     const requestSessionToken = captureCaptionSession();
     captionSession.fallbackRequestId = requestId;
     captionSession.fallbackSessionToken = requestSessionToken;
+    emitCaptionStateTransition("fallback-request", "started", { requestId });
     sendRuntimeMessage(
       {
         type: "translateBatch",
@@ -46,13 +52,27 @@ function scheduleTranslate(text) {
           captionSession.fallbackRequestId = "";
           if (captionSession.fallbackSessionToken === requestSessionToken) captionSession.fallbackSessionToken = null;
         }
-        if (runtimeError) return;
-        if (!isCaptionSessionCurrent(requestSessionToken)) return;
-        if (token !== captionSession.lastReqToken) return;
-        if (text !== captionSession.lastSource) return;
+        if (runtimeError) {
+          emitCaptionStateTransition("fallback-response", "rejected", {
+            requestId,
+            reason: "runtime-error"
+          });
+          return;
+        }
+        if (!isCaptionSessionCurrent(requestSessionToken) ||
+            token !== captionSession.lastReqToken || text !== captionSession.lastSource) {
+          emitCaptionStateTransition("fallback-response", "discarded", {
+            requestId,
+            reason: !isCaptionSessionCurrent(requestSessionToken)
+              ? "session-invalidated" : token !== captionSession.lastReqToken
+                ? "request-owner-changed" : "source-changed"
+          });
+          return;
+        }
         const translated = resp && resp.ok && Array.isArray(resp.translations) &&
           resp.translations[0] && resp.translations[0].translation;
         if (translated) {
+          emitCaptionStateTransition("fallback-response", "accepted", { requestId });
           setTranslation(translated, text);
         }
       }

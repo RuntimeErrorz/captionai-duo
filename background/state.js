@@ -36,11 +36,14 @@ const debugStore = sessionStore || (chrome.storage && chrome.storage.local) || n
 const DEBUG_MAX = 1200;
 const DEBUG_MAX_CHARS = 4000000;
 const DEBUG_MAX_ENTRY_CHARS = 30000;
+const DEBUG_BUNDLE_SCHEMA_VERSION = 1;
 let debugLogs = [];
 let debugChars = 0;
 let debugPending = [];
-let debugReady = !debugStore;
+let debugKnownSecrets = [];
+let debugReady = false;
 let debugFlushTimer = null;
+let debugSequence = 0;
 const deepseekActiveByTab = new Map();
 const deepseekControllers = new Map();
 const aiResponseCache = new Map();
@@ -68,23 +71,100 @@ const aiTokenUsageReady = sessionStore
       }
     }).catch(() => {})
   : Promise.resolve();
-const debugHydrated = debugStore
-  ? debugStore.get({ ytdsDebugLogs: [] }).then((got) => {
-      debugLogs = Array.isArray(got && got.ytdsDebugLogs)
+function debugSecretsFromLocalStorage(stored) {
+  const secrets = new Set();
+  const add = (value) => {
+    const text = String(value || "").trim();
+    if (text.length >= 4) secrets.add(text);
+  };
+  const keys = stored && stored.aiApiKeys;
+  if (keys && typeof keys === "object") Object.values(keys).forEach(add);
+  add(stored && stored.aiApiKey);
+  add(stored && stored.deepseekApiKey);
+  const profileStore = stored && stored.aiConfigProfileStoreV1;
+  const profiles = profileStore && Array.isArray(profileStore.profiles)
+    ? profileStore.profiles : [];
+  for (const profile of profiles) add(profile && profile.apiKey);
+  return Array.from(secrets).sort((a, b) => b.length - a.length);
+}
+
+async function refreshDebugKnownSecrets() {
+  const localStore = chrome.storage && chrome.storage.local;
+  if (!localStore) { debugKnownSecrets = []; return; }
+  try {
+    const stored = await localStore.get({
+      aiApiKeys: {}, aiApiKey: "", deepseekApiKey: "", aiConfigProfileStoreV1: null
+    });
+    debugKnownSecrets = debugSecretsFromLocalStorage(stored);
+  } catch (_e) {
+    debugKnownSecrets = [];
+  }
+}
+
+function sanitizeDebugValue(value) {
+  return YTDS_SHARED.sanitizeDiagnosticValue(value, { secrets: debugKnownSecrets });
+}
+
+function sanitizeDebugEntry(entry) {
+  const value = entry && typeof entry === "object" ? entry : {};
+  return {
+    protocolVersion: DEBUG_BUNDLE_SCHEMA_VERSION,
+    sequence: Math.max(0, Math.floor(Number(value.sequence) || 0)),
+    ts: String(sanitizeDebugValue(value.ts || new Date().toISOString())).slice(0, 48),
+    scope: String(sanitizeDebugValue(value.scope || "background")).slice(0, 48),
+    event: String(sanitizeDebugValue(value.event || "event")).slice(0, 96),
+    data: sanitizeDebugValue(value.data == null ? null : value.data)
+  };
+}
+
+const debugHydrated = refreshDebugKnownSecrets().then(async () => {
+  let storedLogs = [];
+  if (debugStore) {
+    try {
+      const got = await debugStore.get({ ytdsDebugLogs: [] });
+      storedLogs = Array.isArray(got && got.ytdsDebugLogs)
         ? got.ytdsDebugLogs.slice(-DEBUG_MAX) : [];
-      debugLogs.push(...debugPending);
-      debugPending = [];
-      debugReady = true;
+    } catch (_e) { /* in-memory diagnostics still work */ }
+  }
+  debugSequence = 0;
+  debugLogs = [...storedLogs, ...debugPending].map((entry) =>
+    sanitizeDebugEntry({ ...entry, sequence: ++debugSequence }));
+  debugPending = [];
+  debugReady = true;
+  debugChars = debugLogs.reduce((n, entry) => n + JSON.stringify(entry).length, 0);
+  trimDebugLogs();
+});
+
+if (chrome.storage && chrome.storage.onChanged &&
+    typeof chrome.storage.onChanged.addListener === "function") {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    const credentialKeys = new Set([
+      "aiApiKeys", "aiApiKey", "deepseekApiKey", "aiConfigProfileStoreV1"
+    ]);
+    if (areaName !== "local" || !Object.keys(changes || {}).some(
+      (key) => credentialKeys.has(key)
+    )) return;
+    const changedCredentials = {};
+    for (const key of credentialKeys) {
+      if (changes[key]) changedCredentials[key] = changes[key].newValue;
+    }
+    debugKnownSecrets = Array.from(new Set([
+      ...debugKnownSecrets, ...debugSecretsFromLocalStorage(changedCredentials)
+    ])).sort((a, b) => b.length - a.length);
+    debugLogs = debugLogs.map(sanitizeDebugEntry);
+    if (debugStore) {
+      debugStore.set({ ytdsDebugLogs: debugLogs.slice(-DEBUG_MAX) }).catch(() => {});
+    }
+    refreshDebugKnownSecrets().then(() => {
+      debugLogs = debugLogs.map(sanitizeDebugEntry);
       debugChars = debugLogs.reduce((n, entry) => n + JSON.stringify(entry).length, 0);
       trimDebugLogs();
-    }).catch(() => {
-      debugReady = true;
-      debugLogs.push(...debugPending);
-      debugPending = [];
-      debugChars = debugLogs.reduce((n, entry) => n + JSON.stringify(entry).length, 0);
-      trimDebugLogs();
-    })
-  : Promise.resolve();
+      if (debugStore) {
+        debugStore.set({ ytdsDebugLogs: debugLogs.slice(-DEBUG_MAX) }).catch(() => {});
+      }
+    });
+  });
+}
 
 const aiResponseCacheReady = sessionStore
   ? sessionStore.get({ [AI_RESPONSE_CACHE_KEY]: [] }).then((got) => {
@@ -237,25 +317,27 @@ async function writeAiResponseCache(key, translations) {
 }
 
 function appendDebug(scope, event, data) {
-  let entry = {
+  let entry = sanitizeDebugEntry({
+    sequence: ++debugSequence,
     ts: new Date().toISOString(),
     scope: String(scope || "background"),
     event: String(event || "event"),
     data: data == null ? null : data
-  };
+  });
   let serialized = "";
   try { serialized = JSON.stringify(entry); } catch (_e) { serialized = ""; }
   if (!serialized || serialized.length > DEBUG_MAX_ENTRY_CHARS) {
-    entry = {
+    entry = sanitizeDebugEntry({
+      sequence: entry.sequence,
       ts: entry.ts,
       scope: entry.scope,
       event: entry.event,
       data: {
         truncated: true,
         originalChars: serialized.length,
-        keys: data && typeof data === "object" ? Object.keys(data).slice(0, 24) : []
-      }
-    };
+          keys: data && typeof data === "object" ? Object.keys(data).slice(0, 24) : []
+        }
+    });
     serialized = JSON.stringify(entry);
   }
   if (!debugReady) { debugPending.push(entry); return; }
@@ -279,7 +361,17 @@ function trimDebugLogs() {
 
 async function exportDebugLogs() {
   await debugHydrated;
-  return debugLogs.map((entry) => JSON.stringify(entry)).join("\n");
+  // Re-sanitize at the final boundary so legacy session entries and a key
+  // added after the event was recorded cannot leak through the clipboard.
+  await refreshDebugKnownSecrets();
+  const entries = debugLogs.map(sanitizeDebugEntry);
+  return JSON.stringify({
+    schemaVersion: DEBUG_BUNDLE_SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    extensionVersion: String(chrome.runtime.getManifest().version || ""),
+    entryCount: entries.length,
+    entries
+  }, null, 2);
 }
 
 async function clearDebugLogs() {
