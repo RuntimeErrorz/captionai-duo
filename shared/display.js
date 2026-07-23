@@ -5,6 +5,7 @@
   const internal = globalThis["__captionAiDuoSharedModulesV1__"];
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
   const { mergeTimedCueTexts, joinTranslatedParts } = internal;
+  const SEMANTIC_DISPLAY_CONTIGUITY_TOLERANCE_MS = 80;
 
   function alignedChunkDisplayPlan(
     chunksValue, maxSourceWidthValue, maxTranslationWidthValue,
@@ -523,7 +524,9 @@
   // AI semantic boundaries describe meaning, not how long a player will keep a
   // subtitle on screen. A trailing semantic unit can therefore receive only a
   // few frames when it occupies the end of an overlapping YouTube cue. Group
-  // such units with an adjacent unit from the SAME raw cue for presentation.
+  // short units across a continuous, non-hard presentation boundary. Checking
+  // only the two boundary atoms is intentional: the adjacent semantic unit may
+  // continue through later raw cues, which does not make this boundary unsafe.
   // Translation/cache ownership stays unchanged; this is only a display plan.
   function semanticDisplayClusters(unitsValue, groupsValue, minVisibleMsValue) {
     const groups = Array.isArray(groupsValue) ? groupsValue : [];
@@ -560,8 +563,17 @@
     const canJoin = (left, right) => {
       const leftLast = left.members[left.members.length - 1];
       const rightFirst = right.members[0];
-      return leftLast + 1 === rightFirst && left.cueIndex != null &&
-        left.cueIndex === right.cueIndex;
+      if (leftLast + 1 !== rightFirst) return false;
+      const previous = groups[leftLast];
+      const next = groups[rightFirst];
+      if (!previous || !next || previous.hardAfter === true) return false;
+      const previousEnd = Number(previous.end);
+      const nextStart = Number(next.start);
+      if (![previousEnd, nextStart].every(Number.isFinite)) return false;
+      // Atom construction normally makes adjacent boundaries exact. Allow a
+      // small rounding tolerance, but never bridge a real subtitle pause.
+      const gap = nextStart - previousEnd;
+      return gap >= 0 && gap <= SEMANTIC_DISPLAY_CONTIGUITY_TOLERANCE_MS;
     };
 
     const clusters = [];

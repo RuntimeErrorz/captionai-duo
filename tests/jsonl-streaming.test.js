@@ -63,6 +63,18 @@ test("JSONL state derives the deferred suffix from its coverage cursor", () => {
   assert.equal(result.streamPartial, false);
 });
 
+test("JSONL translations remove every Chinese full stop before caching", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [{ ids: ["0", "1"], translation: "第一句。第二句。。真的吗？" }]
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.translations[0].translation, "第一句第二句真的吗？");
+  assert.equal(accepted.translations[0].alignedChunks[0].translation, "第一句第二句真的吗？");
+});
+
 test("JSONL state rejects reordered ids, hard-boundary crossings and records after done", () => {
   const reordered = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(reordered, {

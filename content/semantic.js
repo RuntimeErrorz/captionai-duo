@@ -252,11 +252,11 @@ function commitDeepseekResponsePrefix(
     const unitId = String(item.unitId || `semantic-${item.id}-${item.id}`);
     const unit = byUnit.get(unitId) || { unitId, members: [], translation: "", alignedChunks: null };
     unit.members.push(Number(item.id));
-    if (!unit.translation) unit.translation = String(item.translation || "");
+    if (!unit.translation) unit.translation = YTDS_SHARED.normalizeTranslatedText(item.translation);
     if (!unit.alignedChunks && Array.isArray(item.alignedChunks)) {
       unit.alignedChunks = item.alignedChunks.map((chunk) => ({
         ids: Array.isArray(chunk && chunk.ids) ? chunk.ids.map(String) : [],
-        translation: String(chunk && chunk.translation || "").trim()
+        translation: YTDS_SHARED.normalizeTranslatedText(chunk && chunk.translation)
       })).filter((chunk) => chunk.ids.length && chunk.translation);
     }
     byUnit.set(unitId, unit);

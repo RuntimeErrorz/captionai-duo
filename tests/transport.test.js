@@ -310,6 +310,28 @@ test("a maximum-window mega-unit commits through its model-aligned chunks", () =
   assert.equal(harness.debug.some((entry) => entry.event === "batch-retry"), false);
 });
 
+test("cached translations are normalized again at the content cache boundary", () => {
+  const cached = [
+    {
+      id: "0",
+      unitId: "semantic-0-1",
+      translation: "缓存。译文。",
+      alignedChunks: [{ ids: ["0", "1"], translation: "缓存。译文。" }]
+    },
+    { id: "1", unitId: "semantic-0-1", translation: "缓存。译文。" }
+  ];
+  const harness = loadSemanticCommitHarness(cached, 0);
+  const commit = vm.runInContext("commitDeepseekResponsePrefix", harness.context);
+  const nextCursor = commit(0, 0, 1, 0, 500, cached, 0);
+
+  assert.equal(nextCursor, 2);
+  assert.equal(harness.context.captionSession.transCache.get("video g0"), "缓存译文");
+  assert.equal(
+    harness.context.captionSession.deepseekAlignedChunksCache.get("semantic-0-1")[0].translation,
+    "缓存译文"
+  );
+});
+
 test("an unrecoverable no-progress response keeps a bounded budget and bypasses cache", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 2);
   const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);

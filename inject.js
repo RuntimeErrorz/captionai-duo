@@ -43,9 +43,17 @@
   // pending config from content.js (set once popup config arrives)
   let cfg = null;
   let nocuesTimer = null;    // fires if no timedtext URL shows up
-  let cueRetryTimer = null;
-  let cueRetryAttempt = 0;
   let producedForUrl = "";   // dedupe: last sourceUrl we produced cues for
+  let cueFetchInFlightUrl = "";
+  let quarantinedSourceUrl = "";
+  let playerResponseTimer = null;
+  let awaitingPlayerResponseUrl = "";
+  let capturedPlayerCues = null;
+  let capturedPlayerCuesUrl = "";
+  let lastPublishedUrl = "";
+  let lastPublishedNonce = 0;
+  let freshSourceRequestedForUrl = "";
+  let pendingFreshSourceRequest = false;
   // Correlation token echoed back to content.js so it can drop any
   // 'cues'/'nocues' that does not correspond to its latest sendConfig().
   let reqNonce = 0;
@@ -225,21 +233,121 @@
     }
   }
 
-  function clearCueRetry() {
-    if (cueRetryTimer) { clearTimeout(cueRetryTimer); cueRetryTimer = null; }
+  function clearPlayerResponseTimer() {
+    if (playerResponseTimer) { clearTimeout(playerResponseTimer); playerResponseTimer = null; }
   }
 
-  function scheduleCueRetry() {
-    clearCueRetry();
-    if (!cfg || !sourceUrl || sourceVid !== currentVideoId) return;
-    const delay = Math.min(15000, 1000 * Math.pow(1.7, Math.min(cueRetryAttempt++, 6)));
-    const vid = currentVideoId;
-    cueRetryTimer = setTimeout(() => {
-      cueRetryTimer = null;
-      if (vid !== currentVideoId || !cfg || !sourceUrl || sourceVid !== currentVideoId) return;
-      producedForUrl = "";
+  function sourceStillCurrent(url, revision) {
+    return url === sourceUrl && sourceVid === currentVideoId &&
+      revision === sourceRevision;
+  }
+
+  function publishCues(cues, url, revision, origin) {
+    if (!Array.isArray(cues) || !cues.length || !sourceStillCurrent(url, revision)) return;
+    capturedPlayerCues = cues;
+    capturedPlayerCuesUrl = url;
+    producedForUrl = url;
+    quarantinedSourceUrl = "";
+    if (!cfg) return;
+    const publishNonce = reqNonce;
+    if (lastPublishedUrl === url && lastPublishedNonce === publishNonce) return;
+    lastPublishedUrl = url;
+    lastPublishedNonce = publishNonce;
+    postDiagnostic("cue-fetch-success", {
+      cueCount: cues.length,
+      fetchNonce: publishNonce,
+      sourceRevision: revision,
+      trackKind: trackKindOf(url),
+      sourceLang: trackLanguageOf(url),
+      responseOrigin: String(origin || "refetch")
+    });
+    post("cues", {
+      cues,
+      trackKind: trackKindOf(url),
+      sourceLang: trackLanguageOf(url),
+      nonce: publishNonce
+    });
+  }
+
+  function rejectCurrentSource(url, revision, reason, detail, requestFreshSource) {
+    if (!sourceStillCurrent(url, revision)) return;
+    quarantinedSourceUrl = url;
+    producedForUrl = "";
+    capturedPlayerCues = null;
+    capturedPlayerCuesUrl = "";
+    lastPublishedUrl = "";
+    lastPublishedNonce = 0;
+    const shouldRequestFreshSource = !!requestFreshSource &&
+      freshSourceRequestedForUrl !== url;
+    if (shouldRequestFreshSource) {
+      freshSourceRequestedForUrl = url;
+      pendingFreshSourceRequest = true;
+    }
+    if (!cfg) return;
+    const notifyFreshSource = pendingFreshSourceRequest &&
+      freshSourceRequestedForUrl === url;
+    if (notifyFreshSource) pendingFreshSourceRequest = false;
+    post("nocues", {
+      reason: String(reason || "fetch-error"),
+      detail: String(detail || "").slice(0, 240),
+      requestFreshSource: notifyFreshSource
+    });
+  }
+
+  function consumePlayerTimedtext(url, text, revision) {
+    if (!sourceStillCurrent(url, revision)) return;
+    awaitingPlayerResponseUrl = "";
+    clearPlayerResponseTimer();
+    const body = typeof text === "string" ? text : "";
+    if (!body) {
+      postDiagnostic("cue-fetch-error", {
+        fetchNonce: reqNonce,
+        sourceRevision: revision,
+        detail: "player timedtext empty body",
+        responseOrigin: "player"
+      });
+      rejectCurrentSource(
+        url, revision, "fetch-error", "player timedtext empty body", true
+      );
+      return;
+    }
+    try {
+      const cues = parseJson3(JSON.parse(body));
+      if (cues.length) {
+        publishCues(cues, url, revision, "player");
+        return;
+      }
+      // A valid JSON caption response with no text is authoritative. Repeating
+      // it with the same proof token cannot create cues.
+      postDiagnostic("cue-fetch-empty", {
+        fetchNonce: reqNonce,
+        sourceRevision: revision,
+        responseOrigin: "player"
+      });
+      rejectCurrentSource(url, revision, "empty-track", "player timedtext contained no cues");
+    } catch (_e) {
+      // The player may request XML/VTT. Its non-empty response proves the URL
+      // is live, so a single json3 conversion fetch is safe and necessary.
       produceCues(true);
-    }, delay);
+    }
+  }
+
+  function playerResponseUnavailable(url, revision) {
+    if (!sourceStillCurrent(url, revision)) return;
+    awaitingPlayerResponseUrl = "";
+    clearPlayerResponseTimer();
+    produceCues(true);
+  }
+
+  function awaitPlayerResponse(url, revision) {
+    awaitingPlayerResponseUrl = url;
+    clearPlayerResponseTimer();
+    playerResponseTimer = setTimeout(() => {
+      playerResponseTimer = null;
+      if (awaitingPlayerResponseUrl !== url || !sourceStillCurrent(url, revision)) return;
+      awaitingPlayerResponseUrl = "";
+      produceCues(true);
+    }, 750);
   }
 
   // Produce original cues from the captured source URL.
@@ -250,7 +358,11 @@
     // post it stamped with the new videoId.
     if (sourceVid !== currentVideoId) return;
     if (!force && producedForUrl === sourceUrl) return;
+    if (quarantinedSourceUrl === sourceUrl) return;
+    if (awaitingPlayerResponseUrl === sourceUrl) return;
+    if (cueFetchInFlightUrl === sourceUrl) return;
     producedForUrl = sourceUrl;
+    cueFetchInFlightUrl = sourceUrl;
     clearNocuesTimer();
 
     const vid = currentVideoId;
@@ -281,48 +393,41 @@
           mySourceRevision !== sourceRevision || mySourceKey !== sourceKey) return;
 
       if (!cues.length) {
-        producedForUrl = "";        // allow a retry if the track later yields cues
         postDiagnostic("cue-fetch-empty", { fetchNonce: myNonce, sourceRevision: mySourceRevision });
-        post("nocues", { nonce: myNonce, reason: "empty-track" });
-        scheduleCueRetry();
+        rejectCurrentSource(
+          mySourceUrl, mySourceRevision, "empty-track", "timedtext contained no cues"
+        );
         return;
       }
 
-      cueRetryAttempt = 0;
-      clearCueRetry();
-      postDiagnostic("cue-fetch-success", {
-        cueCount: cues.length,
-        fetchNonce: myNonce,
-        sourceRevision: mySourceRevision,
-        trackKind: kind,
-        sourceLang
-      });
-      post("cues", { cues, trackKind: kind, sourceLang, nonce: myNonce });
+      publishCues(cues, mySourceUrl, mySourceRevision, "refetch");
     } catch (err) {
       // could not fetch/parse — let content.js fall back to scraping, but only
       // if we are still on the same video the fetch was started for.
       if (vid !== currentVideoId || sourceVid !== currentVideoId ||
           mySourceRevision !== sourceRevision || mySourceKey !== sourceKey) return;
-      producedForUrl = "";          // allow a retry on next capture
+      producedForUrl = "";
       const detail = String(err && err.message || err || "cue fetch failed").slice(0, 240);
       postDiagnostic("cue-fetch-error", {
         fetchNonce: myNonce,
         sourceRevision: mySourceRevision,
         detail
       });
-      post("nocues", { nonce: myNonce, reason: "fetch-error", detail });
-      scheduleCueRetry();
+      rejectCurrentSource(mySourceUrl, mySourceRevision, "fetch-error", detail);
+    } finally {
+      if (cueFetchInFlightUrl === mySourceUrl) cueFetchInFlightUrl = "";
     }
   }
 
   // Called whenever we capture a fresh source URL.
-  function onSourceCaptured() {
+  function onSourceCaptured(expectPlayerResponse) {
     if (!cfg) return;               // wait for config before fetching
-    produceCues(false);
+    if (expectPlayerResponse) awaitPlayerResponse(sourceUrl, sourceRevision);
+    else produceCues(false);
   }
 
   // Record a timedtext URL seen on the wire.
-  function noteTimedtext(url) {
+  function noteTimedtext(url, expectPlayerResponse) {
     try {
       if (!isTimedtext(url)) return;
       if (isInternalTimedtext(url)) return;
@@ -334,6 +439,16 @@
         const exactChanged = url !== sourceUrl;
         sourceUrl = url;
         sourceVid = vidOfUrl(url);
+        if (exactChanged) {
+          producedForUrl = "";
+          quarantinedSourceUrl = "";
+          capturedPlayerCues = null;
+          capturedPlayerCuesUrl = "";
+          lastPublishedUrl = "";
+          lastPublishedNonce = 0;
+          freshSourceRequestedForUrl = "";
+          pendingFreshSourceRequest = false;
+        }
         if (key !== sourceKey) {
           sourceKey = key;
           sourceRevision++;
@@ -343,7 +458,9 @@
             trackKind: trackKindOf(url),
             sourceLang: trackLanguageOf(url)
           });
-          onSourceCaptured();
+          onSourceCaptured(!!expectPlayerResponse);
+        } else if (expectPlayerResponse && cfg) {
+          awaitPlayerResponse(sourceUrl, sourceRevision);
         } else if (exactChanged && cfg && producedForUrl === "") {
           // Same track with a freshly rotated pot/signature after a failure.
           // Retry immediately instead of waiting for a video navigation.
@@ -365,9 +482,17 @@
         sourceKey = "";
         sourceRevision++;
         producedForUrl = "";
+        cueFetchInFlightUrl = "";
+        quarantinedSourceUrl = "";
+        awaitingPlayerResponseUrl = "";
+        capturedPlayerCues = null;
+        capturedPlayerCuesUrl = "";
+        lastPublishedUrl = "";
+        lastPublishedNonce = 0;
+        freshSourceRequestedForUrl = "";
+        pendingFreshSourceRequest = false;
         clearNocuesTimer();
-        clearCueRetry();
-        cueRetryAttempt = 0;
+        clearPlayerResponseTimer();
         return true;
       }
     } catch (_e) { /* never throw */ }
@@ -416,8 +541,19 @@
           hasCapturedSource: !!sourceUrl,
           sourceVideoMatches: !!sourceUrl && sourceVid === currentVideoId
         });
-        producedForUrl = "";            // force re-produce under new config
-        if (sourceUrl && sourceVid === currentVideoId) {
+        if (capturedPlayerCues && capturedPlayerCuesUrl === sourceUrl) {
+          publishCues(capturedPlayerCues, sourceUrl, sourceRevision, "player-cache");
+        } else if (awaitingPlayerResponseUrl === sourceUrl) {
+          // The player's response is still authoritative; do not race it with
+          // an extension-side conversion request.
+        } else if (quarantinedSourceUrl === sourceUrl) {
+          if (pendingFreshSourceRequest) {
+            rejectCurrentSource(
+              sourceUrl, sourceRevision, "fetch-error",
+              "player timedtext source unavailable", false
+            );
+          }
+        } else if (sourceUrl && sourceVid === currentVideoId) {
           produceCues(true);            // already captured for this video
         } else {
           armNocuesTimer();             // wait for player's timedtext fetch
@@ -438,7 +574,25 @@
     };
 
     XHR.send = function () {
-      try { noteTimedtext(this.__ytdsUrl); } catch (_e) { /* ignore */ }
+      try {
+        const url = this.__ytdsUrl;
+        if (isTimedtext(url) && !hasTlang(url) && !isInternalTimedtext(url)) {
+          noteTimedtext(url, true);
+          const revision = sourceRevision;
+          if (typeof this.addEventListener === "function") {
+            this.addEventListener("loadend", () => {
+              try {
+                let text = "";
+                if (!this.responseType || this.responseType === "text") text = this.responseText || "";
+                else if (this.responseType === "json") text = JSON.stringify(this.response || null);
+                consumePlayerTimedtext(String(url), text, revision);
+              } catch (_e) { playerResponseUnavailable(String(url), revision); }
+            }, { once: true });
+          } else {
+            playerResponseUnavailable(String(url), revision);
+          }
+        }
+      } catch (_e) { /* ignore */ }
       return origSend.apply(this, arguments);
     };
   } catch (_e) { /* never throw */ }
@@ -448,13 +602,32 @@
     const origFetch = window.fetch;
     if (typeof origFetch === "function") {
       window.fetch = function (input, init) {
+        let url = "";
+        let watchesPlayerResponse = false;
+        let revision = 0;
         try {
-          let url = "";
           if (typeof input === "string") url = input;
           else if (input && typeof input.url === "string") url = input.url;
-          noteTimedtext(url);
+          watchesPlayerResponse = isTimedtext(url) && !hasTlang(url) && !isInternalTimedtext(url);
+          noteTimedtext(url, watchesPlayerResponse);
+          revision = sourceRevision;
         } catch (_e) { /* ignore */ }
-        return origFetch.apply(this, arguments);
+        const result = origFetch.apply(this, arguments);
+        if (watchesPlayerResponse) {
+          Promise.resolve(result).then((response) => {
+            try {
+              if (!response || typeof response.clone !== "function") {
+                playerResponseUnavailable(String(url), revision);
+                return;
+              }
+              response.clone().text().then(
+                (text) => consumePlayerTimedtext(String(url), text, revision),
+                () => playerResponseUnavailable(String(url), revision)
+              );
+            } catch (_e) { playerResponseUnavailable(String(url), revision); }
+          }, () => playerResponseUnavailable(String(url), revision));
+        }
+        return result;
       };
     }
   } catch (_e) { /* never throw */ }

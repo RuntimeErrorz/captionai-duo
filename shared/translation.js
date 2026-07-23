@@ -5,6 +5,10 @@
   const internal = globalThis["__captionAiDuoSharedModulesV1__"];
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
 
+  function normalizeTranslatedText(value) {
+    return String(value || "").replace(/。/g, "").trim();
+  }
+
   function jsonObjectFromText(value) {
     const text = typeof value === "string" ? value.trim() : "";
     if (!text) return null;
@@ -27,7 +31,7 @@
 
   function translationFromJsonText(value) {
     const parsed = jsonObjectFromText(value);
-    const translation = String(parsed && parsed.translation || "").trim();
+    const translation = normalizeTranslatedText(parsed && parsed.translation);
     if (translation) return translation;
     return "";
   }
@@ -48,7 +52,7 @@
     for (const segment of segments) {
       const ids = segment && Array.isArray(segment.ids)
         ? segment.ids.map(String) : [];
-      const translation = String(segment && segment.translation || "").trim();
+      const translation = normalizeTranslatedText(segment && segment.translation);
       if (!ids.length || !translation || cursor + ids.length > expected.length) {
         return reject(`invalid segment at cue offset ${cursor}`);
       }
@@ -167,7 +171,7 @@
     const ids = [];
     for (const chunk of chunks) {
       const chunkIds = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
-      const translation = String(chunk && chunk.translation || "").trim();
+      const translation = normalizeTranslatedText(chunk && chunk.translation);
       if (!chunkIds.length || !translation) {
         return reject(`invalid JSONL chunk at offset ${state.cursor + ids.length}`);
       }
@@ -225,7 +229,7 @@
 
   function joinTranslatedParts(values, targetLang) {
     const parts = (Array.isArray(values) ? values : [])
-      .map((value) => String(value || "").trim())
+      .map(normalizeTranslatedText)
       .filter(Boolean);
     if (!parts.length) return "";
     const compact = /^(?:zh|ja|ko)(?:-|$)/i.test(String(targetLang || ""));
@@ -264,7 +268,7 @@
       const usable = Array.isArray(chunks) && chunks.length > 1 &&
         chunkIds.length === memberIds.length &&
         chunkIds.every((id, ordinal) => id === memberIds[ordinal]) &&
-        chunks.every((chunk) => String(chunk && chunk.translation || "").trim());
+        chunks.every((chunk) => normalizeTranslatedText(chunk && chunk.translation));
       if (!usable) {
         recovered.push(...members);
         index = end;
@@ -273,7 +277,7 @@
       let memberOffset = 0;
       for (const chunk of chunks) {
         const ids = chunk.ids.map(String);
-        const translation = String(chunk.translation).trim();
+        const translation = normalizeTranslatedText(chunk.translation);
         const chunkUnitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
         for (let ordinal = 0; ordinal < ids.length; ordinal++) {
           const item = { ...members[memberOffset + ordinal], translation, unitId: chunkUnitId };
@@ -404,7 +408,7 @@
       let chunkCursor = 0;
       for (const chunk of chunks) {
         const chunkIds = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
-        const translation = String(chunk && chunk.translation || "").trim();
+        const translation = normalizeTranslatedText(chunk && chunk.translation);
         if (!chunkIds.length || !translation || chunkCursor + chunkIds.length > ids.length) {
           return reject(`invalid aligned chunk at segment offset ${chunkCursor}`);
         }
@@ -445,5 +449,5 @@
     return translations;
   }
 
-  Object.assign(internal, { jsonObjectFromText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+  Object.assign(internal, { jsonObjectFromText, normalizeTranslatedText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();

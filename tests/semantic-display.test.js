@@ -222,18 +222,57 @@ test("an imperceptible tail unit is co-displayed with the preceding unit from th
   assert.equal(clusters[0].smoothed, true);
 });
 
-test("display smoothing never merges semantic units across raw cues", () => {
+test("a short turn is co-displayed across a contiguous raw-cue boundary", () => {
   const clusters = shared.semanticDisplayClusters([
-    { unitId: "answer", members: [0] },
-    { unitId: "next-speaker", members: [1] }
+    { unitId: "repeated-answer", members: [0, 1, 2] },
+    { unitId: "short-reply", members: [3, 4] }
   ], [
-    { startIdx: 7, start: 1000, end: 1200 },
-    { startIdx: 8, start: 1200, end: 1450 }
+    { startIdx: 7, start: 1000, end: 1180, hardAfter: false },
+    { startIdx: 7, start: 1180, end: 1370, hardAfter: false },
+    { startIdx: 7, start: 1370, end: 1560, hardAfter: false },
+    { startIdx: 8, start: 1560, end: 1750, hardAfter: false },
+    { startIdx: 8, start: 1750, end: 1979, hardAfter: false }
   ], 650);
 
-  assert.equal(clusters.length, 2);
-  assert.deepEqual(Array.from(clusters, (cluster) => Array.from(cluster.unitIds)),
-    [["answer"], ["next-speaker"]]);
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(Array.from(clusters[0].unitIds), ["repeated-answer", "short-reply"]);
+  assert.equal(clusters[0].durationMs, 979);
+});
+
+test("a short reply can join a successor semantic unit that continues across later cues", () => {
+  const clusters = shared.semanticDisplayClusters([
+    { unitId: "short-reply", members: [0, 1] },
+    { unitId: "continued-sentence", members: [2, 3, 4] }
+  ], [
+    { startIdx: 8, start: 2000, end: 2190, hardAfter: false },
+    { startIdx: 8, start: 2190, end: 2419, hardAfter: false },
+    { startIdx: 8, start: 2419, end: 2800, hardAfter: false },
+    { startIdx: 9, start: 2800, end: 3400, hardAfter: false },
+    { startIdx: 10, start: 3400, end: 4100, hardAfter: false }
+  ], 650);
+
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(Array.from(clusters[0].unitIds), ["short-reply", "continued-sentence"]);
+});
+
+test("display smoothing does not cross a hard boundary or a real cue gap", () => {
+  const units = [
+    { unitId: "answer", members: [0] },
+    { unitId: "next", members: [1] }
+  ];
+  const hardBoundary = shared.semanticDisplayClusters(units, [
+    { startIdx: 7, start: 1000, end: 1200, hardAfter: true },
+    { startIdx: 8, start: 1200, end: 1450, hardAfter: false }
+  ], 650);
+  const cueGap = shared.semanticDisplayClusters(units, [
+    { startIdx: 7, start: 1000, end: 1200, hardAfter: false },
+    { startIdx: 8, start: 1600, end: 1850, hardAfter: false }
+  ], 650);
+
+  assert.deepEqual(Array.from(hardBoundary, (cluster) => Array.from(cluster.unitIds)),
+    [["answer"], ["next"]]);
+  assert.deepEqual(Array.from(cueGap, (cluster) => Array.from(cluster.unitIds)),
+    [["answer"], ["next"]]);
 });
 
 test("a short leading unit is co-displayed forward within its raw cue", () => {

@@ -57,7 +57,7 @@ test("semantic response enforces duration and source-size safety ceilings", () =
   assert.match(sizeDiagnostics.reason, /oversized segment/);
 });
 
-test("semantic parser accepts natural model translations without content heuristics", () => {
+test("semantic parser normalizes natural model translations without content heuristics", () => {
   const current = [
     { id: "295", text: "This is pretty much a", startMs: 1000, endMs: 1800, hardAfter: false },
     { id: "296", text: "10 out of 10.", startMs: 1800, endMs: 2400, hardAfter: false }
@@ -70,5 +70,5 @@ test("semantic parser accepts natural model translations without content heurist
     current
   );
   assert.equal(output.length, 2);
-  assert.equal(output[0].translation, "这差不多是10分满分。");
+  assert.equal(output[0].translation, "这差不多是10分满分");
 });

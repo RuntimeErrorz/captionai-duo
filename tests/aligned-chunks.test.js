@@ -29,7 +29,7 @@ test("aligned response validates nested cue coverage and preserves chunk metadat
   assert.equal(output.length, 4);
   assert.equal(output[0].unitId, "semantic-221-224");
   assert.equal(output[0].translation,
-    "国王允许这种情况发生，但不久后他去世了，他的儿子讨厌议会，不喜欢议会限制他的权力。");
+    "国王允许这种情况发生，但不久后他去世了，他的儿子讨厌议会，不喜欢议会限制他的权力");
   assert.equal(output[0].alignedChunks.length, 2);
   assert.deepEqual(Array.from(output[0].alignedChunks[1].ids), ["223", "224"]);
 });

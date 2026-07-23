@@ -43,7 +43,27 @@ function applyStateToDom(sendConfiguration) {
 }
 
 function onNav() {
-  captionSession.currentVideoId = videoIdFromLocation();
+  const nextVideoId = videoIdFromLocation();
+  // A cold YouTube load emits yt-navigate-finish after the content runtime has
+  // already booted for that exact video. Treat it as player readiness, not a
+  // cross-video navigation: tearing down here discards freshly received cues
+  // and asks the MAIN bridge to consume the same proof-bearing URL twice.
+  if (nextVideoId && nextVideoId === captionSession.currentVideoId) {
+    emitCaptionStateTransition("content-lifecycle", "same-video-navigation", {
+      videoId: nextVideoId,
+      hasCues: !!(captionSession.cueList && captionSession.cueList.length)
+    });
+    if (settings.enabled) {
+      ensureOverlay();
+      if (!captionSession.cueList) {
+        sendConfig("same-video-navigation", true);
+        scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
+      }
+      syncCaptions();
+    }
+    return;
+  }
+  captionSession.currentVideoId = nextVideoId;
   captionSession.weEnabledCC = false;        // fresh video — re-evaluate caption state
   teardownAll("navigation");
   emitCaptionStateTransition("content-lifecycle", "navigation", {

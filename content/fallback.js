@@ -134,10 +134,12 @@ function onNoCues(data) {
   emitDebug("cues-unavailable", {
     reason: String(data.reason || "unknown"),
     detail: String(data.detail || "").slice(0, 240),
+    requestFreshSource: !!data.requestFreshSource,
     captionButton: captionButtonDebugState()
   });
   if (settings.enabled) {
     startFallback();
+    if (data.requestFreshSource) forceCaptionReload();
     scheduleCueRecovery();
   }
 }
