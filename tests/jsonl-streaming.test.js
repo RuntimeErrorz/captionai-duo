@@ -2,9 +2,23 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const { loadShared } = require("./helpers");
 
 const shared = loadShared();
+
+function loadJsonlStreamObserver() {
+  const context = { YTDS_SHARED: shared };
+  vm.createContext(context);
+  vm.runInContext(
+    fs.readFileSync(path.resolve(__dirname, "../background/translation.js"), "utf8"),
+    context,
+    { filename: "background/translation.js" }
+  );
+  return vm.runInContext("createAiJsonlStreamObserver", context);
+}
 
 function sampleItems() {
   return [
@@ -134,6 +148,37 @@ test("a malformed tail preserves every previously valid JSONL unit", () => {
   assert.equal(partial.length, 2);
   assert.deepEqual(partial.deferredIds, ["2", "3"]);
   assert.equal(partial.streamPartial, true);
+  assert.match(partial.streamError, /unexpected JSONL id/);
+});
+
+test("a repeated-id correction cannot publish the incomplete unit it revises", () => {
+  const items = Array.from({ length: 6 }, (_value, id) => ({
+    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  });
+
+  observer.onTextDelta(
+    '{"type":"unit","chunks":[{"ids":["0"],"translation":"confirmed prefix"}]}\n',
+    false
+  );
+  observer.onTextDelta(
+    '{"type":"unit","chunks":[{"ids":["1","2","3","4","5"],"translation":"incomplete clause"}]}\n',
+    false
+  );
+  const rejected = observer.onTextDelta(
+    '{"type":"unit","chunks":[{"ids":["3","4","5"],"translation":"missing correction"}]}\n',
+    false
+  );
+
+  assert.equal(rejected.stop, true);
+  assert.deepEqual(progress, [["0"]]);
+  const partial = observer.result(true);
+  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["0"]);
+  assert.deepEqual(Array.from(partial.deferredIds), ["1", "2", "3", "4", "5"]);
   assert.match(partial.streamError, /unexpected JSONL id/);
 });
 

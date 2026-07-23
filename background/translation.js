@@ -4,6 +4,7 @@
 function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
   let state = YTDS_SHARED.createAiJsonlTranslationState(items, targetLang);
   let lineBuffer = "";
+  let pendingProgress = [];
   const status = (stop, reason) => ({
     stop: !!stop,
     reason: String(reason || ""),
@@ -13,6 +14,7 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
   const reset = () => {
     state = YTDS_SHARED.createAiJsonlTranslationState(items, targetLang);
     lineBuffer = "";
+    pendingProgress = [];
   };
   const fail = (reason, line) => {
     if (!state.error) state.error = String(reason || "invalid JSONL stream");
@@ -22,6 +24,11 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
       line: String(line || "").slice(0, 1000),
       completedItems: state.cursor
     });
+  };
+  const publishPending = () => {
+    if (!pendingProgress.length || typeof onProgress !== "function") return;
+    try { onProgress(pendingProgress); } catch (_e) { /* stale content frame */ }
+    pendingProgress = [];
   };
   return {
     onAttemptStart() {
@@ -43,22 +50,28 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
         }
         const accepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, decoded.record);
         if (!accepted.ok) {
+          const rewound = YTDS_SHARED.rewindAiJsonlOverlappingUnit(state, decoded.record);
+          if (rewound) pendingProgress = [];
           fail(accepted.error, line);
           return status(true, "invalid-jsonl");
         }
         if (accepted.type === "done") {
+          publishPending();
           lineBuffer = "";
           break;
         }
         if (accepted.type === "unit") {
+          // Keep the newest unit provisional until another ordered record
+          // confirms that the model will not revise it with overlapping ids.
+          // A malformed correction can then rewind the whole suspect unit
+          // before either streaming progress or the final response commits it.
+          publishPending();
+          pendingProgress = accepted.translations;
           if (trace && trace.debug) appendDebug("background", "semantic-jsonl-unit", {
             requestId: trace.requestId || "",
             unitId: accepted.unitId,
             ids: accepted.ids
           });
-          if (typeof onProgress === "function") {
-            try { onProgress(accepted.translations); } catch (_e) { /* stale content frame */ }
-          }
         }
       }
       // Compatibility and circuit breaker: old models may begin the removed

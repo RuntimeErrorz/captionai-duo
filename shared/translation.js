@@ -211,6 +211,35 @@
     return { ok: true, type: "unit", unitId, ids, translations };
   }
 
+  function rewindAiJsonlOverlappingUnit(stateValue, recordValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const record = recordValue && typeof recordValue === "object" ? recordValue : null;
+    if (!state || !record || record.type !== "unit" || !Array.isArray(state.translations) ||
+        !Array.isArray(state.expected) || !state.translations.length || state.cursor <= 0) {
+      return null;
+    }
+    const firstChunk = Array.isArray(record.chunks) ? record.chunks[0] : null;
+    const firstId = firstChunk && Array.isArray(firstChunk.ids)
+      ? String(firstChunk.ids[0] == null ? "" : firstChunk.ids[0]) : "";
+    const overlapStart = state.expected.indexOf(firstId);
+    if (overlapStart < 0 || overlapStart >= state.cursor) return null;
+
+    const last = state.translations[state.translations.length - 1];
+    const unitId = String(last && last.unitId || "");
+    if (!unitId) return null;
+    let unitStart = state.translations.length - 1;
+    while (unitStart > 0 &&
+        String(state.translations[unitStart - 1] && state.translations[unitStart - 1].unitId || "") === unitId) {
+      unitStart--;
+    }
+    if (overlapStart < unitStart) return null;
+
+    const previousCursor = state.cursor;
+    state.translations.splice(unitStart);
+    state.cursor = unitStart;
+    return { unitId, previousCursor, nextCursor: unitStart };
+  }
+
   function aiJsonlTranslationResult(stateValue, allowPartial) {
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
     if (!state || !Array.isArray(state.translations) || !Array.isArray(state.expected)) return null;
@@ -449,5 +478,5 @@
     return translations;
   }
 
-  Object.assign(internal, { jsonObjectFromText, normalizeTranslatedText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+  Object.assign(internal, { jsonObjectFromText, normalizeTranslatedText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();
