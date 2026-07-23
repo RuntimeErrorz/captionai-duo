@@ -29,17 +29,16 @@ Chrome, Edge, or another Chromium browser version 111 or newer is required.
 | --- | --- | --- |
 | Enabled | On | Controls the overlay and translation work. Turning it off cancels this video's requests and restores YouTube CC if the extension enabled it. |
 | Target language | Simplified Chinese | The requested AI output language. Changing it clears this video's old translation and retranslates in the new language. |
-| Connection profile | `DeepSeek` | One profile contains its name, Base URL, model, reasoning effort, API key, and extra request parameters. Profiles can be created, renamed, deleted, and switched from one selector. The complete profiles stay local, and switching retranslates the current video with the selected configuration. |
+| Configuration profile | `DeepSeek` | One profile contains its name, target language, Base URL, model, API key, request parameters, context counts, and prefetch depth. Profiles can be created, renamed inline, deleted, and switched from the first row. Complete profiles stay local, and switching retranslates the current video with the selected configuration. |
 | API Base URL | `https://api.deepseek.com` | The base of the request URL. `/chat/completions` is appended unless already present. Remote URLs must use HTTPS; `localhost` and `127.0.0.1` may use HTTP. All supported API origins are available without a separate authorization step. |
 | Model | `deepseek-v4-flash` | Sent unchanged as the Chat Completions `model`; it must exactly match a model offered by the endpoint. |
-| Reasoning effort | Off / `High` / `Max` | Off uses ordinary generation; DeepSeek receives its explicit thinking-off field and compatible endpoints receive normal `temperature`. `High` and `Max` send `reasoning_effort`, and also enable thinking for DeepSeek. Leave this off if the endpoint does not accept those fields. Reasoning is generally slower and more expensive, and extends the request timeout from 30 to 90 seconds. |
 | API key | Empty | Stored separately for the normalized Base URL in `chrome.storage.local`, never synced, and sent as `Authorization: Bearer …`. It can be empty for an unauthenticated local endpoint; DeepSeek requires it. |
-| Extra request parameters | `{}` | A JSON object stored locally per Base URL and model for provider-specific options such as `enable_thinking`. Ordinary generation options may be overridden, but core protocol fields such as `model`, `messages`, `stream`, token limits, and structured-output controls are protected. |
+| Extra request parameters | `{}` | The only source of provider-specific reasoning options such as `thinking`, `enable_thinking`, or `reasoning_effort`. The JSON object is stored locally per Base URL and model. Ordinary generation options may be overridden, but core protocol fields such as `model`, `messages`, `stream`, token limits, and structured-output controls are protected. Reasoning parameters automatically select the longer request timeout. |
 | Previous context | `1`, range `0–20` | Adds original YouTube cues before the request as read-only reference for names, pronouns, terminology, and tone. Rolling-caption duplicates are removed first, and context remains subject to the aggregate input budget. |
 | Future context | `1`, range `0–20` | Adds original cues after the request as explicitly marked, read-only future reference. It can disambiguate current text but reveals more future material; duplicates and distant entries that exceed the aggregate budget are dropped. |
 | Prefetch batches | `1`, range `0–10` | Starts that many future scheduling ranges ahead of playback; `0` disables prefetch. A batch is a scope of about 32 lexical coordinates, not 32 subtitle cues and not necessarily one HTTP call. Higher values may reduce playback waits but increase concurrency, traffic, and cost. |
 
-Changing the Base URL, model, reasoning effort, extra request parameters, or either context count retranslates the current video. Changing only prefetch depth cancels obsolete speculative work and continues with the new distance; already validated translations remain reusable.
+Changing the Base URL, model, extra request parameters, or either context count retranslates the current video. Changing only prefetch depth cancels obsolete speculative work and continues with the new distance; already validated translations remain reusable.
 
 ### Display
 
@@ -61,7 +60,7 @@ The overlay can be dragged vertically and stores its position as a percentage of
 ### Tools
 
 - **Token usage** shows session totals reported by the configured API: input, output, reasoning, prompt-cache hit/miss, and reported/unreported response counts. Both standard OpenAI `usage` and Gemini `usageMetadata` fields are normalized. It can be cleared independently. Local response-cache hits make no API call and add no tokens.
-- **Diagnostics** is off by default. When enabled, it records versioned, ordered session/request transitions alongside the caption startup handshake, track selection, compact request windows, network attempts, Chromium `net::ERR_*` failures, structural validation, and pagination. The copied bundle is recursively redacted at ingestion, persistence, and export: API keys, authorization headers, credential-like URL parameters, and complete connection profiles are excluded. It may still contain subtitle text, so inspect content before sharing.
+- **Diagnostics** is off by default. When enabled, it records versioned, ordered session/request transitions alongside the caption startup handshake, track selection, compact request windows, network attempts, Chromium `net::ERR_*` failures, structural validation, and pagination. The copied bundle is recursively redacted at ingestion, persistence, and export: API keys, authorization headers, credential-like URL parameters, and complete configuration profiles are excluded. It may still contain subtitle text, so inspect content before sharing.
 - **SRT export** reads original entries from the full captured track. Translated and bilingual exports contain only translations that are already complete and structurally valid; exporting does not translate the rest of a video merely to fill the file.
 
 ## Translation pipeline
@@ -140,7 +139,7 @@ Existing translations are repaginated after font, window-size, fullscreen-size, 
 
 ## Privacy
 
-No accounts, analytics, or tracking. Caption text is sent only to the configured AI endpoint. Ordinary settings use `chrome.storage.sync`; connection profiles, including API keys and extra request parameters, use `chrome.storage.local` and are never synced; the bounded validated-translation cache and API-reported token totals use `chrome.storage.session` and are cleared with the browser session.
+No accounts, analytics, or tracking. Caption text is sent only to the configured AI endpoint. Ordinary settings use `chrome.storage.sync`; complete configuration profiles, including API keys and request parameters, use `chrome.storage.local` and are never synced; the bounded validated-translation cache and API-reported token totals use `chrome.storage.session` and are cleared with the browser session.
 
 ## Development
 
@@ -158,7 +157,7 @@ npm run check
   routing; `background.js` is the service-worker assembler.
 - `shared/`: defaults, structural validation, and pure helpers; `shared.js`
   assembles their immutable cross-context API.
-- `popup/` and `popup.html/.css/.js`: local connection profiles and settings UI.
+- `popup/` and `popup.html/.css/.js`: local configuration profiles and settings UI.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and automated
 architecture checks. Agent and human changes follow [AGENTS.md](AGENTS.md) and

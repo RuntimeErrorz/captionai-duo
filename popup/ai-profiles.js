@@ -1,11 +1,17 @@
-// Local AI connection profiles and endpoint-specific secrets/options.
+// Local AI configuration profiles and endpoint-specific secrets/options.
 "use strict";
 
 const AI_CONFIG_PROFILE_STORE_KEY = "aiConfigProfileStoreV1";
 let aiConfigProfileStore = { activeId: "", profiles: [] };
 let aiConfigProfileReady = false;
 let aiConfigProfilePersist = Promise.resolve();
-let aiExtraBodySavePending = false;
+let aiExtraBodySavePending = Promise.resolve(false);
+let aiExtraBodySaveTimer = null;
+let aiExtraBodyQueuedValue = null;
+let aiProfileRenameActive = false;
+let aiProfileMenuOpen = false;
+let aiProfileDrag = null;
+let aiProfileSuppressClick = false;
 
 function newAiConfigProfileId() {
   try { return crypto.randomUUID(); }
@@ -29,12 +35,21 @@ function normalizeAiConfigProfile(value, index) {
   const profile = {
     id: String(raw.id || "").trim() || newAiConfigProfileId(),
     name: String(raw.name || "").trim().slice(0, 60),
+    targetLang: YTDS_SHARED.normalizeTargetLang(raw.targetLang || state.targetLang),
     baseUrl: YTDS_SHARED.normalizeAiBaseUrl(raw.baseUrl) ||
       YTDS_SHARED.AI_DEFAULT_BASE_URL,
     model: String(raw.model || YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160),
-    thinking: YTDS_SHARED.normalizeAiThinking(raw.thinking),
     apiKey: String(raw.apiKey || "").trim(),
-    extraBody: parsedExtra.ok ? parsedExtra.canonical : "{}"
+    extraBody: parsedExtra.ok ? parsedExtra.canonical : "{}",
+    contextPast: YTDS_SHARED.normalizeAiContextCount(
+      raw.contextPast, state.deepseekContextPast
+    ),
+    contextFuture: YTDS_SHARED.normalizeAiContextCount(
+      raw.contextFuture, state.deepseekContextFuture
+    ),
+    prefetchBatches: YTDS_SHARED.normalizeDeepseekPrefetchBatches(
+      raw.prefetchBatches == null ? state.deepseekPrefetchBatches : raw.prefetchBatches
+    )
   };
   if (!profile.name) profile.name = aiConfigProfileFallbackName(profile, index);
   return profile;
@@ -124,12 +139,10 @@ function aiExtraBodyErrorMessage(parsed) {
 function setAiExtraBodyMessage(text, kind) {
   const el = $("aiExtraBodyMsg");
   if (!el) return;
-  el.textContent = text || t(
-    "aiExtraBodyHint",
-    "按当前 API 地址和模型保存在本机，用于传入供应商专有参数。"
-  );
+  el.textContent = text || "";
   el.classList.toggle("warn", kind === "warn");
   el.classList.toggle("ok", kind === "ok");
+  el.hidden = !text;
 }
 
 function prettyAiExtraBody(canonical) {
@@ -153,7 +166,7 @@ async function loadCurrentAiExtraBody() {
   return parsed.ok ? parsed.canonical : "{}";
 }
 
-async function saveCurrentAiExtraBody(value) {
+async function persistCurrentAiExtraBody(value) {
   const input = $("aiExtraBody");
   const scope = YTDS_SHARED.aiRequestProfileScope(state.aiBaseUrl, state.aiModel);
   const parsed = YTDS_SHARED.parseAiExtraBody(value);
@@ -166,10 +179,6 @@ async function saveCurrentAiExtraBody(value) {
     );
     return false;
   }
-  if (aiExtraBodySavePending) return false;
-  aiExtraBodySavePending = true;
-  const button = $("saveAiExtraBody");
-  if (button) button.disabled = true;
   try {
     const profiles = await readAiExtraBodyProfiles();
     const previous = YTDS_SHARED.parseAiExtraBody(profiles[scope] || "");
@@ -181,34 +190,167 @@ async function saveCurrentAiExtraBody(value) {
     input.setAttribute("aria-invalid", "false");
     if (!previous.ok || previous.canonical !== parsed.canonical) {
       setKey("aiExtraBodyRevision", Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1);
-      setAiExtraBodyMessage(
-        t("aiExtraBodySaved", "额外请求参数已保存，当前视频将重新翻译。"), "ok"
-      );
-    } else setAiExtraBodyMessage("", "");
+    }
+    setAiExtraBodyMessage("", "");
     return true;
   } catch (_e) {
     setAiExtraBodyMessage(t("aiExtraBodySaveFailed", "参数保存失败，请重试。"), "warn");
     return false;
-  } finally {
-    aiExtraBodySavePending = false;
-    if (button) button.disabled = false;
+  }
+}
+
+function saveCurrentAiExtraBody(value) {
+  aiExtraBodySavePending = aiExtraBodySavePending
+    .catch(() => false)
+    .then(() => persistCurrentAiExtraBody(value));
+  return aiExtraBodySavePending;
+}
+
+function scheduleAiExtraBodySave(value, delay = 360) {
+  aiExtraBodyQueuedValue = String(value == null ? "" : value);
+  if (aiExtraBodySaveTimer) clearTimeout(aiExtraBodySaveTimer);
+  aiExtraBodySaveTimer = setTimeout(flushAiExtraBodySave, delay);
+}
+
+function flushAiExtraBodySave() {
+  if (aiExtraBodySaveTimer) clearTimeout(aiExtraBodySaveTimer);
+  aiExtraBodySaveTimer = null;
+  if (aiExtraBodyQueuedValue == null) return aiExtraBodySavePending;
+  const value = aiExtraBodyQueuedValue;
+  aiExtraBodyQueuedValue = null;
+  return saveCurrentAiExtraBody(value);
+}
+
+function paintAiProfileRenameMode() {
+  const select = $("aiProfileSelect");
+  const editor = $("aiProfileNameEditor");
+  const create = $("newAiProfile");
+  const rename = $("renameAiProfile");
+  const cancel = $("cancelRenameAiProfile");
+  const remove = $("deleteAiProfile");
+  if (!select || !editor) return;
+  select.hidden = aiProfileRenameActive;
+  editor.hidden = !aiProfileRenameActive;
+  create.hidden = aiProfileRenameActive;
+  cancel.hidden = !aiProfileRenameActive;
+  remove.hidden = aiProfileRenameActive;
+  rename.textContent = aiProfileRenameActive
+    ? t("aiProfileSaveName", "保存")
+    : t("aiProfileRename", "重命名");
+}
+
+function createAiProfileOption(profile) {
+  const option = document.createElement("button");
+  option.type = "button";
+  option.className = "ai-profile-option";
+  option.dataset.profileId = profile.id;
+  option.setAttribute("role", "option");
+  option.setAttribute("aria-selected", String(profile.id === aiConfigProfileStore.activeId));
+  option.tabIndex = -1;
+  option.textContent = profile.name;
+  return option;
+}
+
+function setAiProfileMenuOpen(open, focusSelected = false) {
+  const trigger = $("aiProfileSelectButton");
+  const menu = $("aiProfileMenu");
+  aiProfileMenuOpen = Boolean(open);
+  trigger.setAttribute("aria-expanded", String(aiProfileMenuOpen));
+  menu.hidden = !aiProfileMenuOpen;
+  if (aiProfileMenuOpen && focusSelected) {
+    const selected = Array.from(menu.children).find(
+      (option) => option.dataset.profileId === aiConfigProfileStore.activeId
+    );
+    if (selected) selected.focus();
   }
 }
 
 function paintAiConfigProfileManager() {
   const select = $("aiProfileSelect");
   if (!select || !aiConfigProfileReady) return;
-  const selected = aiConfigProfileStore.activeId;
-  select.replaceChildren(...aiConfigProfileStore.profiles.map((profile) => {
-    const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = profile.name;
-    return option;
-  }));
-  select.value = selected;
-  const profile = activeAiConfigProfile();
-  $("aiProfileName").value = profile ? profile.name : "";
+  const active = activeAiConfigProfile();
+  $("aiProfileSelectValue").textContent = active ? active.name : "";
+  $("aiProfileMenu").replaceChildren(
+    ...aiConfigProfileStore.profiles.map(createAiProfileOption)
+  );
   $("deleteAiProfile").disabled = aiConfigProfileStore.profiles.length <= 1;
+  paintAiProfileRenameMode();
+}
+
+function reorderAiConfigProfiles(profileId, targetId) {
+  const from = aiConfigProfileStore.profiles.findIndex((profile) => profile.id === profileId);
+  const to = aiConfigProfileStore.profiles.findIndex((profile) => profile.id === targetId);
+  if (from < 0 || to < 0 || from === to) return false;
+  const [profile] = aiConfigProfileStore.profiles.splice(from, 1);
+  aiConfigProfileStore.profiles.splice(to, 0, profile);
+  return true;
+}
+
+function cancelAiProfileDragTimer() {
+  if (aiProfileDrag && aiProfileDrag.timer) clearTimeout(aiProfileDrag.timer);
+  if (aiProfileDrag) aiProfileDrag.timer = null;
+}
+
+function finishAiProfileDrag(event) {
+  if (!aiProfileDrag || event.pointerId !== aiProfileDrag.pointerId) return;
+  cancelAiProfileDragTimer();
+  const wasActive = aiProfileDrag.active;
+  const item = aiProfileDrag.item;
+  item.classList.remove("dragging");
+  aiProfileDrag = null;
+  if (wasActive) {
+    persistAiConfigProfileStore();
+    setTimeout(() => { aiProfileSuppressClick = false; }, 0);
+  }
+}
+
+function wireAiProfileDrag(menu) {
+  menu.addEventListener("pointerdown", (event) => {
+    const item = event.target.closest(".ai-profile-option");
+    if (!item || event.button !== 0) return;
+    cancelAiProfileDragTimer();
+    aiProfileDrag = {
+      active: false,
+      item,
+      pointerId: event.pointerId,
+      profileId: item.dataset.profileId,
+      startX: event.clientX,
+      startY: event.clientY,
+      timer: null
+    };
+    aiProfileDrag.timer = setTimeout(() => {
+      if (!aiProfileDrag || aiProfileDrag.item !== item) return;
+      aiProfileDrag.active = true;
+      aiProfileSuppressClick = true;
+      item.classList.add("dragging");
+      if (item.setPointerCapture) item.setPointerCapture(event.pointerId);
+    }, 350);
+  });
+  menu.addEventListener("pointermove", (event) => {
+    if (!aiProfileDrag || event.pointerId !== aiProfileDrag.pointerId) return;
+    if (!aiProfileDrag.active) {
+      if (Math.hypot(
+        event.clientX - aiProfileDrag.startX,
+        event.clientY - aiProfileDrag.startY
+      ) > 7) {
+        cancelAiProfileDragTimer();
+      }
+      return;
+    }
+    event.preventDefault();
+    const hovered = document.elementFromPoint(event.clientX, event.clientY);
+    const target = hovered && hovered.closest(".ai-profile-option");
+    if (!target || target === aiProfileDrag.item || !menu.contains(target)) return;
+    if (!reorderAiConfigProfiles(aiProfileDrag.profileId, target.dataset.profileId)) return;
+    for (const profile of aiConfigProfileStore.profiles) {
+      const option = Array.from(menu.children).find(
+        (entry) => entry.dataset.profileId === profile.id
+      );
+      if (option) menu.appendChild(option);
+    }
+  });
+  menu.addEventListener("pointerup", finishAiProfileDrag);
+  menu.addEventListener("pointercancel", finishAiProfileDrag);
 }
 
 async function materializeAiConfigProfile(profile, forceRevision) {
@@ -225,19 +367,29 @@ async function materializeAiConfigProfile(profile, forceRevision) {
   else delete extras[requestScope];
   await chrome.storage.local.set({ aiApiKeys: keys, aiExtraBodyProfiles: extras });
 
-  const changed = state.aiBaseUrl !== profile.baseUrl || state.aiModel !== profile.model ||
-    state.aiThinking !== profile.thinking;
+  const changed = state.targetLang !== profile.targetLang ||
+    state.aiBaseUrl !== profile.baseUrl ||
+    state.aiModel !== profile.model ||
+    state.deepseekContextPast !== profile.contextPast ||
+    state.deepseekContextFuture !== profile.contextFuture ||
+    state.deepseekPrefetchBatches !== profile.prefetchBatches;
   const materialChanged = previousKey !== profile.apiKey || !previousExtra.ok ||
     previousExtra.canonical !== profile.extraBody;
+  state.targetLang = profile.targetLang;
   state.aiBaseUrl = profile.baseUrl;
   state.aiModel = profile.model;
-  state.aiThinking = profile.thinking;
+  state.deepseekContextPast = profile.contextPast;
+  state.deepseekContextFuture = profile.contextFuture;
+  state.deepseekPrefetchBatches = profile.prefetchBatches;
   if (changed || materialChanged || forceRevision) {
     state.aiExtraBodyRevision = Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1;
     await chrome.storage.sync.set({
+      targetLang: state.targetLang,
       aiBaseUrl: state.aiBaseUrl,
       aiModel: state.aiModel,
-      aiThinking: state.aiThinking,
+      deepseekContextPast: state.deepseekContextPast,
+      deepseekContextFuture: state.deepseekContextFuture,
+      deepseekPrefetchBatches: state.deepseekPrefetchBatches,
       aiExtraBodyRevision: state.aiExtraBodyRevision
     });
   }
@@ -259,11 +411,14 @@ async function initializeAiConfigProfiles(localValue) {
     const requestScope = YTDS_SHARED.aiRequestProfileScope(state.aiBaseUrl, state.aiModel);
     profiles.push(normalizeAiConfigProfile({
       name: aiConfigProfileFallbackName(state, 0),
+      targetLang: state.targetLang,
       baseUrl: state.aiBaseUrl,
       model: state.aiModel,
-      thinking: state.aiThinking,
       apiKey: keys[credentialScope] || "",
-      extraBody: extras[requestScope] || "{}"
+      extraBody: extras[requestScope] || "{}",
+      contextPast: state.deepseekContextPast,
+      contextFuture: state.deepseekContextFuture,
+      prefetchBatches: state.deepseekPrefetchBatches
     }, 0));
   }
   const wanted = String(rawStore && rawStore.activeId || "");
@@ -287,6 +442,7 @@ async function refreshAfterAiProfileSwitch() {
 async function switchAiConfigProfile(id) {
   const profile = aiConfigProfileStore.profiles.find((entry) => entry.id === id);
   if (!profile || profile.id === aiConfigProfileStore.activeId) return;
+  await flushAiExtraBodySave();
   aiConfigProfileStore.activeId = profile.id;
   await persistAiConfigProfileStore();
   await materializeAiConfigProfile(profile, true);
@@ -294,6 +450,7 @@ async function switchAiConfigProfile(id) {
 }
 
 async function createAiConfigProfile() {
+  await flushAiExtraBodySave();
   const source = activeAiConfigProfile();
   const baseName = t("aiProfileNewName", "新配置");
   let suffix = aiConfigProfileStore.profiles.length + 1;
@@ -306,12 +463,35 @@ async function createAiConfigProfile() {
   await persistAiConfigProfileStore();
   await materializeAiConfigProfile(profile, false);
   await refreshAfterAiProfileSwitch();
-  $("aiProfileName").select();
+  startAiConfigProfileRename();
+}
+
+function startAiConfigProfileRename() {
+  const profile = activeAiConfigProfile();
+  if (!profile) return;
+  aiProfileRenameActive = true;
+  const editor = $("aiProfileNameEditor");
+  editor.value = profile.name;
+  paintAiProfileRenameMode();
+  editor.focus();
+  editor.select();
+}
+
+async function finishAiConfigProfileRename(save) {
+  const profile = activeAiConfigProfile();
+  if (!aiProfileRenameActive || !profile) return;
+  const editor = $("aiProfileNameEditor");
+  const name = String(editor.value).trim().slice(0, 60) ||
+    aiConfigProfileFallbackName(profile, 0);
+  aiProfileRenameActive = false;
+  if (save) await updateActiveAiConfigProfile({ name });
+  else paintAiConfigProfileManager();
 }
 
 async function deleteActiveAiConfigProfile() {
   if (aiConfigProfileStore.profiles.length <= 1) return;
   if (!confirm(t("aiProfileDeleteConfirm", "确定删除当前配置吗？"))) return;
+  await flushAiExtraBodySave();
   const index = aiConfigProfileStore.profiles.findIndex(
     (profile) => profile.id === aiConfigProfileStore.activeId
   );
@@ -324,15 +504,56 @@ async function deleteActiveAiConfigProfile() {
 }
 
 function wireAiConfigProfileManager() {
-  $("aiProfileSelect").addEventListener("change", (event) =>
-    switchAiConfigProfile(event.target.value));
-  $("newAiProfile").addEventListener("click", createAiConfigProfile);
-  $("deleteAiProfile").addEventListener("click", deleteActiveAiConfigProfile);
-  $("aiProfileName").addEventListener("change", (event) => {
-    const profile = activeAiConfigProfile();
-    const name = String(event.target.value || "").trim().slice(0, 60) ||
-      aiConfigProfileFallbackName(profile, 0);
-    event.target.value = name;
-    updateActiveAiConfigProfile({ name });
+  const select = $("aiProfileSelect");
+  const trigger = $("aiProfileSelectButton");
+  const menu = $("aiProfileMenu");
+  trigger.addEventListener("click", () => setAiProfileMenuOpen(!aiProfileMenuOpen, true));
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    setAiProfileMenuOpen(true, true);
   });
+  menu.addEventListener("click", (event) => {
+    const option = event.target.closest(".ai-profile-option");
+    if (!option || aiProfileSuppressClick) return;
+    setAiProfileMenuOpen(false);
+    switchAiConfigProfile(option.dataset.profileId);
+  });
+  menu.addEventListener("keydown", (event) => {
+    const options = Array.from(menu.querySelectorAll(".ai-profile-option"));
+    const index = options.indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      options[(index + step + options.length) % options.length].focus();
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      document.activeElement.click();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setAiProfileMenuOpen(false);
+      trigger.focus();
+    }
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (aiProfileMenuOpen && !select.contains(event.target)) setAiProfileMenuOpen(false);
+  });
+  wireAiProfileDrag(menu);
+  $("newAiProfile").addEventListener("click", createAiConfigProfile);
+  $("renameAiProfile").addEventListener("click", () => {
+    if (aiProfileRenameActive) finishAiConfigProfileRename(true);
+    else startAiConfigProfileRename();
+  });
+  $("cancelRenameAiProfile").addEventListener("click", () =>
+    finishAiConfigProfileRename(false));
+  $("aiProfileNameEditor").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finishAiConfigProfileRename(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finishAiConfigProfileRename(false);
+    }
+  });
+  $("deleteAiProfile").addEventListener("click", deleteActiveAiConfigProfile);
 }

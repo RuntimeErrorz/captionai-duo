@@ -297,7 +297,6 @@ async function deepseekTranslateBatch(
       requestId: requestMeta && requestMeta.requestId || "",
       model: config.model,
       endpointKind: config.endpointKind,
-      thinking: config.thinking,
       extraBodyKeys: Object.keys(config.extraBody || {}),
       sourceLang,
       contextPast: config.contextPast,

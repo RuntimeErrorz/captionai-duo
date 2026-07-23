@@ -1,7 +1,7 @@
 # Popup and configuration invariants
 
-- A connection profile is one atomic local unit: name, Base URL, model, thinking
-  mode, API key, and extra request parameters.
+- A configuration profile is one atomic local unit: name, target language, Base
+  URL, model, API key, request parameters, context counts, and prefetch depth.
 - Secrets and complete profiles stay in `chrome.storage.local`. Sync storage may
   contain only the currently materialized non-secret settings and a revision.
 - One user action must produce one configuration revision and one retranslation;

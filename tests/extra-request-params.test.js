@@ -53,7 +53,6 @@ test("compatible requests merge provider options while preserving the subtitle t
   const body = shared.aiChatCompletionBody({
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen-flash",
-    thinking: "disabled",
     extraBody: {
       enable_thinking: false,
       temperature: 0.05,

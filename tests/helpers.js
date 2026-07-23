@@ -38,6 +38,7 @@ const BACKGROUND_FILES = Object.freeze([
 
 const POPUP_FILES = Object.freeze([
   "popup/ai-profiles.js",
+  "popup/config-transfer.js",
   "popup.js"
 ]);
 

@@ -43,7 +43,7 @@ Perform the relevant checks whenever behavior crosses the browser boundary:
   translations must not flash or overwrite the new position.
 - Toggle fullscreen and resize the player; source/translation pages stay paired
   and within the configured line budget.
-- Switch connection profiles, including two profiles sharing one Base URL;
+- Switch configuration profiles, including two profiles sharing one Base URL;
   exactly the selected model/key/parameters apply and only one retranslation starts.
 - Exercise one successful stream, one usage-only final event, one timeout, and
   one cancellation. Token totals and diagnostics must reflect the real outcome.

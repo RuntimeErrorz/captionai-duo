@@ -239,7 +239,6 @@ async function getAiConfig() {
     baseUrl,
     endpoint: YTDS_SHARED.aiChatCompletionsUrl(baseUrl),
     model,
-    thinking: YTDS_SHARED.normalizeAiThinking(stored.aiThinking || stored.deepseekThinking),
     extraBody: parsedExtra.ok ? parsedExtra.value : {},
     extraBodyCanonical: parsedExtra.ok ? parsedExtra.canonical : "{}",
     contextPast: YTDS_SHARED.normalizeAiContextCount(stored.deepseekContextPast, 1),
@@ -286,8 +285,8 @@ async function aiRawCompletion(
   let responseText = "";
   let responseUsage = null;
   const attempts = [];
-  const timeoutMs = config.thinking === "disabled"
-    ? DEEPSEEK_TIMEOUT_FAST_MS : DEEPSEEK_TIMEOUT_THINKING_MS;
+  const timeoutMs = YTDS_SHARED.aiExtraBodyUsesThinking(config.extraBody)
+    ? DEEPSEEK_TIMEOUT_THINKING_MS : DEEPSEEK_TIMEOUT_FAST_MS;
   const requestClass = String(trace.requestClass || "");
   const connectTimeoutMs = requestClass.startsWith("urgent")
     ? DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS : DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS;

@@ -76,7 +76,9 @@ function flushSyncPatch() {
   if (syncSaveTimer) { clearTimeout(syncSaveTimer); syncSaveTimer = null; }
   const patch = pendingSyncPatch;
   pendingSyncPatch = {};
-  if (Object.keys(patch).length) chrome.storage.sync.set(patch);
+  return Object.keys(patch).length
+    ? chrome.storage.sync.set(patch)
+    : Promise.resolve();
 }
 
 function pushLivePatch(key, val) {
@@ -154,6 +156,7 @@ function sendToTab(tabId, msg) {
 function activateWorkspace(workspace, scrollToTop) {
   const allowed = new Set(["translation", "display", "tools"]);
   activeWorkspace = allowed.has(workspace) ? workspace : "translation";
+  document.body.dataset.workspace = activeWorkspace;
   document.querySelectorAll("[data-workspace-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.workspacePanel !== activeWorkspace;
   });
@@ -219,38 +222,105 @@ async function copyText(text) {
 }
 
 async function onCopyDebug() {
-  showDebugMsg(t("debugLoading", "正在读取日志…"), null);
+  showDebugMsg(t("debugLoading", "正在读取诊断日志…"), null);
   const resp = await sendRuntime({ type: "getDebugLogs" });
   if (!resp || !resp.ok || !resp.logs) {
-    showDebugMsg(t("debugEmpty", "暂无日志，请先启用并复现问题。"), "err");
+    showDebugMsg(t("debugEmpty", "暂无诊断日志，请先启用并复现问题。"), "err");
     return;
   }
   const ok = await copyText(resp.logs);
   showDebugMsg(ok ? "" : t("debugCopyFailed", "复制失败，请重试。"), ok ? null : "err");
 }
 
+// ---- configuration backup -----------------------------------------------
+function setConfigTransferBusy(busy) {
+  $("exportConfig").disabled = busy;
+  $("importConfig").disabled = busy;
+}
+
+async function onExportConfig() {
+  setConfigTransferBusy(true);
+  try {
+    await flushSyncPatch();
+    const backup = await readCurrentConfigBackup();
+    const json = JSON.stringify(backup, null, 2) + "\n";
+    const blobUrl = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const link = document.createElement("a");
+    const date = backup.exportedAt.slice(0, 10);
+    link.href = blobUrl;
+    link.download = `captionai-duo-settings-${date}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+  } catch (_e) {
+    alert(t("configExportFailed", "配置导出失败，请重试。"));
+  } finally {
+    setConfigTransferBusy(false);
+  }
+}
+
+async function onImportConfigFile(event) {
+  const input = event.currentTarget;
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!file) return;
+  setConfigTransferBusy(true);
+  try {
+    if (file.size > CONFIG_BACKUP_MAX_BYTES) throw new Error("invalid-size");
+    const backup = parseConfigBackupText(await file.text());
+    if (!confirm(t(
+      "configImportConfirm",
+      "导入会替换当前全部设置、配置方案和 API 密钥。确定继续吗？"
+    ))) return;
+    const restored = await restoreConfigBackup(backup);
+    state = { ...restored.settings };
+    aiConfigProfileReady = false;
+    await initializeAiConfigProfiles(restored.local);
+    bindUI();
+    await Promise.all([loadCurrentAiApiKey(), loadCurrentAiExtraBody()]);
+    refreshEngineStatus();
+  } catch (_e) {
+    alert(t("configImportFailed", "无法导入：文件不是有效的 CaptionAI Duo 配置备份。"));
+  } finally {
+    setConfigTransferBusy(false);
+  }
+}
+
 async function onClearDebug() {
   const resp = await sendRuntime({ type: "clearDebugLogs" });
   showDebugMsg(resp && resp.ok ? "" :
-    t("debugClearFailed", "清空失败，请重试。"), resp && resp.ok ? null : "err");
+    t("debugClearFailed", "诊断日志清空失败，请重试。"), resp && resp.ok ? null : "err");
 }
 
 // ---- Token usage ---------------------------------------------------------
 const tokenFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const compactTokenFormatter = new Intl.NumberFormat(undefined, {
+  notation: "compact",
+  compactDisplay: "short",
+  maximumFractionDigits: 1
+});
 
-function formatTokenCount(value) {
-  return tokenFormatter.format(Math.max(0, Math.round(Number(value) || 0)));
+function normalizeTokenCount(value) {
+  return Math.max(0, Math.round(Number(value) || 0));
+}
+
+function paintTokenCount(id, value) {
+  const count = normalizeTokenCount(value);
+  const exact = tokenFormatter.format(count);
+  const element = $(id);
+  element.textContent = exact.length > 5 ? compactTokenFormatter.format(count) : exact;
+  element.title = exact;
+  element.setAttribute("aria-label", exact);
 }
 
 function paintAiTokenUsage(value) {
   const usage = value && typeof value === "object" ? value : {};
-  $("tokenTotal").textContent = formatTokenCount(usage.totalTokens);
-  $("tokenInput").textContent = formatTokenCount(usage.promptTokens);
-  $("tokenOutput").textContent = formatTokenCount(usage.completionTokens);
-  $("tokenCacheHit").textContent = formatTokenCount(usage.cacheHitTokens);
-  $("tokenCacheMiss").textContent = formatTokenCount(usage.cacheMissTokens);
-  $("tokenReasoning").textContent = formatTokenCount(usage.reasoningTokens);
-  $("tokenRequests").textContent = formatTokenCount(
+  paintTokenCount("tokenTotal", usage.totalTokens);
+  paintTokenCount("tokenInput", usage.promptTokens);
+  paintTokenCount("tokenOutput", usage.completionTokens);
+  paintTokenCount("tokenCacheHit", usage.cacheHitTokens);
+  paintTokenCount("tokenCacheMiss", usage.cacheMissTokens);
+  paintTokenCount("tokenReasoning", usage.reasoningTokens);
+  paintTokenCount("tokenRequests",
     (Number(usage.reportedRequests) || 0) + (Number(usage.unreportedRequests) || 0)
   );
 }
@@ -395,7 +465,6 @@ function bindUI() {
   $("targetLang").value = state.targetLang;
   $("aiBaseUrl").value = state.aiBaseUrl;
   $("aiModel").value = state.aiModel;
-  $("aiThinking").value = state.aiThinking;
   $("deepseekContextPast").value = String(state.deepseekContextPast);
   $("deepseekContextFuture").value = String(state.deepseekContextFuture);
   $("deepseekPrefetchBatches").value = String(state.deepseekPrefetchBatches);
@@ -415,9 +484,14 @@ function wire() {
     button.addEventListener("click", () => activateWorkspace(button.dataset.workspace, true));
   });
   $("enabled").addEventListener("change", (e) => setKey("enabled", e.target.checked));
-  $("targetLang").addEventListener("change", (e) => setKey("targetLang", e.target.value));
+  $("targetLang").addEventListener("change", async (e) => {
+    const value = YTDS_SHARED.normalizeTargetLang(e.target.value);
+    setKey("targetLang", value);
+    await updateActiveAiConfigProfile({ targetLang: value });
+  });
 
   $("aiBaseUrl").addEventListener("change", async (e) => {
+    await flushAiExtraBodySave();
     const value = e.target.value.trim();
     const normalized = YTDS_SHARED.normalizeAiBaseUrl(value);
     setKey("aiBaseUrl", normalized || value);
@@ -431,17 +505,12 @@ function wire() {
     refreshEngineStatus();
   });
   $("aiModel").addEventListener("change", async (e) => {
+    await flushAiExtraBodySave();
     setKey("aiModel", e.target.value.trim());
     const extraBody = await loadCurrentAiExtraBody();
     await updateActiveAiConfigProfile({ model: state.aiModel, extraBody });
     refreshEngineStatus();
   });
-  $("aiThinking").addEventListener("change", (e) => {
-    const thinking = YTDS_SHARED.normalizeAiThinking(e.target.value);
-    setKey("aiThinking", thinking);
-    updateActiveAiConfigProfile({ thinking });
-  });
-
   $("aiApiKey").addEventListener("change", async (e) => {
     if (await saveCurrentAiApiKey(e.target.value)) {
       if (chrome.storage.session) {
@@ -465,39 +534,46 @@ function wire() {
     $("toggleApiKey").textContent = t("showApiKey", "显示");
     refreshEngineStatus();
   });
-  $("saveAiExtraBody").addEventListener("click", () =>
-    saveCurrentAiExtraBody($("aiExtraBody").value));
+  $("aiExtraBody").addEventListener("input", (e) =>
+    scheduleAiExtraBodySave(e.currentTarget.value));
+  $("aiExtraBody").addEventListener("change", flushAiExtraBodySave);
   $("aiExtraBody").addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
-      saveCurrentAiExtraBody(e.currentTarget.value);
+      flushAiExtraBodySave();
     }
   });
-  $("deepseekContextPast").addEventListener("change", (e) => {
+  $("deepseekContextPast").addEventListener("change", async (e) => {
     const value = YTDS_SHARED.normalizeAiContextCount(e.target.value, state.deepseekContextPast);
     e.target.value = String(value);
     setKey("deepseekContextPast", value);
+    await updateActiveAiConfigProfile({ contextPast: value });
   });
-  $("deepseekContextFuture").addEventListener("change", (e) => {
+  $("deepseekContextFuture").addEventListener("change", async (e) => {
     const value = YTDS_SHARED.normalizeAiContextCount(e.target.value, state.deepseekContextFuture);
     e.target.value = String(value);
     setKey("deepseekContextFuture", value);
+    await updateActiveAiConfigProfile({ contextFuture: value });
   });
-  $("deepseekPrefetchBatches").addEventListener("change", (e) => {
+  $("deepseekPrefetchBatches").addEventListener("change", async (e) => {
     const value = YTDS_SHARED.normalizeDeepseekPrefetchBatches(e.target.value);
     e.target.value = String(value);
     setKey("deepseekPrefetchBatches", value);
+    await updateActiveAiConfigProfile({ prefetchBatches: value });
   });
 
   $("debugEnabled").addEventListener("change", (e) => {
     setKey("debugEnabled", e.target.checked);
     showDebugMsg(e.target.checked
-      ? t("debugStarted", "调试日志已启用，请刷新视频页面并复现问题。")
-      : t("debugStopped", "调试日志已停止，现有日志仍可复制。"), "ok");
+      ? t("debugStarted", "诊断日志已启用，请刷新视频页面并复现问题。")
+      : t("debugStopped", "诊断日志已停止，现有诊断日志仍可复制。"), "ok");
   });
   $("copyDebug").addEventListener("click", onCopyDebug);
   $("clearDebug").addEventListener("click", onClearDebug);
   $("resetTokenUsage").addEventListener("click", onResetTokenUsage);
+  $("exportConfig").addEventListener("click", onExportConfig);
+  $("importConfig").addEventListener("click", () => $("configFileInput").click());
+  $("configFileInput").addEventListener("change", onImportConfigFile);
 
   // segmented: order
   document.querySelectorAll("#order button").forEach((b) =>
@@ -567,7 +643,10 @@ function wire() {
 
 // ---- boot ----------------------------------------------------------------
 applyI18n();                       // localize static markup before first paint
-window.addEventListener("pagehide", flushSyncPatch);
+window.addEventListener("pagehide", () => {
+  flushSyncPatch();
+  flushAiExtraBodySave();
+});
 chrome.storage.sync.get(null, (got) => {
   got = got || {};
   state = { ...DEFAULTS, ...got };
@@ -580,14 +659,10 @@ chrome.storage.sync.get(null, (got) => {
   if (!Object.prototype.hasOwnProperty.call(got, "aiModel") && got.deepseekModel) {
     migration.aiModel = got.deepseekModel;
   }
-  if (!Object.prototype.hasOwnProperty.call(got, "aiThinking") && got.deepseekThinking) {
-    migration.aiThinking = got.deepseekThinking;
-  }
   Object.assign(state, migration);
   const normalizedBase = YTDS_SHARED.normalizeAiBaseUrl(state.aiBaseUrl);
   if (normalizedBase) state.aiBaseUrl = normalizedBase;
   state.aiModel = String(state.aiModel || "").trim();
-  state.aiThinking = YTDS_SHARED.normalizeAiThinking(state.aiThinking);
   state.deepseekContextPast =
     YTDS_SHARED.normalizeAiContextCount(state.deepseekContextPast, DEFAULTS.deepseekContextPast);
   state.deepseekContextFuture =
@@ -654,8 +729,11 @@ chrome.storage.sync.get(null, (got) => {
     Object.assign(state, migration);
   }
   if (Object.keys(migration).length) chrome.storage.sync.set(migration);
-  if (Object.prototype.hasOwnProperty.call(got, "aiProvider")) {
-    chrome.storage.sync.remove("aiProvider");
+  const obsoleteSyncKeys = ["aiProvider", "aiThinking", "deepseekThinking"].filter(
+    (key) => Object.prototype.hasOwnProperty.call(got, key)
+  );
+  if (obsoleteSyncKeys.length) {
+    chrome.storage.sync.remove(obsoleteSyncKeys);
   }
   chrome.storage.local.get({
     aiApiKeys: {}, aiApiKey: "", deepseekApiKey: "", aiExtraBodyProfiles: {},

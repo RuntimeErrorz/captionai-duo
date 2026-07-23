@@ -20,6 +20,7 @@ assert.equal(shared.DEFAULTS.deepseekPrefetchBatches, 1);
 assert.equal("aiProvider" in shared.DEFAULTS, false);
 assert.equal(shared.DEFAULTS.aiBaseUrl, "https://api.deepseek.com");
 assert.equal(shared.DEFAULTS.aiModel, "deepseek-v4-flash");
+assert.equal("aiThinking" in shared.DEFAULTS, false);
 assert.equal(shared.DEFAULTS.aiExtraBodyRevision, 0);
 assert.equal(shared.DEFAULTS.order, "trans-top");
 assert.equal(shared.DEFAULTS.transColor, "#ffffff");
@@ -60,7 +61,9 @@ assert.equal(shared.aiCompletionText({ choices: [{ delta: { content: [
   { type: "text", text: "stream" }, { type: "text", text: "ed" }
 ] } }] }), "streamed");
 const deepseekRequestBody = shared.aiChatCompletionBody({
-  baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", thinking: "high"
+  baseUrl: "https://api.deepseek.com",
+  model: "deepseek-v4-flash",
+  extraBody: { thinking: { type: "enabled" }, reasoning_effort: "high" }
 }, [{ role: "user", content: "JSON only" }], 4096, 0.1);
 assert.equal(deepseekRequestBody.stream, true);
 assert.equal(deepseekRequestBody.stream_options.include_usage, true);
@@ -68,14 +71,20 @@ assert.equal(deepseekRequestBody.response_format.type, "json_object");
 assert.equal(deepseekRequestBody.thinking.type, "enabled");
 assert.equal(deepseekRequestBody.reasoning_effort, "high");
 assert.equal("temperature" in deepseekRequestBody, false);
+assert.equal(shared.aiExtraBodyUsesThinking({
+  thinking: { type: "enabled" }, reasoning_effort: "high"
+}), true);
 const deepseekJsonlRequestBody = shared.aiChatCompletionBody({
-  baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", thinking: "disabled"
+  baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash"
 }, [{ role: "user", content: "JSONL only" }], 4096, 0.1, { jsonLines: true });
 assert.equal(deepseekJsonlRequestBody.stream, true);
 assert.equal(deepseekJsonlRequestBody.stream_options.include_usage, true);
 assert.equal("response_format" in deepseekJsonlRequestBody, false);
+assert.equal("thinking" in deepseekJsonlRequestBody, false);
+assert.equal("reasoning_effort" in deepseekJsonlRequestBody, false);
+assert.equal(shared.aiExtraBodyUsesThinking({ enable_thinking: false }), false);
 const customRequestBody = shared.aiChatCompletionBody({
-  baseUrl: "http://localhost:11434/v1", model: "local-model", thinking: "disabled"
+  baseUrl: "http://localhost:11434/v1", model: "local-model"
 }, [{ role: "user", content: "JSON only" }], 4096, 0.1);
 assert.equal(customRequestBody.stream, true);
 assert.equal(customRequestBody.model, "local-model");
@@ -381,9 +390,20 @@ assert.doesNotMatch(popup, /id="aiProvider"|data-i18n="aiProvider"/);
 assert.match(popup, /id="aiBaseUrl"/);
 assert.doesNotMatch(popup, /id="authorizeAiBase"/);
 assert.match(popup, /id="aiModel"/);
+assert.match(popup, /data-i18n="secModelConfig"/);
+assert.match(popup, /id="aiProfileSelect"[\s\S]*?id="newAiProfile"[\s\S]*?id="renameAiProfile"[\s\S]*?id="deleteAiProfile"/);
+assert.doesNotMatch(popup, /id="aiProfileName"|class="ai-profile-manager"/);
+assert.doesNotMatch(popup, /<label[^>]+for="aiProfileSelect"/);
+assert.ok(popup.indexOf('id="aiProfileSelect"') < popup.indexOf('id="targetLang"'));
+assert.match(popup, /id="deleteAiProfile"[\s\S]*?class="section-divider configuration-divider"[\s\S]*?id="targetLang"/);
+assert.match(popup, /id="aiProfileNameEditor"[\s\S]*?id="cancelRenameAiProfile"/);
+assert.doesNotMatch(popup, /id="aiThinking"|data-i18n="aiThinking"/);
+assert.match(popup, /class="compact-grid grid-2 translation-basics"/);
 assert.doesNotMatch(popup, /aiModelSuggestions|<datalist/);
 assert.match(popup, /id="aiApiKey"/);
 assert.match(popup, /id="aiExtraBody"/);
+assert.doesNotMatch(popup, /id="saveAiExtraBody"|aiExtraBodySave/);
+assert.match(popupSource, /scheduleAiExtraBodySave\(e\.currentTarget\.value\)/);
 assert.match(popup, /id="panel-token-usage"/);
 assert.match(popup, /id="tokenTotal"/);
 assert.match(popup, /id="resetTokenUsage"/);
@@ -399,6 +419,9 @@ assert.doesNotMatch(popup, /id="resetPos"|data-i18n="resetPos"/);
 assert.doesNotMatch(popupSource, /resetPos/);
 assert.doesNotMatch(popup, /id="position"|data-i18n="(?:posTop|posCenter|posBottom)"/);
 assert.match(popup, /class="layout-row"/);
+assert.equal((popup.match(/data-workspace-panel="display"/g) || []).length, 1);
+assert.match(popup, /id="panel-display"[\s\S]*?data-i18n="secSubtitleAppearance"[\s\S]*?class="layout-row"[\s\S]*?class="section-divider display-divider"[\s\S]*?class="line-tabs-row"/);
+assert.doesNotMatch(popup, /id="panel-(?:layout|style)"/);
 assert.match(popup, /class="gap-control"/);
 assert.match(popupSource, /visualDefaultsVersion/);
 assert.match(popupSource, /contextDefaultsVersion/);
@@ -418,7 +441,19 @@ assert.match(popupCss, /--surface:\s*#ffffff/);
 assert.match(popupCss, /body\s*\{[\s\S]*?width:\s*320px/);
 assert.match(popupCss, /:root[\s\S]*?font-size:\s*15px/);
 assert.match(popupCss, /\.export-btn[\s\S]*?font-size:\s*13\.5px;[\s\S]*?font-weight:\s*400/);
-assert.match(popupCss, /\.reset[\s\S]*?font-size:\s*13\.5px;[\s\S]*?font-weight:\s*400/);
+assert.match(popup, /id="toolsFooter"[\s\S]*?id="importConfig"[\s\S]*?id="exportConfig"[\s\S]*?id="reset"/);
+assert.match(popupCss, /\.ft\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*repeat\(3/);
+assert.doesNotMatch(popupCss, /\.ft\s*\{[^}]*border-top/);
+assert.match(popupSource, /document\.body\.dataset\.workspace = activeWorkspace/);
+assert.match(popupCss, /body\[data-workspace="tools"\]\s*\{[^}]*overflow-y:\s*hidden/);
+assert.match(popupCss, /\.token-grid span\s*\{\s*white-space:\s*nowrap/);
+assert.doesNotMatch(popupCss, /\.token-grid > div\s*\{[^}]*flex-direction:\s*column/);
+assert.match(popupSource, /const compactTokenFormatter = new Intl\.NumberFormat/);
+assert.match(popupSource, /element\.title = exact/);
+assert.match(popupCss, /\.ft button\.danger/);
+assert.match(popupCss, /#deleteAiProfile\s*\{[\s\S]*?color:\s*var\(--danger\)/);
+assert.match(popupCss, /\.section-divider\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
+assert.doesNotMatch(popupCss, /\.section-divider\s*\{[^}]*linear-gradient/);
 assert.doesNotMatch(popupCss, /Bahnschrift|Cascadia Code|monospace/);
 assert.equal(manifest.action.default_title, "__MSG_extName__");
 assert.match(popup, /class="hd-mark" src="icons\/icon48\.png"/);

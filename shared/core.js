@@ -34,7 +34,6 @@
     targetLang: "zh-CN",
     aiBaseUrl: AI_DEFAULT_BASE_URL,
     aiModel: AI_DEFAULT_MODEL,
-    aiThinking: "disabled",
     aiExtraBodyRevision: 0,
     deepseekContextPast: 1,
     deepseekContextFuture: 1,
@@ -81,10 +80,6 @@
 
   function normalizeTargetLang(value) {
     return TARGET_LANG_SET.has(value) ? value : DEFAULTS.targetLang;
-  }
-
-  function normalizeAiThinking(value) {
-    return value === "max" ? "max" : value === "high" ? "high" : "disabled";
   }
 
   function isLocalAiHostname(hostname) {
@@ -302,23 +297,21 @@
     const config = configValue && typeof configValue === "object" ? configValue : {};
     const options = optionsValue && typeof optionsValue === "object" ? optionsValue : {};
     const endpointKind = aiEndpointKind(config.baseUrl);
-    const thinking = normalizeAiThinking(config.thinking);
-    const thinkingEnabled = thinking !== "disabled";
+    const parsedExtra = parseAiExtraBody(config.extraBody || {});
+    const usesThinking = parsedExtra.ok && aiExtraBodyUsesThinking(parsedExtra.value);
     const body = {
       messages: Array.isArray(messages) ? messages : [],
       ...(endpointKind === "deepseek" ? {
-        ...(!options.jsonLines ? { response_format: { type: "json_object" } } : {}),
-        thinking: { type: thinkingEnabled ? "enabled" : "disabled" }
+        ...(!options.jsonLines ? { response_format: { type: "json_object" } } : {})
       } : {}),
       stream_options: { include_usage: true },
       max_tokens: Math.max(1, Math.min(16384, Math.round(Number(maxTokens) || 2048))),
       model: String(config.model || "").trim(),
-      ...(thinkingEnabled ? { reasoning_effort: thinking } : {
+      ...(!usesThinking ? {
         temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : 0.2
-      }),
+      } : {}),
       stream: true
     };
-    const parsedExtra = parseAiExtraBody(config.extraBody || {});
     if (parsedExtra.ok) {
       for (const [key, value] of Object.entries(parsedExtra.value)) body[key] = value;
     }
@@ -330,6 +323,22 @@
     body.model = String(config.model || "").trim();
     body.stream = true;
     return body;
+  }
+
+  function aiExtraBodyUsesThinking(value) {
+    const parsed = parseAiExtraBody(value);
+    if (!parsed.ok) return false;
+    const extra = parsed.value;
+    if (extra.enable_thinking === true || extra.thinking === true) return true;
+    if (extra.thinking && typeof extra.thinking === "object") {
+      const type = String(extra.thinking.type || "").trim().toLowerCase();
+      if (type && !["disabled", "off", "none", "false"].includes(type)) return true;
+    }
+    if (Object.prototype.hasOwnProperty.call(extra, "reasoning_effort")) {
+      const effort = String(extra.reasoning_effort || "").trim().toLowerCase();
+      return !!effort && !["disabled", "off", "none", "false"].includes(effort);
+    }
+    return false;
   }
 
   function normalizeDeepseekPrefetchBatches(value) {
@@ -430,10 +439,11 @@
 
   Object.assign(internal, {
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
-    normalizeTargetLang, normalizeAiThinking, normalizeAiBaseUrl, aiEndpointKind,
+    normalizeTargetLang, normalizeAiBaseUrl, aiEndpointKind,
     aiChatCompletionsUrl, aiOriginPattern, aiCredentialScope, aiRequestProfileScope,
     parseAiExtraBody, aiCompletionText,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
+    aiExtraBodyUsesThinking,
     aiChatCompletionBody, normalizeDeepseekPrefetchBatches, normalizeAiContextCount,
     preparePromptContexts
   });

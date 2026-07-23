@@ -158,10 +158,6 @@ function loadSettings() {
       if (!Object.prototype.hasOwnProperty.call(got, "aiModel") && got.deepseekModel) {
         settings.aiModel = got.deepseekModel;
       }
-      if (!Object.prototype.hasOwnProperty.call(got, "aiThinking") && got.deepseekThinking) {
-        settings.aiThinking = got.deepseekThinking;
-      }
-      settings.aiThinking = YTDS_SHARED.normalizeAiThinking(settings.aiThinking);
       settings.targetLang = YTDS_SHARED.normalizeTargetLang(settings.targetLang);
       settings.deepseekContextPast =
         YTDS_SHARED.normalizeAiContextCount(settings.deepseekContextPast, 1);
@@ -183,8 +179,8 @@ function loadSettings() {
 // A language change alters the requested translation but can reuse the cues.
 const RECUE_KEYS = new Set(["targetLang"]);
 const DEEPSEEK_RETRANSLATE_KEYS = new Set([
-  "aiBaseUrl", "aiModel", "aiThinking", "aiExtraBodyRevision",
-  "deepseekModel", "deepseekThinking", "deepseekContextPast", "deepseekContextFuture"
+  "aiBaseUrl", "aiModel", "aiExtraBodyRevision",
+  "deepseekModel", "deepseekContextPast", "deepseekContextFuture"
 ]);
 const LIVE_STYLE_KEYS = new Set([
   "order", "rowGap", "position", "posMode", "posXpct", "posYpct",
