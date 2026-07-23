@@ -139,7 +139,7 @@ function onNoCues(data) {
   });
   if (settings.enabled) {
     startFallback();
-    if (data.requestFreshSource) forceCaptionReload();
+    if (data.requestFreshSource) forceCaptionReload("empty-player-source");
     scheduleCueRecovery();
   }
 }

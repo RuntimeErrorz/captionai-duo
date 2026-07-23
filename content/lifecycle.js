@@ -59,7 +59,7 @@ function onNav() {
         sendConfig("same-video-navigation", true);
         scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
       }
-      syncCaptions();
+      syncCaptions("same-video-navigation");
     }
     return;
   }
@@ -74,7 +74,7 @@ function onNav() {
     emitDebug("cue-navigation", { videoId: captionSession.currentVideoId || "" });
     sendConfig("navigation"); // ask inject.js for cues on the new video
     scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
-    syncCaptions();           // auto-turn on YouTube CC so subs actually show
+    syncCaptions("navigation"); // auto-turn on YouTube CC so subs actually show
   }
 }
 
@@ -102,6 +102,6 @@ loadSettings().then(() => {
     readyState: document.readyState
   });
   applyStateToDom(true);
-  syncCaptions();            // auto-enable YouTube CC so subtitles show on load
+  syncCaptions("boot");      // auto-enable YouTube CC so subtitles show on load
   scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
 });

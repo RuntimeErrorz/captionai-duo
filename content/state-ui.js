@@ -592,11 +592,26 @@ function setTranslation(text, forSource) {
 // how inject.js gets the pot-bearing URL). So when the extension is on we turn
 // YouTube's CC on for the user by clicking the native button; turning the
 // extension off restores it — but only if WE were the ones who turned it on.
-function ensureCaptionsOn(retries) {
+function captionReadinessDebugState(reason) {
+  const video = getVideo();
+  return {
+    reason: String(reason || "unspecified"),
+    documentReadyState: String(document.readyState || ""),
+    playerPresent: !!getPlayer(),
+    videoPresent: !!video,
+    videoReadyState: video ? Number(video.readyState) : -1,
+    videoNetworkState: video ? Number(video.networkState) : -1,
+    videoPaused: video ? !!video.paused : true,
+    videoTimeMs: video ? Math.round((Number(video.currentTime) || 0) * 1000) : 0,
+    captionButton: captionButtonDebugState()
+  };
+}
+
+function ensureCaptionsOn(retries, reason) {
   if (!settings.enabled) return;
   const cc = document.querySelector(".ytp-subtitles-button");
   if (!cc || cc.getAttribute("aria-pressed") === null) {
-    if (retries > 0) setTimeout(() => ensureCaptionsOn(retries - 1), 600);
+    if (retries > 0) setTimeout(() => ensureCaptionsOn(retries - 1, reason), 600);
     return;                                   // button / state not ready yet
   }
   if (cc.getAttribute("aria-disabled") === "true") {
@@ -606,10 +621,11 @@ function ensureCaptionsOn(retries) {
     // made auto-enable give up on cold loads (SPA navs were fast enough to
     // never hit it). Keep retrying within the window; a video with genuinely
     // no track just lets the retries lapse — clicking never happens either way.
-    if (retries > 0) setTimeout(() => ensureCaptionsOn(retries - 1), 600);
+    if (retries > 0) setTimeout(() => ensureCaptionsOn(retries - 1, reason), 600);
     return;
   }
   if (cc.getAttribute("aria-pressed") !== "true") {
+    emitDebug("caption-enable-requested", captionReadinessDebugState(reason));
     cc.click();
     captionSession.weEnabledCC = true;
   }
@@ -622,10 +638,10 @@ function restoreCaptionsIfWeEnabled() {
   if (cc && cc.getAttribute("aria-pressed") === "true") cc.click();
 }
 
-function syncCaptions() {
+function syncCaptions(reason) {
   // 20 × 600ms ≈ 12s window: covers slow cold loads where the CC button
   // stays aria-disabled for several seconds while the track list loads.
-  if (settings.enabled) ensureCaptionsOn(20);
+  if (settings.enabled) ensureCaptionsOn(20, reason || "sync");
   else restoreCaptionsIfWeEnabled();
 }
 
@@ -644,13 +660,23 @@ function stopCueRecovery() {
   captionSession.cueRecoveryAttempt = 0;
 }
 
-function forceCaptionReload() {
+function forceCaptionReload(reason) {
   const cc = document.querySelector(".ytp-subtitles-button");
-  if (!cc) { ensureCaptionsOn(6); return; }
-  if (cc.getAttribute("aria-pressed") === "true") {
-    const wasEnabledByUs = captionSession.weEnabledCC;
-    try { cc.click(); } catch (_e) { /* ignore */ }
+  emitDebug("caption-reload-requested", captionReadinessDebugState(reason || "recovery"));
+  if (!cc) { ensureCaptionsOn(6, reason || "recovery"); return; }
+  const sessionToken = captureCaptionSession();
+  const videoId = captionSession.currentVideoId;
+  const initiallyEnabled = cc.getAttribute("aria-pressed") === "true";
+  const ownershipAfterReload = captionSession.weEnabledCC || !initiallyEnabled;
+  const cycleEnabledTrack = () => {
+    if (!isCaptionSessionCurrent(sessionToken) ||
+        captionSession.currentVideoId !== videoId || captionSession.cueList) return;
+    const active = document.querySelector(".ytp-subtitles-button");
+    if (!active || active.getAttribute("aria-pressed") !== "true") return;
+    try { active.click(); } catch (_e) { return; }
     setTimeout(() => {
+      if (!isCaptionSessionCurrent(sessionToken) ||
+          captionSession.currentVideoId !== videoId || captionSession.cueList) return;
       const fresh = document.querySelector(".ytp-subtitles-button");
       if (fresh && fresh.getAttribute("aria-pressed") !== "true" &&
           fresh.getAttribute("aria-disabled") !== "true") {
@@ -658,10 +684,25 @@ function forceCaptionReload() {
       }
       // A recovery cycle must not claim ownership of CC if the user had
       // already enabled it before the extension intervened.
-      captionSession.weEnabledCC = wasEnabledByUs;
+      captionSession.weEnabledCC = ownershipAfterReload;
+      emitDebug("caption-reload-completed",
+        captionReadinessDebugState(reason || "recovery"));
     }, 300);
+  };
+
+  if (initiallyEnabled) {
+    cycleEnabledTrack();
   } else {
-    ensureCaptionsOn(8);
+    if (cc.getAttribute("aria-disabled") === "true") {
+      ensureCaptionsOn(8, reason || "recovery");
+      return;
+    }
+    try { cc.click(); } catch (_e) { return; }
+    captionSession.weEnabledCC = true;
+    // Turning CC on is not itself a reload when the failed request left the
+    // button off: YouTube can reuse the same stale URL. Once the state settles,
+    // perform the actual off/on cycle that rotates the track credentials.
+    setTimeout(cycleEnabledTrack, 180);
   }
 }
 
@@ -685,7 +726,7 @@ function scheduleCueRecovery(delayOverride) {
       captionButton: captionButtonDebugState(),
       nativeCaptionVisible: !!readNativeCaption()
     });
-    ensureCaptionsOn(6);
+    ensureCaptionsOn(6, "scheduled-recovery");
     // Recovery runs only while no cue list exists, so always ask the MAIN
     // bridge to retry the current video/config.
     // Reuse the current nonce: a lost bridge message is safely replayed, while
@@ -693,7 +734,9 @@ function scheduleCueRecovery(delayOverride) {
     sendConfig("recovery", true);
     // Every second failed attempt, force YouTube to issue a fresh timedtext
     // request with a new pot instead of remaining stuck on a stale URL.
-    if (!captionSession.lastSource && captionSession.cueRecoveryAttempt % 2 === 0) forceCaptionReload();
+    if (!captionSession.lastSource && captionSession.cueRecoveryAttempt % 2 === 0) {
+      forceCaptionReload("scheduled-recovery");
+    }
     scheduleCueRecovery();
   }, delay);
 }

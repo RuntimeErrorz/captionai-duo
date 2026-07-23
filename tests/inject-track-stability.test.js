@@ -57,7 +57,13 @@ test("competing timedtext tracks publish only the newest timeline", async () => 
     const value = String(url);
     fetchCalls.push(value);
     const text = value.includes("kind=asr") ? "newest ASR track" : "stale manual track";
-    return { ok: true, text: async () => json3(text) };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      text: async () => json3(text),
+      clone: () => ({ text: async () => json3(text) })
+    };
   };
 
   vm.createContext(context);
@@ -136,6 +142,8 @@ test("player fetch response is consumed without a duplicate timedtext request", 
     fetchCalls.push(String(url));
     return {
       ok: true,
+      status: 200,
+      headers: { get: (name) => name === "content-type" ? "application/json" : null },
       text: async () => body,
       clone: () => ({ text: async () => body })
     };
@@ -160,6 +168,25 @@ test("player fetch response is consumed without a duplicate timedtext request", 
   const cuePosts = posts.filter((entry) => entry.type === "cues");
   assert.equal(cuePosts.length, 1, JSON.stringify(posts));
   assert.equal(cuePosts[0].cues[0].text, "caption returned to the player");
+  const responseDiagnostic = posts.find(
+    (entry) => entry.type === "diagnostic" && entry.event === "player-timedtext-response"
+  );
+  assert.deepEqual(
+    {
+      transport: responseDiagnostic && responseDiagnostic.data.transport,
+      method: responseDiagnostic && responseDiagnostic.data.method,
+      status: responseDiagnostic && responseDiagnostic.data.status,
+      contentType: responseDiagnostic && responseDiagnostic.data.contentType,
+      responseChars: responseDiagnostic && responseDiagnostic.data.responseChars
+    },
+    {
+      transport: "fetch",
+      method: "GET",
+      status: 200,
+      contentType: "application/json",
+      responseChars: body.length
+    }
+  );
 
   vm.runInContext(`
     messageListener({
@@ -216,6 +243,8 @@ test("empty player URL is quarantined until the player rotates it", async () => 
     const body = value.includes("pot=fresh") ? json3("recovered timeline") : "";
     return {
       ok: true,
+      status: 200,
+      headers: { get: () => body ? "application/json" : "text/html" },
       text: async () => body,
       clone: () => ({ text: async () => body })
     };
@@ -266,4 +295,67 @@ test("empty player URL is quarantined until the player rotates it", async () => 
   assert.equal(cuePosts.length, 1, JSON.stringify(posts));
   assert.equal(cuePosts[0].nonce, 22);
   assert.equal(cuePosts[0].cues[0].text, "recovered timeline");
+});
+
+test("an aborted player request cannot quarantine a source before its valid peer completes", async () => {
+  const listeners = new Map();
+  const posts = [];
+  const body = json3("valid peer response");
+  let requestCount = 0;
+  const context = {
+    URL,
+    AbortController,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "abcdefghijk",
+      isAllowedTimedtextUrl: (url) =>
+        String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    XMLHttpRequest: function XMLHttpRequest() {},
+    performance: { getEntriesByType: () => [] },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {}
+  };
+  context.XMLHttpRequest.prototype.open = function open() {};
+  context.XMLHttpRequest.prototype.send = function send() {};
+  context.window = context;
+  context.addEventListener = (type, callback) => listeners.set(type, callback);
+  context.postMessage = (message) => posts.push(message);
+  context.fetch = async () => {
+    requestCount++;
+    const aborted = requestCount === 1;
+    const responseBody = aborted ? "" : body;
+    return {
+      ok: !aborted,
+      status: aborted ? 0 : 200,
+      headers: { get: () => aborted ? "" : "application/json" },
+      text: async () => responseBody,
+      clone: () => ({ text: async () => responseBody })
+    };
+  };
+
+  vm.createContext(context);
+  vm.runInContext(injectSource, context);
+  context.messageListener = listeners.get("message");
+  context.playerUrl =
+    "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en&kind=asr&fmt=json3&pot=fresh";
+  await vm.runInContext(`
+    messageListener({
+      source: window,
+      origin: location.origin,
+      data: { source: "ytds-content", type: "config", nonce: 31 }
+    });
+    Promise.all([window.fetch(playerUrl), window.fetch(playerUrl)]);
+  `, context);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(posts.some((entry) => entry.type === "nocues"), false, JSON.stringify(posts));
+  const cuePosts = posts.filter((entry) => entry.type === "cues");
+  assert.equal(cuePosts.length, 1, JSON.stringify(posts));
+  assert.equal(cuePosts[0].cues[0].text, "valid peer response");
 });

@@ -294,11 +294,37 @@
     });
   }
 
-  function consumePlayerTimedtext(url, text, revision) {
+  function consumePlayerTimedtext(url, text, revision, responseMeta) {
     if (!sourceStillCurrent(url, revision)) return;
     awaitingPlayerResponseUrl = "";
     clearPlayerResponseTimer();
     const body = typeof text === "string" ? text : "";
+    const meta = responseMeta && typeof responseMeta === "object" ? responseMeta : {};
+    const status = Number.isFinite(Number(meta.status)) ? Number(meta.status) : 0;
+    postDiagnostic("player-timedtext-response", {
+      sourceRevision: revision,
+      transport: String(meta.transport || "unknown"),
+      method: String(meta.method || "GET").slice(0, 12),
+      status,
+      contentType: String(meta.contentType || "").slice(0, 120),
+      responseChars: body.length,
+      elapsedMs: Math.max(0, Math.round(Number(meta.elapsedMs) || 0))
+    });
+    // XHR reports status 0 when YouTube aborts an in-flight caption request
+    // during player state changes. That is not an HTTP empty response and must
+    // not quarantine the URL or consume its one fresh-source recovery. Another
+    // request for the same track commonly completes moments later.
+    if (status <= 0) {
+      postDiagnostic("cue-fetch-error", {
+        fetchNonce: reqNonce,
+        sourceRevision: revision,
+        detail: "player timedtext transport incomplete",
+        responseOrigin: "player",
+        transient: true
+      });
+      if (capturedPlayerCuesUrl !== url) awaitPlayerResponse(url, revision);
+      return;
+    }
     if (!body) {
       postDiagnostic("cue-fetch-error", {
         fetchNonce: reqNonce,
@@ -427,7 +453,7 @@
   }
 
   // Record a timedtext URL seen on the wire.
-  function noteTimedtext(url, expectPlayerResponse) {
+  function noteTimedtext(url, expectPlayerResponse, captureMeta) {
     try {
       if (!isTimedtext(url)) return;
       if (isInternalTimedtext(url)) return;
@@ -456,7 +482,9 @@
             sourceRevision,
             sourceVideoMatches: sourceVid === currentVideoId,
             trackKind: trackKindOf(url),
-            sourceLang: trackLanguageOf(url)
+            sourceLang: trackLanguageOf(url),
+            transport: String(captureMeta && captureMeta.transport || "observer"),
+            method: String(captureMeta && captureMeta.method || "GET").slice(0, 12)
           });
           onSourceCaptured(!!expectPlayerResponse);
         } else if (expectPlayerResponse && cfg) {
@@ -569,7 +597,10 @@
     const origSend = XHR.send;
 
     XHR.open = function (method, url) {
-      try { this.__ytdsUrl = url; } catch (_e) { /* ignore */ }
+      try {
+        this.__ytdsUrl = url;
+        this.__ytdsMethod = String(method || "GET").toUpperCase();
+      } catch (_e) { /* ignore */ }
       return origOpen.apply(this, arguments);
     };
 
@@ -577,7 +608,9 @@
       try {
         const url = this.__ytdsUrl;
         if (isTimedtext(url) && !hasTlang(url) && !isInternalTimedtext(url)) {
-          noteTimedtext(url, true);
+          const method = this.__ytdsMethod || "GET";
+          const startedAt = Date.now();
+          noteTimedtext(url, true, { transport: "xhr", method });
           const revision = sourceRevision;
           if (typeof this.addEventListener === "function") {
             this.addEventListener("loadend", () => {
@@ -585,7 +618,14 @@
                 let text = "";
                 if (!this.responseType || this.responseType === "text") text = this.responseText || "";
                 else if (this.responseType === "json") text = JSON.stringify(this.response || null);
-                consumePlayerTimedtext(String(url), text, revision);
+                consumePlayerTimedtext(String(url), text, revision, {
+                  transport: "xhr",
+                  method,
+                  status: Number(this.status) || 0,
+                  contentType: typeof this.getResponseHeader === "function"
+                    ? this.getResponseHeader("content-type") || "" : "",
+                  elapsedMs: Date.now() - startedAt
+                });
               } catch (_e) { playerResponseUnavailable(String(url), revision); }
             }, { once: true });
           } else {
@@ -605,11 +645,17 @@
         let url = "";
         let watchesPlayerResponse = false;
         let revision = 0;
+        let method = "GET";
+        const startedAt = Date.now();
         try {
           if (typeof input === "string") url = input;
-          else if (input && typeof input.url === "string") url = input.url;
+          else if (input && typeof input.url === "string") {
+            url = input.url;
+            if (input.method) method = String(input.method).toUpperCase();
+          }
+          if (init && init.method) method = String(init.method).toUpperCase();
           watchesPlayerResponse = isTimedtext(url) && !hasTlang(url) && !isInternalTimedtext(url);
-          noteTimedtext(url, watchesPlayerResponse);
+          noteTimedtext(url, watchesPlayerResponse, { transport: "fetch", method });
           revision = sourceRevision;
         } catch (_e) { /* ignore */ }
         const result = origFetch.apply(this, arguments);
@@ -621,7 +667,14 @@
                 return;
               }
               response.clone().text().then(
-                (text) => consumePlayerTimedtext(String(url), text, revision),
+                (text) => consumePlayerTimedtext(String(url), text, revision, {
+                  transport: "fetch",
+                  method,
+                  status: Number(response.status) || 0,
+                  contentType: response.headers && typeof response.headers.get === "function"
+                    ? response.headers.get("content-type") || "" : "",
+                  elapsedMs: Date.now() - startedAt
+                }),
                 () => playerResponseUnavailable(String(url), revision)
               );
             } catch (_e) { playerResponseUnavailable(String(url), revision); }
@@ -642,7 +695,7 @@
     const scan = (entries) => {
       for (const e of entries) {
         if (e && typeof e.name === "string" && isTimedtext(e.name)) {
-          noteTimedtext(e.name);
+          noteTimedtext(e.name, false, { transport: "resource", method: "GET" });
         }
       }
     };

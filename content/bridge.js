@@ -11,6 +11,7 @@ const INJECT_DIAGNOSTIC_EVENTS = new Set([
   "cue-fetch-success",
   "cue-fetch-empty",
   "cue-fetch-error",
+  "player-timedtext-response",
   "timedtext-watchdog-expired"
 ]);
 
