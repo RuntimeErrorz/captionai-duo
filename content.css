@@ -90,29 +90,46 @@ html.ytds-active .caption-window {
 
 /* ---- draggable handle -------------------------------------------------- */
 /* The overlay itself stays pointer-events:none so the player keeps receiving
-   clicks; only this small grip is interactive. It sits at the overlay's
-   top-left corner, faint until the pointer is near the player/overlay. */
+   clicks. The handle uses a 44px target around a compact 24px visual grip:
+   easier to grab without making the control cover the subtitles. It only
+   becomes interactive while visible, so its transparent target cannot steal
+   player clicks after YouTube auto-hides the controls. */
 .ytds-handle {
   position: absolute;
-  top: -11px;
-  left: -11px;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(8, 8, 8, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  top: -22px;
+  left: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #fff;
   display: grid;
   place-items: center;
   cursor: move;
-  pointer-events: auto;        /* the ONE interactive child */
+  pointer-events: none;        /* enabled together with visibility below */
   opacity: 0;
   transition: opacity .15s ease;
   touch-action: none;          /* let pointer drag work without scroll/zoom */
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
   z-index: 1;
 }
-.ytds-handle svg { width: 13px; height: 13px; display: block; pointer-events: none; }
+.ytds-handle::before {
+  content: "";
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  background: rgba(8, 8, 8, 0.75);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+.ytds-handle svg {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  display: block;
+  pointer-events: none;
+}
 
 /* Discoverable when the player's control bar is visible. We gate on
    :not(.ytp-autohide): YouTube adds .ytp-autohide to the player whenever it
@@ -126,5 +143,7 @@ html.ytds-active .caption-window {
 .html5-video-player:not(.ytp-autohide):hover #ytds-overlay .ytds-handle,
 .ytds-handle.ytds-dragging {
   opacity: .9;
+  pointer-events: auto;
 }
-.ytds-handle:hover { background: rgba(20, 20, 20, 0.9); }
+.ytds-handle:hover::before,
+.ytds-handle.ytds-dragging::before { background: rgba(20, 20, 20, 0.9); }

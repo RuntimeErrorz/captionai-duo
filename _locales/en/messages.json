@@ -49,7 +49,7 @@
   "tokenInput": { "message": "Input" },
   "tokenOutput": { "message": "Output" },
   "tokenCacheHit": { "message": "Cache hit" },
-  "tokenCacheMiss": { "message": "Cache miss" },
+  "tokenCacheMiss": { "message": "Miss" },
   "tokenReasoning": { "message": "Reasoning" },
   "tokenRequests": { "message": "API responses" },
   "secDebug": { "message": "Diagnostic log" },

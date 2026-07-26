@@ -513,7 +513,7 @@ input:disabled {
 .text-action:hover { color: var(--danger); }
 .token-summary {
   display: grid;
-  grid-template-columns: 70px minmax(0, 1fr);
+  grid-template-columns: 80px minmax(0, 1fr);
   align-items: stretch;
   gap: 7px;
 }
@@ -558,7 +558,7 @@ input:disabled {
 }
 .token-grid b {
   flex: none;
-  max-width: 42px;
+  max-width: 48px;
   overflow: hidden;
   color: var(--text);
   font-size: 11.5px;

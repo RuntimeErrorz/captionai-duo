@@ -49,7 +49,7 @@
   "tokenInput": { "message": "输入" },
   "tokenOutput": { "message": "输出" },
   "tokenCacheHit": { "message": "缓存命中" },
-  "tokenCacheMiss": { "message": "缓存未命中" },
+  "tokenCacheMiss": { "message": "未命中" },
   "tokenReasoning": { "message": "推理" },
   "tokenRequests": { "message": "API 响应" },
   "secDebug": { "message": "诊断日志" },
