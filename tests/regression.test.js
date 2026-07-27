@@ -104,6 +104,11 @@ assert.equal(typeof shared.displayPageAssignments, "function");
 assert.equal(typeof shared.semanticDisplayPlan, "function");
 assert.equal(typeof shared.shouldBridgeSemanticCueGap, "function");
 assert.equal(typeof shared.semanticDisplayClusters, "function");
+assert.equal(shared.resolveFullscreenState(true, {}, false), true);
+assert.equal(shared.resolveFullscreenState(true, null, true), false,
+  "native fullscreen exit must win over a stale YouTube fullscreen class");
+assert.equal(shared.resolveFullscreenState(false, null, true), true,
+  "the player class remains a fallback when the native API is unavailable");
 assert.equal(typeof shared.semanticUnitsFromAlignedChunks, "function");
 assert.equal(typeof shared.semanticBatchWindows, "function");
 assert.equal(typeof shared.semanticPrefetchBatchStarts, "function");

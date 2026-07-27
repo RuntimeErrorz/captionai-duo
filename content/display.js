@@ -33,8 +33,7 @@ function measureDisplayText(text, original) {
   if (!captionSession.displayMeasureCanvas) captionSession.displayMeasureCanvas = document.createElement("canvas");
   const context = captionSession.displayMeasureCanvas.getContext("2d");
   if (!context) return String(text || "").length * 12;
-  const fullscreen = !!document.fullscreenElement ||
-    !!(getPlayer() && getPlayer().classList.contains("ytp-fullscreen"));
+  const fullscreen = isPlayerFullscreen();
   const size = original
     ? (fullscreen ? settings.origFullscreenSize : settings.origSize)
     : (fullscreen ? settings.transFullscreenSize : settings.transSize);

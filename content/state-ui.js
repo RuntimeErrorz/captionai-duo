@@ -271,6 +271,15 @@ function getPlayer() {
          document.querySelector(".html5-video-player");
 }
 
+function isPlayerFullscreen() {
+  const player = getPlayer();
+  return YTDS_SHARED.resolveFullscreenState(
+    "fullscreenElement" in document,
+    document.fullscreenElement,
+    !!(player && player.classList.contains("ytp-fullscreen"))
+  );
+}
+
 function getVideo() {
   const p = getPlayer();
   return (p && p.querySelector("video")) ||
@@ -460,7 +469,7 @@ function styleOverlay() {
 
   // original line
   origEl.style.fontFamily = fontStack(settings.origFont);
-  const fullscreen = !!document.fullscreenElement || !!(getPlayer() && getPlayer().classList.contains("ytp-fullscreen"));
+  const fullscreen = isPlayerFullscreen();
   origEl.style.fontSize = (fullscreen ? settings.origFullscreenSize : settings.origSize) + "px";
   origEl.style.color = settings.origColor;
   const origBg = rgba(settings.origBg, settings.origBgOpacity);

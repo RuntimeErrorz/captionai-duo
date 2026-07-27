@@ -7,6 +7,11 @@
   const { mergeTimedCueTexts, joinTranslatedParts } = internal;
   const SEMANTIC_DISPLAY_CONTIGUITY_TOLERANCE_MS = 80;
 
+  function resolveFullscreenState(nativeApiAvailable, fullscreenElement, playerClassFullscreen) {
+    // YouTube may remove its class after fullscreenchange; native state is authoritative.
+    return nativeApiAvailable ? !!fullscreenElement : !!playerClassFullscreen;
+  }
+
   function alignedChunkDisplayPlan(
     chunksValue, maxSourceWidthValue, maxTranslationWidthValue,
     measureSource, measureTranslation, targetLang, sourceLocale
@@ -601,5 +606,5 @@
     }));
   }
 
-  Object.assign(internal, { alignedChunkDisplayPlan, displayProtectedRanges, splitTextForDisplay, splitAlignedSentencesForDisplay, displayPageAssignments, sourceRangeForDisplayMember, semanticDisplayPlan, shouldBridgeSemanticCueGap, semanticDisplayClusters });
+  Object.assign(internal, { resolveFullscreenState, alignedChunkDisplayPlan, displayProtectedRanges, splitTextForDisplay, splitAlignedSentencesForDisplay, displayPageAssignments, sourceRangeForDisplayMember, semanticDisplayPlan, shouldBridgeSemanticCueGap, semanticDisplayClusters });
 })();
