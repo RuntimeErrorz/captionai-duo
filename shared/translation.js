@@ -107,6 +107,232 @@
     return { lines, rest };
   }
 
+  // HTTP/SSE chunks and model-generated newlines are independent of JSON
+  // object boundaries. Frame complete top-level JSON values instead of
+  // assuming that every physical line is a complete JSON value. Arrays are
+  // deliberately returned as one candidate and rejected by the record
+  // validator; nested objects must not be mistaken for JSONL records.
+  function aiJsonlObjects(value, flush) {
+    const input = String(value || "");
+    const objects = [];
+    let cursor = 0;
+    let start = -1;
+    const brackets = [];
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < input.length; index++) {
+      const char = input[index];
+      if (start < 0) {
+        if (char === "{" || char === "[") {
+          start = index;
+          brackets.push(char);
+          inString = false;
+          escaped = false;
+        }
+        continue;
+      }
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+      } else if (char === "{" || char === "[") {
+        brackets.push(char);
+      } else if (char === "}" || char === "]") {
+        const opening = char === "}" ? "{" : "[";
+        if (brackets[brackets.length - 1] === opening) brackets.pop();
+        if (!brackets.length) {
+          objects.push(input.slice(start, index + 1));
+          cursor = index + 1;
+          start = -1;
+        }
+      }
+    }
+    let rest = start >= 0 ? input.slice(start) : input.slice(cursor);
+    if (flush) {
+      const tail = rest.trim();
+      const recovered = aiJsonlRecoverIncompleteUnit(tail);
+      if (recovered) {
+        objects.push(recovered);
+      } else if (tail && !/^```(?:jsonl?|ndjson)?$/i.test(tail) && tail !== "```") {
+        objects.push(tail);
+      }
+      rest = "";
+    }
+    return { objects, rest };
+  }
+
+  function jsonStringEnd(value, start) {
+    const text = String(value || "");
+    if (text[start] !== '"') return -1;
+    let escaped = false;
+    for (let index = start + 1; index < text.length; index++) {
+      const char = text[index];
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') return index + 1;
+    }
+    return -1;
+  }
+
+  function jsonValueEnd(value, start) {
+    const text = String(value || "");
+    const first = text[start];
+    if (first === '"') return jsonStringEnd(text, start);
+    if (first !== "{" && first !== "[") {
+      let index = start;
+      while (index < text.length && !/[\s,}\]]/.test(text[index])) index++;
+      return index > start ? index : -1;
+    }
+    const brackets = [first];
+    let inString = false;
+    let escaped = false;
+    for (let index = start + 1; index < text.length; index++) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === "{" || char === "[") brackets.push(char);
+      else if (char === "}" || char === "]") {
+        const opening = char === "}" ? "{" : "[";
+        if (brackets[brackets.length - 1] !== opening) return -1;
+        brackets.pop();
+        if (!brackets.length) return index + 1;
+      }
+    }
+    return -1;
+  }
+
+  function jsonTopLevelProperty(value, property) {
+    const text = String(value || "").trimStart();
+    if (text[0] !== "{") return null;
+    const brackets = ["{"];
+    let inString = false;
+    let escaped = false;
+    for (let index = 1; index < text.length; index++) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        const end = jsonStringEnd(text, index);
+        if (end < 0) return null;
+        let cursor = end;
+        while (/\s/.test(text[cursor] || "")) cursor++;
+        if (brackets.length === 1 && text[cursor] === ":") {
+          let valueStart = cursor + 1;
+          while (/\s/.test(text[valueStart] || "")) valueStart++;
+          let key = "";
+          try { key = JSON.parse(text.slice(index, end)); } catch (_e) { /* ignore */ }
+          if (key === property) return { valueStart };
+        }
+        index = end - 1;
+      } else if (char === "{" || char === "[") {
+        brackets.push(char);
+      } else if (char === "}" || char === "]") {
+        const opening = char === "}" ? "{" : "[";
+        if (brackets[brackets.length - 1] !== opening) return null;
+        brackets.pop();
+        if (!brackets.length) break;
+      }
+    }
+    return null;
+  }
+
+  // Providers sometimes put an entire long semantic response in one outer
+  // unit, even though its inner alignment chunks are already complete. Expose
+  // only those complete chunk objects while the outer unit is still streaming;
+  // the background observer validates their ordered IDs before publishing.
+  function aiJsonlAlignedChunkPrefix(value) {
+    const text = String(value || "").trimStart();
+    const typeProperty = jsonTopLevelProperty(text, "type");
+    const chunksProperty = jsonTopLevelProperty(text, "chunks");
+    if (!typeProperty || !chunksProperty || text[chunksProperty.valueStart] !== "[") {
+      return { chunks: [] };
+    }
+    const typeEnd = jsonValueEnd(text, typeProperty.valueStart);
+    if (typeEnd < 0) return { chunks: [] };
+    let type = "";
+    try { type = JSON.parse(text.slice(typeProperty.valueStart, typeEnd)); } catch (_e) { return { chunks: [] }; }
+    if (type !== "unit") return { chunks: [] };
+
+    const chunks = [];
+    let cursor = chunksProperty.valueStart + 1;
+    while (cursor < text.length) {
+      while (/\s/.test(text[cursor] || "")) cursor++;
+      if (text[cursor] === "]") break;
+      if (text[cursor] !== "{") break;
+      const end = jsonValueEnd(text, cursor);
+      if (end < 0) break;
+      try {
+        const chunk = JSON.parse(text.slice(cursor, end));
+        if (!chunk || typeof chunk !== "object" || Array.isArray(chunk)) break;
+        chunks.push(chunk);
+      } catch (_e) { break; }
+      cursor = end;
+      while (/\s/.test(text[cursor] || "")) cursor++;
+      if (text[cursor] === ",") cursor++;
+      else if (text[cursor] !== "]") break;
+    }
+    return { chunks };
+  }
+
+  // Some providers occasionally stop after the final aligned chunk and omit
+  // the outer `]}` (or append a truncated done object). The chunks before the
+  // missing wrapper are still complete JSON values. Recover only that narrow
+  // shape and only from a complete chunk boundary; arbitrary malformed output
+  // remains rejected by the normal record validator.
+  function aiJsonlRecoverIncompleteUnit(value) {
+    let text = String(value || "").trim();
+    if (!/^\{\s*"type"\s*:\s*"unit"\s*,\s*"chunks"\s*:\s*\[/i.test(text)) return "";
+    const doneMarker = text.search(/\n\s*\{\s*"type"\s*:\s*"done"/i);
+    if (doneMarker >= 0) text = text.slice(0, doneMarker).trimEnd();
+    const brackets = [];
+    let inString = false;
+    let escaped = false;
+    let lastChunkEnd = -1;
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+      } else if (char === "{" || char === "[") {
+        brackets.push(char);
+      } else if (char === "}" || char === "]") {
+        const opening = char === "}" ? "{" : "[";
+        if (brackets[brackets.length - 1] !== opening) return "";
+        if (opening === "{" && brackets.length === 3 &&
+            brackets[0] === "{" && brackets[1] === "[") {
+          lastChunkEnd = index + 1;
+        }
+        brackets.pop();
+      }
+    }
+    if (lastChunkEnd < 0) return "";
+    try {
+      const parsed = JSON.parse(`${text.slice(0, lastChunkEnd)}]}`);
+      if (parsed && parsed.type === "unit" && Array.isArray(parsed.chunks) && parsed.chunks.length) {
+        return JSON.stringify(parsed);
+      }
+    } catch (_e) { /* the last complete chunk may still have malformed data */ }
+    return "";
+  }
+
   function aiJsonlRecordFromLine(value) {
     const line = String(value || "").trim();
     if (!line || /^```(?:jsonl?|ndjson)?$/i.test(line) || line === "```") {
@@ -195,7 +421,13 @@
     const durationMs = Number(lastItem.endMs) - Number(firstItem.startMs);
     const sourceChars = state.items.slice(state.cursor, state.cursor + ids.length)
       .reduce((sum, item) => sum + String(item && item.text || "").length, 0);
-    if (ids.length > 1 &&
+    // A large outer unit is safe to carry when the model supplied multiple
+    // ordered alignment chunks: the caller can promote those chunks to
+    // smaller commit units at the maximum rolling window, and the renderer
+    // can paginate the chunks without inventing a boundary. Keep the safety
+    // ceiling for a monolithic unit, where there is no trustworthy recovery
+    // boundary and an over-merged response must still be rejected.
+    if (ids.length > 1 && alignedChunks.length <= 1 &&
         ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
       return reject(`oversized JSONL unit ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
     }
@@ -209,6 +441,43 @@
     state.translations.push(...translations);
     state.cursor += ids.length;
     return { ok: true, type: "unit", unitId, ids, translations };
+  }
+
+  // When a provider puts several complete alignment chunks inside one outer
+  // unit, a later chunk can still contain a missing or invented id. Preserve
+  // only the strictly ordered leading chunks so the next rolling request can
+  // resume at the first missing id. Never split a chunk or skip the mismatch.
+  function aiJsonlLeadingRecordPrefix(stateValue, recordValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const record = recordValue && typeof recordValue === "object" ? recordValue : null;
+    if (!state || !Array.isArray(state.items) || !Array.isArray(state.expected) ||
+        !record || record.type !== "unit" || !Array.isArray(record.chunks)) return null;
+    const chunks = [];
+    let offset = state.cursor;
+    for (const chunk of record.chunks) {
+      const ids = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
+      const translation = normalizeTranslatedText(chunk && chunk.translation);
+      if (!ids.length || !translation) break;
+      let valid = true;
+      for (let index = 0; index < ids.length; index++) {
+        if (ids[index] !== state.expected[offset + index]) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid) break;
+      for (let index = offset; index < offset + ids.length - 1; index++) {
+        if (state.items[index] && state.items[index].hardAfter) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid) break;
+      chunks.push({ ids, translation });
+      offset += ids.length;
+    }
+    if (!chunks.length || chunks.length >= record.chunks.length) return null;
+    return { type: "unit", chunks };
   }
 
   function rewindAiJsonlOverlappingUnit(stateValue, recordValue) {
@@ -478,5 +747,5 @@
     return translations;
   }
 
-  Object.assign(internal, { jsonObjectFromText, normalizeTranslatedText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+  Object.assign(internal, { jsonObjectFromText, normalizeTranslatedText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlObjects, aiJsonlAlignedChunkPrefix, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();

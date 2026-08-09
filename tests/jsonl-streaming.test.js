@@ -29,6 +29,22 @@ function sampleItems() {
   ];
 }
 
+test("accelerated JSONL publishes a complete unit before the next unit arrives", () => {
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  }, { requestClass: "urgent" });
+
+  const status = observer.onTextDelta(
+    '{"type":"unit","chunks":[{"ids":["0","1"],"translation":"已完成"}]}\\n',
+    false
+  );
+
+  assert.equal(status.stop, false);
+  assert.deepEqual(progress, [["0", "1"]]);
+  assert.equal(observer.result(true).length, 2);
+});
+
 test("JSONL line buffering survives arbitrary network splits", () => {
   const first = shared.aiJsonlLines('{"type":"unit","chunks":[{"ids":["0"],', false);
   assert.equal(first.lines.length, 0);
@@ -40,6 +56,36 @@ test("JSONL line buffering survives arbitrary network splits", () => {
   assert.equal(second.lines.length, 2);
   assert.equal(shared.aiJsonlRecordFromLine(second.lines[0]).record.type, "unit");
   assert.equal(shared.aiJsonlRecordFromLine(second.lines[1]).record.type, "done");
+});
+
+test("JSONL object framing survives pretty printing and arbitrary object splits", () => {
+  const first = shared.aiJsonlObjects(
+    '```jsonl\n{\n  "type": "unit",\n  "chunks": [{"ids":["0"],', false
+  );
+  assert.equal(first.objects.length, 0);
+  const second = shared.aiJsonlObjects(
+    first.rest + '\n  "translation": "complete"}]\n}\n{"type":"done"}\n```', true
+  );
+  assert.equal(second.rest, "");
+  assert.equal(second.objects.length, 2);
+  assert.equal(shared.aiJsonlRecordFromLine(second.objects[0]).record.type, "unit");
+  assert.equal(shared.aiJsonlRecordFromLine(second.objects[1]).record.type, "done");
+
+  const wrapped = shared.aiJsonlObjects('[{"type":"done"}]', true);
+  assert.equal(wrapped.objects.length, 1);
+  assert.match(shared.aiJsonlRecordFromLine(wrapped.objects[0]).error, /not an object/);
+});
+
+test("JSONL framing recovers a complete unit when only its outer wrapper is truncated", () => {
+  const recovered = shared.aiJsonlObjects(
+    '{"type":"unit","chunks":[{"ids":["0"],"translation":"complete"}\n{"type":"done"}',
+    true
+  );
+  assert.equal(recovered.rest, "");
+  assert.equal(recovered.objects.length, 1);
+  const decoded = shared.aiJsonlRecordFromLine(recovered.objects[0]);
+  assert.equal(decoded.record.type, "unit");
+  assert.deepEqual(Array.from(decoded.record.chunks[0].ids), ["0"]);
 });
 
 test("legacy enumerated done is recognized before its numeric list is generated", () => {
@@ -87,6 +133,48 @@ test("JSONL translations remove every Chinese full stop before caching", () => {
   assert.equal(accepted.ok, true);
   assert.equal(accepted.translations[0].translation, "第一句第二句真的吗？");
   assert.equal(accepted.translations[0].alignedChunks[0].translation, "第一句第二句真的吗？");
+});
+
+test("JSONL keeps oversized units when multiple aligned chunks provide recovery boundaries", () => {
+  const items = Array.from({ length: 160 }, (_value, id) => ({
+    id: String(id),
+    text: `source-${id}`,
+    startMs: id * 500,
+    endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [
+      { ids: items.slice(0, 80).map((item) => item.id), translation: "前半" },
+      { ids: items.slice(80).map((item) => item.id), translation: "后半" }
+    ]
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.translations.length, 160);
+  assert.equal(accepted.translations[0].alignedChunks.length, 2);
+  assert.equal(state.cursor, 160);
+});
+
+test("JSONL still rejects an oversized monolithic unit without alignment boundaries", () => {
+  const items = Array.from({ length: 160 }, (_value, id) => ({
+    id: String(id),
+    text: `source-${id}`,
+    startMs: id * 500,
+    endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const rejected = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [{ ids: items.map((item) => item.id), translation: "整个大单元" }]
+  });
+
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /oversized JSONL unit/);
+  assert.equal(state.cursor, 0);
 });
 
 test("JSONL state rejects reordered ids, hard-boundary crossings and records after done", () => {
@@ -151,6 +239,77 @@ test("a malformed tail preserves every previously valid JSONL unit", () => {
   assert.match(partial.streamError, /unexpected JSONL id/);
 });
 
+test("the stream keeps complete leading alignment chunks before a missing id", () => {
+  const items = Array.from({ length: 6 }, (_value, id) => ({
+    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
+  const status = observer.onTextDelta(JSON.stringify({
+    type: "unit",
+    chunks: [
+      { ids: ["0", "1"], translation: "complete prefix" },
+      { ids: ["3", "4", "5"], translation: "skipped token" }
+    ]
+  }), true);
+
+  assert.equal(status.stop, true);
+  assert.equal(observer.result(false), null);
+  const partial = observer.result(true);
+  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["0", "1"]);
+  assert.deepEqual(Array.from(partial.deferredIds), ["2", "3", "4", "5"]);
+  assert.match(partial.streamError, /unexpected JSONL id/);
+});
+
+test("an invalid JSONL tail publishes its safe leading prefix immediately", () => {
+  const items = Array.from({ length: 6 }, (_value, id) => ({
+    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  });
+
+  const status = observer.onTextDelta(JSON.stringify({
+    type: "unit",
+    chunks: [
+      { ids: ["0", "1"], translation: "safe prefix" },
+      { ids: ["3", "4"], translation: "missing token" }
+    ]
+  }), true);
+
+  assert.equal(status.stop, true);
+  assert.deepEqual(progress, [["0", "1"]]);
+  assert.deepEqual(Array.from(observer.result(true), (item) => String(item.id)), ["0", "1"]);
+});
+
+test("aligned chunks stream before a giant outer unit closes", () => {
+  const items = Array.from({ length: 8 }, (_value, id) => ({
+    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const chunks = [
+    { ids: ["0", "1"], translation: "前半" },
+    { ids: ["2", "3"], translation: "中段" },
+    { ids: ["4", "5", "6", "7"], translation: "后半" }
+  ];
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  });
+  const openOuterUnit = `{"type":"unit","chunks":${JSON.stringify(chunks.slice(0, 2)).slice(0, -1)}`;
+  assert.equal(observer.onTextDelta(openOuterUnit, false).stop, false);
+  assert.deepEqual(progress, [["0", "1"], ["2", "3"]]);
+
+  const closing = `,${JSON.stringify(chunks[2])}]}\n{"type":"done"}\n`;
+  assert.equal(observer.onTextDelta(closing, true).stop, false);
+  const result = observer.result(false);
+  assert.equal(result.length, 8);
+  assert.deepEqual(Array.from(result, (item) => String(item.id)),
+    items.map((item) => item.id));
+});
+
 test("a repeated-id correction cannot publish the incomplete unit it revises", () => {
   const items = Array.from({ length: 6 }, (_value, id) => ({
     id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
@@ -180,6 +339,37 @@ test("a repeated-id correction cannot publish the incomplete unit it revises", (
   assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["0"]);
   assert.deepEqual(Array.from(partial.deferredIds), ["1", "2", "3", "4", "5"]);
   assert.match(partial.streamError, /unexpected JSONL id/);
+});
+
+test("the stream observer accepts multiline JSON objects without a fallback error", () => {
+  const items = sampleItems().slice(0, 2);
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
+  const payload = [
+    "{",
+    '  "type": "unit",',
+    '  "chunks": [{"ids":["0","1"],"translation":"complete"}]',
+    "}",
+    '{"type":"done"}'
+  ].join("\n");
+  for (let index = 0; index < payload.length; index += 7) {
+    const status = observer.onTextDelta(payload.slice(index, index + 7), false);
+    assert.equal(status.stop, false);
+  }
+  const result = observer.onTextDelta("\n", true);
+  assert.equal(result.stop, false);
+  assert.equal(observer.result(false).length, 2);
+});
+
+test("the stream observer ignores a truncated done tail after complete coverage", () => {
+  const items = sampleItems().slice(0, 2);
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
+  const payload = [
+    '{"type":"unit","chunks":[{"ids":["0","1"],"translation":"complete"}]}',
+    '{"type":"done"'
+  ].join("\n");
+  const result = observer.onTextDelta(payload, true);
+  assert.equal(result.stop, false);
+  assert.equal(observer.result(false).length, 2);
 });
 
 test("JSONL structural validation does not reject natural numeric wording", () => {

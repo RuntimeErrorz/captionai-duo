@@ -403,14 +403,20 @@
     const targetThrough = Number.isFinite(target) ? Math.max(requestStart - 1, target) : requestStart - 1;
     const targetItems = Math.max(0, targetThrough - requestStart + 1) +
       guardItems + urgentTargetTailItems;
+    // A speculative continuation may have enlarged windowItems while the
+    // player was elsewhere. Keep urgent work bounded around its visible
+    // target; an explicit guard-recovery expansion is marked by the content
+    // owner and is allowed to use that larger window.
+    const urgentWindowItems = urgent
+      ? (state && state.recoveryWindowItems
+        ? windowItems : Math.min(windowItems, initialUrgentItems))
+      : windowItems;
     const effectiveMaxItems = urgent
-      ? Math.min(maxItems, Math.max(windowItems, initialUrgentItems, targetItems))
+      ? Math.min(maxItems, Math.max(urgentWindowItems, targetItems))
       : maxItems;
     return {
       targetThrough,
-      // windowItems is also the adaptive recovery size. Never clamp it back to
-      // the cold-start size after a guard-crossing unit requested expansion.
-      itemCount: Math.min(effectiveMaxItems, Math.max(windowItems, targetItems))
+      itemCount: Math.min(effectiveMaxItems, Math.max(urgentWindowItems, targetItems))
     };
   }
 

@@ -78,10 +78,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: "invalid translation batch" });
       return;
     }
+    const endpointKind = msg.endpointKind === "deepseek" ? "deepseek" : "compatible";
     let release;
-    try { release = acquireDeepSeekSlot(sender, !!msg.urgent); }
+    try { release = acquireDeepSeekSlot(sender, !!msg.urgent, endpointKind); }
     catch (err) {
-      persistAiStatus("limited", err.message);
+      const localBackpressure = !!(err && err.rateLimited &&
+        err.limitReason === "local-concurrency");
+      const backgroundRateLimit = !msg.urgent && !!(err && err.rateLimited) &&
+        !localBackpressure;
+      if (!localBackpressure && !backgroundRateLimit) persistAiStatus("limited", err.message);
       sendResponse({
         ok: false,
         error: String(err),
@@ -108,8 +113,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       repair: !!msg.repair,
       bypassCache: !!msg.bypassCache,
       urgent: !!msg.urgent,
+      fastPath: !!msg.fastPath,
       requestId,
-      requestClass: msg.urgent ? "urgent" : "prefetch",
+      requestClass: msg.urgent ? "urgent" : msg.fastPath ? "prefetch-fast" : "prefetch",
       focusGeneration,
       itemCount: items.length,
       sourceChars: items.reduce((sum, item) => sum + String(item.text || "").length, 0),
@@ -124,6 +130,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       {
         requestId,
         urgent: !!msg.urgent,
+        fastPath: !!msg.fastPath,
         bypassCache: !!msg.bypassCache,
         onProgress: (translations) => sendTranslationBatchProgress(sender, {
           type: "translationBatchProgress",
@@ -159,7 +166,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
       })
       .catch((err) => {
-        if (!(err && err.cancelled)) {
+        // A full local prefetch slot is ordinary scheduler backpressure, not
+        // evidence that the provider rejected the request. Keep the retry
+        // response so the content state machine can resume when a slot frees,
+        // but do not surface it as a ten-minute user-facing rate-limit status.
+        const localBackpressure = !!(err && err.rateLimited &&
+          err.limitReason === "local-concurrency");
+        const backgroundRateLimit = !msg.urgent && !!(err && err.rateLimited) &&
+          !localBackpressure;
+        if (!(err && err.cancelled) && !localBackpressure && !backgroundRateLimit) {
           persistAiStatus(err && err.needsKey ? "key" :
             err && err.timeout ? "timeout" : err && err.rateLimited ? "limited" : "error", err);
         }

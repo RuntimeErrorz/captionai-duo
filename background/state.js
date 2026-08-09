@@ -19,11 +19,16 @@ const DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS = 8000;
 const DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS = 12000;
 const DEEPSEEK_STREAM_COMPLETION_GRACE_MS = 750;
 const DEEPSEEK_MAX_ATTEMPTS = 3;
-const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 3;
+const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 12;
+const COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB = 4;
 const MAX_TRANSLATE_CHARS = 4000;
-const MAX_BATCH_ITEMS = 160;
+// Accelerated playback needs a longer semantic runway than ordinary playback.
+// Keep the normal planner cap at 160, while accepting the larger urgent window
+// that content uses at >=1.75x. The source-character and model-token bounds
+// remain independent safety limits.
+const MAX_BATCH_ITEMS = 320;
 const MAX_PROMPT_SOURCE_CHARS = 28000;
-const AI_PROMPT_CACHE_VERSION = "prompt-v25-jsonl-cursor-done";
+const AI_PROMPT_CACHE_VERSION = "prompt-v27-jsonl-cursor-done-fast-urgent-chunked";
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";
 const AI_RESPONSE_CACHE_MAX_ENTRIES = 96;
 const AI_RESPONSE_CACHE_MAX_CHARS = 2000000;
@@ -455,12 +460,15 @@ function cleanBatchItems(value) {
   return out;
 }
 
-function acquireDeepSeekSlot(sender, urgent) {
+function acquireDeepSeekSlot(sender, urgent, endpointKind) {
   const key = sender && sender.tab && Number.isInteger(sender.tab.id)
     ? `tab:${sender.tab.id}` : "extension";
   const state = deepseekActiveByTab.get(key) || { active: 0 };
+  const maxActive = endpointKind === "deepseek"
+    ? DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB
+    : COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB;
   const status = YTDS_SHARED.deepSeekConcurrencyStatus(
-    state.active, DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB, !!urgent
+    state.active, maxActive, !!urgent
   );
   if (!status.allowed) {
     const err = new Error("AI local concurrency guard busy");

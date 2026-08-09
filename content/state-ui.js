@@ -83,14 +83,24 @@ const DEEPSEEK_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boun
 const DEEPSEEK_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
 const DEEPSEEK_REQUEST_ITEMS = 80; // normal monotonic request window
 const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
-const DEEPSEEK_MAX_REQUEST_ITEMS = 160; // expansion cap for unusually long units
+const DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS = 64; // keep DeepSeek's visible stream short at >=1.75x; future runway is speculative
+const DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS = 48; // DeepSeek output is slower than playback at >=2.5x; hand off to the staged runway sooner
+const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // Gemini/OpenAI-compatible streams can fill the wider visible runway
+const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
+const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
+const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
+const DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x
 const DEEPSEEK_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
 const DEEPSEEK_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
 const DEEPSEEK_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
+const DEEPSEEK_FAST_TARGET_TAIL_ITEMS = 192; // extra runway at >=1.75x playback
+const DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS = 224; // extra runway at >=2.5x playback
 const DEEPSEEK_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
 const DEEPSEEK_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
 const DEEPSEEK_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
-const DEEPSEEK_MAX_PREFETCH_BATCHES = 10;
+const DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
+const DEEPSEEK_FAST_PREFETCH_BATCHES = 6; // maintain a deeper queue at >=1.75x
+const DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12; // maintain a deeper queue at >=2.5x
 const DEEPSEEK_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
 const DEEPSEEK_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
 const DEEPSEEK_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross

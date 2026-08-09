@@ -86,7 +86,7 @@ function startCueLoop() {
       captionSession.cueFrameId = video.requestVideoFrameCallback(onFrame);
     };
     captionSession.cueFrameId = video.requestVideoFrameCallback(onFrame);
-    for (const event of ["timeupdate", "seeking", "seeked", "play", "loadedmetadata"]) {
+    for (const event of ["timeupdate", "seeking", "seeked", "play", "ratechange", "loadedmetadata"]) {
       video.addEventListener(event, cueTick);
     }
   } else {
@@ -101,7 +101,7 @@ function stopCueLoop() {
     if (captionSession.cueFrameId != null && typeof captionSession.cueLoopVideo.cancelVideoFrameCallback === "function") {
       try { captionSession.cueLoopVideo.cancelVideoFrameCallback(captionSession.cueFrameId); } catch (_e) { /* ignore */ }
     }
-    for (const event of ["timeupdate", "seeking", "seeked", "play", "loadedmetadata"]) {
+    for (const event of ["timeupdate", "seeking", "seeked", "play", "ratechange", "loadedmetadata"]) {
       captionSession.cueLoopVideo.removeEventListener(event, cueTick);
     }
   } else if (captionSession.cueTimer) {
@@ -140,9 +140,19 @@ function focusDeepseekAfterSeek(timeMs) {
   captionSession.deepseekFocusGeneration++;
   invalidateCaptionSession("seek-focus");
   for (const key of Array.from(captionSession.transInflight)) {
-    if (typeof key === "string" && (key.startsWith("dsb:") || key.startsWith("dsr:"))) {
+    if (typeof key === "string" && (key.startsWith("dsb:") ||
+        key.startsWith("dsp:") || key.startsWith("dsr:"))) {
       captionSession.transInflight.delete(key);
       captionSession.deepseekRequestMeta.delete(key);
+    }
+  }
+  for (const state of captionSession.deepseekCommitStateByRegion.values()) {
+    if (Array.isArray(state.prefetchQueue)) state.prefetchQueue.length = 0;
+    if (state.prefetchQueued && typeof state.prefetchQueued.clear === "function") {
+      state.prefetchQueued.clear();
+    }
+    if (state.prefetchResponses && typeof state.prefetchResponses.clear === "function") {
+      state.prefetchResponses.clear();
     }
   }
   captionSession.deepseekRetryCounts.clear();
@@ -203,6 +213,7 @@ function cueTick(event) {
   if (eventType === "seeking") beginDeepseekSeek(t);
   else if (eventType === "seeked") finishDeepseekSeek(t);
   const seekJustSettled = eventType === "deepseek-seek-settled";
+  const playbackRateChanged = eventType === "ratechange";
 
   let idx = activeCueIdxAt(t);
   if (idx < 0) idx = semanticGapCueIdxAt(t);
@@ -225,11 +236,24 @@ function cueTick(event) {
   const timedGroupIdx = deepseekGroupForCueAt(idx, t);
   if (idx === captionSession.activeCueIdx && timedGroupIdx === captionSession.activeGroupIdx) {
     maybeReflowSemanticDisplay();
-    if (seekJustSettled && captionSession.activeGroupIdx >= 0 &&
-        !captionSession.transCache.has(groupKey(captionSession.activeGroupIdx))) {
-      armPendingTranslationIndicator(captionSession.activeGroupIdx, true);
-      deepseekRequestBatch(captionSession.activeGroupIdx, true, true);
-      prefetchFrom(idx);
+    const activeGroup = captionSession.activeGroupIdx;
+    if (activeGroup >= 0 && !captionSession.transCache.has(groupKey(activeGroup))) {
+      // The 120ms cue loop is also the playback watchdog. A long semantic
+      // group can remain active while its request stalls; without re-entering
+      // the request state machine here, playback-lag detection only runs at a
+      // group boundary and cannot rebuild the stalled urgent writer in time.
+      const acceleratedPlayback = isAcceleratedDeepseekPlayback();
+      if (seekJustSettled || playbackRateChanged) {
+        armPendingTranslationIndicator(activeGroup, true);
+      }
+      if (acceleratedPlayback) {
+        // This path includes the current urgent request and replenishes the
+        // future runway. Existing request ownership prevents duplicates.
+        prefetchFrom(idx);
+      } else {
+        deepseekRequestBatch(activeGroup, true, true);
+        if (seekJustSettled || playbackRateChanged) prefetchFrom(idx);
+      }
     }
     return;                             // same sentence — no re-render, no jitter
   }
@@ -250,9 +274,14 @@ function cueTick(event) {
     });
   }
   setOriginal(displaySource);
+  // At accelerated playback, warm the current semantic region before the
+  // renderer promotes it to visible work. The old order started the urgent
+  // request first, so the already-live cold prefetch could never be widened.
+  const acceleratedPlayback = isAcceleratedDeepseekPlayback();
+  if (acceleratedPlayback) prefetchFrom(idx);
   renderTranslationForCue(idx, cue, displaySource,
     captionSession.deepseekSeekSettling || eventType === "seeking");
-  prefetchFrom(idx);
+  if (!acceleratedPlayback) prefetchFrom(idx);
 }
 
 function sourceForDisplayedCue(idx, cue) {
@@ -316,18 +345,38 @@ function prefetchFrom(startIdx) {
     const g0 = at === captionSession.activeCueIdx && captionSession.activeGroupIdx >= 0
       ? captionSession.activeGroupIdx : deepseekGroupForCueAt(at);
     if (g0 == null || g0 < 0) return;
-    prefetchDeepseekBatches(g0, false);
+    const acceleratedPlayback = isAcceleratedDeepseekPlayback();
+    prefetchDeepseekBatches(g0, acceleratedPlayback, acceleratedPlayback);
     return;
   }
 }
 
-function prefetchDeepseekBatches(gIdx, includeCurrent) {
+function isAcceleratedDeepseekPlayback() {
+  const video = getVideo();
+  const rate = Number(video && video.playbackRate);
+  return Number.isFinite(rate) && rate >= 1.75;
+}
+
+function deepseekPrefetchBatchCount() {
+  const configured = Math.min(
+    DEEPSEEK_MAX_PREFETCH_BATCHES,
+    Math.max(0, Math.floor(Number(settings.deepseekPrefetchBatches) || 0))
+  );
+  if (!isAcceleratedDeepseekPlayback()) return configured;
+  const video = getVideo();
+  const rate = Number(video && video.playbackRate);
+  const accelerated = Number.isFinite(rate) && rate >= 2.5
+    ? DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES : DEEPSEEK_FAST_PREFETCH_BATCHES;
+  return Math.min(DEEPSEEK_MAX_PREFETCH_BATCHES, Math.max(configured, accelerated));
+}
+
+function prefetchDeepseekBatches(gIdx, includeCurrent, currentUrgent = false) {
   if (!captionSession.sentGroups || !captionSession.deepseekBatchWindows.length) return;
   if (!Number.isInteger(gIdx) || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
-  if (includeCurrent) deepseekRequestBatch(gIdx);
+  if (includeCurrent) deepseekRequestBatch(gIdx, true, !!currentUrgent);
   const starts = YTDS_SHARED.semanticPrefetchBatchStarts(
     gIdx, captionSession.deepseekGroupToBatch, captionSession.deepseekBatchWindows,
-    Math.min(DEEPSEEK_MAX_PREFETCH_BATCHES, settings.deepseekPrefetchBatches)
+    deepseekPrefetchBatchCount()
   );
   for (const start of starts) deepseekRequestBatch(start);
 }

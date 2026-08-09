@@ -155,6 +155,31 @@ test("urgent request sizing ignores a farther speculative target but preserves t
   });
 });
 
+test("urgent playback does not inherit an expanded speculative window", () => {
+  const state = {
+    cursor: 4416, windowItems: 160, urgentTarget: 4447, targetThrough: 4575
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96, 48)
+  )), {
+    targetThrough: 4447,
+    itemCount: 96
+  });
+});
+
+test("urgent playback keeps an explicitly expanded recovery window", () => {
+  const state = {
+    cursor: 4416, windowItems: 160, recoveryWindowItems: true,
+    urgentTarget: 4447, targetThrough: 4575
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    shared.semanticCommitRequestPlan(state, 4416, 16, 160, true, 96, 48)
+  )), {
+    targetThrough: 4447,
+    itemCount: 160
+  });
+});
+
 test("non-urgent continuation still consumes the requested preload range", () => {
   const state = {
     cursor: 4416, windowItems: 80, urgentTarget: 4447, targetThrough: 4575
