@@ -151,7 +151,7 @@ function deepseekCommitState(regionIndex) {
       targetThrough: region.start - 1,
       urgentTarget: region.start - 1,
       windowItems: DEEPSEEK_INITIAL_REQUEST_ITEMS,
-      recoveryWindowItems: false,
+      recoveryWindowItems: false, noProgressRange: "",
       prefetchQueue: [],
       prefetchQueued: new Set(),
       prefetchResponses: new Map()
@@ -321,7 +321,7 @@ function reseedDeepseekCommitState(regionIndex, targetGroup) {
   state.targetThrough = requestStart - 1;
   state.urgentTarget = requestStart - 1;
   state.windowItems = DEEPSEEK_INITIAL_REQUEST_ITEMS;
-  state.recoveryWindowItems = false;
+  state.recoveryWindowItems = false; state.noProgressRange = "";
   emitDebug("semantic-commit-reseeded", {
     regionIndex,
     targetGroup,
@@ -525,7 +525,7 @@ function handleDeepseekTranslationProgress(msg) {
   state.cursor = nextCursor;
   state.commitFloor = nextCursor;
   state.windowItems = DEEPSEEK_REQUEST_ITEMS;
-  state.recoveryWindowItems = false;
+  state.recoveryWindowItems = false; state.noProgressRange = "";
   captionSession.deepseekExhaustedRegions.delete(request.regionIndex);
   request.progressTranslations = request.progressTranslations.filter(
     (item) => Number(item && item.id) >= nextCursor
@@ -614,6 +614,10 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   const acceleratedPlayback = Number.isFinite(playbackRate) && playbackRate >= 1.75;
   const acceleratedUrgentItems = deepseekAcceleratedUrgentRequestItems();
   const recoveryWindow = state.recoveryWindowItems;
+  const inflightKey = `dsb:${regionIndex}`;
+  const existingRequest = captionSession.deepseekRequestMeta.get(inflightKey);
+  if (captionSession.transInflight.has(inflightKey) &&
+      (!requestUrgent || !existingRequest || existingRequest.urgent)) return;
   const urgentRequestTailItems = acceleratedPlayback && requestUrgent && !recoveryWindow
     ? 0 : targetTailItems;
   const acceleratedPrefetchItems = !requestUrgent
@@ -633,7 +637,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   const targetAwareItems = requestPlan.itemCount;
   let requestEnd = Math.min(limitEnd, requestStart + targetAwareItems - 1);
   const futureStart = deepseekNextFuturePrefetchStart(regionIndex, state, requestStart);
-  if (futureStart > requestStart && futureStart <= requestEnd) {
+  if (!recoveryWindow && futureStart > requestStart && futureStart <= requestEnd) {
     const bridgeItems = deepseekBridgeRequestItems(
       requestStart, futureStart, maxRequestItems, limitEnd
     );
@@ -646,10 +650,6 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   }
   // The range is deliberately absent: targetThrough can expand while this
   // request is in flight, but the region must still have only one writer.
-  const inflightKey = `dsb:${regionIndex}`;
-  const existingRequest = captionSession.deepseekRequestMeta.get(inflightKey);
-  if (captionSession.transInflight.has(inflightKey) &&
-      (!requestUrgent || !existingRequest || existingRequest.urgent)) return;
   const items = [];
   let currentChars = 0;
   for (let id = requestStart; id <= requestEnd; id++) {

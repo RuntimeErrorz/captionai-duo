@@ -1388,6 +1388,99 @@ test("a bridge overlaps an adjacent future start so a cross-join unit can resolv
   assert.equal(bridge(80, 81, 160, 500), 2);
 });
 
+test("a max-planned short bridge recovers past its future join instead of exhausting retries", async () => {
+  const translations = Array.from({ length: 3 }, (_value, id) => ({
+    id: String(id), unitId: "semantic-0-2", translation: "joined translation"
+  }));
+  const harness = loadSemanticCommitHarness(translations, 0, {
+    windowItems: 160, targetThrough: 100, urgentTarget: 0, playbackRate: 3,
+    groupCount: 301, limitEnd: 300, deferResponses: true
+  });
+  const sessionToken = harness.context.captureCaptionSession();
+  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:2", {
+    requestId: "prefetch:0:1:2-97", prefetch: true, regionIndex: 0,
+    requestStart: 2, requestEnd: 97, urgent: false,
+    reqEpoch: 1, reqVid: "video", sessionToken, focusGeneration: 0
+  });
+  harness.context.captionSession.transInflight.add("dsp:0:2");
+
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle({
+    requestId: "commit:0:2:0-2", urgent: true, regionIndex: 0,
+    requestStart: 0, requestEnd: 2, commitFloor: 0, limitEnd: 300,
+    effectiveGuardItems: 1, reqEpoch: 1, reqVid: "video", sessionToken,
+    focusGeneration: 0, itemCount: 3, targetAwareItems: 160, maxRequestItems: 160
+  }, {
+    ok: true, translations, deferredIds: [], httpDiagnostics: { attempts: [] }
+  }, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.timers.length, 0);
+  assert.equal(harness.state.recoveryWindowItems, true);
+  assert.equal(harness.pendingCallbacks[0].message.requestStart, 0);
+  assert.equal(harness.pendingCallbacks[0].message.requestEnd, 159);
+});
+
+test("adaptive no-progress enters recovery instead of replaying the same cached bridge", async () => {
+  const translations = Array.from({ length: 10 }, (_value, id) => ({
+    id: String(id), unitId: id < 5 ? "semantic-0-4" : "semantic-5-9",
+    translation: "guarded translation"
+  }));
+  const harness = loadSemanticCommitHarness(translations, 0, {
+    windowItems: 160, targetThrough: 100, urgentTarget: 0, playbackRate: 3,
+    groupCount: 301, limitEnd: 300, deferResponses: true
+  });
+  harness.state.commitFloor = 10;
+  const sessionToken = harness.context.captureCaptionSession();
+  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:9", {
+    requestId: "prefetch:0:1:9-104", prefetch: true, regionIndex: 0,
+    requestStart: 9, requestEnd: 104, reqEpoch: 1, reqVid: "video",
+    sessionToken, focusGeneration: 0
+  });
+
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle({
+    requestId: "commit:0:2:0-9", urgent: true, regionIndex: 0,
+    requestStart: 0, requestEnd: 9, commitFloor: 10, limitEnd: 300,
+    effectiveGuardItems: 3, reqEpoch: 1, reqVid: "video", sessionToken,
+    focusGeneration: 0, itemCount: 10, targetAwareItems: 160, maxRequestItems: 160
+  }, { ok: true, translations, deferredIds: [], httpDiagnostics: { attempts: [] } }, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.state.recoveryWindowItems, true);
+  assert.equal(harness.timers.length, 0);
+  assert.equal(harness.pendingCallbacks[0].message.requestStart, 0);
+  assert.equal(harness.pendingCallbacks[0].message.requestEnd, 159);
+});
+
+test("a repeated no-progress range is delayed and bypasses cache", async () => {
+  const translations = Array.from({ length: 10 }, (_value, id) => ({
+    id: String(id), unitId: id < 5 ? "semantic-0-4" : "semantic-5-9",
+    translation: "guarded translation"
+  }));
+  const harness = loadSemanticCommitHarness(translations, 0, {
+    windowItems: 42, targetThrough: 100, urgentTarget: 0, playbackRate: 3,
+    groupCount: 301, limitEnd: 300, deferResponses: true
+  });
+  harness.state.commitFloor = 10;
+  harness.state.recoveryWindowItems = true;
+  harness.state.noProgressRange = "0:9";
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle({
+    requestId: "commit:0:3:0-9", urgent: true, regionIndex: 0,
+    requestStart: 0, requestEnd: 9, commitFloor: 10, limitEnd: 300,
+    effectiveGuardItems: 3, reqEpoch: 1, reqVid: "video",
+    sessionToken: harness.context.captureCaptionSession(), focusGeneration: 0,
+    itemCount: 10, targetAwareItems: 42, maxRequestItems: 160
+  }, { ok: true, translations, deferredIds: [], httpDiagnostics: { attempts: [] } }, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.pendingCallbacks.length, 0);
+  assert.equal(harness.timers.length, 1);
+  assert.equal(harness.debug.some((entry) => entry.event === "batch-retry"), true);
+});
+
 test("accelerated playback prefetches the current semantic batch before promotion", () => {
   const calls = [];
   const requestedAhead = [];

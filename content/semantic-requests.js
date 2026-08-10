@@ -514,10 +514,7 @@ function takeDeepseekPrefetchedResponse(stateValue) {
   return null;
 }
 
-// A speculative response is useful only if the monotonic writer reaches its
-// exact first id. Do not let the next urgent continuation run through that
-// start and make the response stale; use a small bridge request that carries
-// enough trailing guard items to commit up to the future cursor.
+// Bridge to the next future response without making its exact start stale.
 function deepseekNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
   const state = deepseekPrefetchState(stateValue);
   const cursor = Math.floor(Number(cursorValue));
@@ -672,8 +669,8 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   );
   if (!Number.isInteger(nextCursor)) return;
   const maxRequestItems = Number(request.maxRequestItems) || deepseekMaxRequestItems();
-  const targetAwareItems = Number(request.targetAwareItems) || Number(request.itemCount) || 0;
-  const canExpand = requestEnd < request.limitEnd && targetAwareItems < maxRequestItems;
+  const requestItems = Number(request.itemCount) || Number(request.targetAwareItems) || 0;
+  const canExpand = requestEnd < request.limitEnd && requestItems < maxRequestItems;
   const canRecoverAlignedChunks = effectiveUrgent || !canExpand;
   if (nextCursor === finalStart && canRecoverAlignedChunks) {
     const recoveredTranslations = YTDS_SHARED.semanticUnitsFromAlignedChunks(
@@ -696,15 +693,18 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     state.cursor = nextCursor;
     state.commitFloor = nextCursor;
     state.windowItems = DEEPSEEK_REQUEST_ITEMS;
-    state.recoveryWindowItems = false;
+    state.recoveryWindowItems = false; state.noProgressRange = "";
   }
   const madeProgress = state.cursor > requestStart;
+  const noProgressRange = `${finalStart}:${requestEnd}`;
+  const repeatedNoProgress = !request.prefetch && !madeProgress && state.noProgressRange === noProgressRange;
+  if (!request.prefetch && !madeProgress) state.noProgressRange = noProgressRange;
   if (madeProgress) {
     captionSession.deepseekRetryCounts.delete(deepseekBatchRetryKey(
       requestStart, requestEnd, reqVid, reqEpoch
     ));
     captionSession.deepseekExhaustedRegions.delete(regionIndex);
-  } else if (canExpand && !request.prefetch) {
+  } else if (canExpand && !request.prefetch && !repeatedNoProgress) {
     captionSession.deepseekRetryCounts.delete(deepseekBatchRetryKey(
       requestStart, requestEnd, reqVid, reqEpoch
     ));
@@ -713,8 +713,8 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
       finalTranslations, finalStart, requestEnd
     );
     state.windowItems = leadingUnitReachesEnd
-      ? maxRequestItems : Math.min(maxRequestItems, targetAwareItems + 32);
-    if (leadingUnitReachesEnd) state.recoveryWindowItems = true;
+      ? maxRequestItems : Math.min(maxRequestItems, requestItems + 32);
+    state.recoveryWindowItems = true;
     emitDebug("semantic-commit-window-expanded", {
       regionIndex, cursor: state.cursor, windowItems: state.windowItems,
       reason: leadingUnitReachesEnd ? "leading-unit-reaches-window-end" : "adaptive-no-progress"
