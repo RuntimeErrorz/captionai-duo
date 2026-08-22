@@ -157,17 +157,6 @@
     return /\/chat\/completions$/i.test(base) ? base : `${base}/chat/completions`;
   }
 
-  function aiOriginPattern(value) {
-    const base = normalizeAiBaseUrl(value);
-    if (!base) return "";
-    try {
-      const url = new URL(base);
-      return `${url.protocol}//${url.hostname}/*`;
-    } catch (_e) {
-      return "";
-    }
-  }
-
   function aiCredentialScope(baseUrlValue) {
     const baseUrl = normalizeAiBaseUrl(baseUrlValue);
     if (aiEndpointKind(baseUrl) === "deepseek") return "deepseek";
@@ -475,7 +464,7 @@
   Object.assign(internal, {
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
     normalizeTargetLang, isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
-    aiChatCompletionsUrl, aiOriginPattern, aiCredentialScope, aiRequestProfileScope,
+    aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,
     parseAiExtraBody, aiCompletionText,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
     aiExtraBodyUsesThinking,

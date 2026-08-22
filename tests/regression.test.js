@@ -54,8 +54,6 @@ assert.equal(shared.aiChatCompletionsUrl("https://gateway.example/v1"),
 assert.equal(shared.aiChatCompletionsUrl(
   "https://gateway.example/v1/chat/completions"
 ), "https://gateway.example/v1/chat/completions");
-assert.equal(shared.aiOriginPattern("https://gateway.example:8443/v1"),
-  "https://gateway.example/*");
 assert.equal(shared.aiCredentialScope("https://api.deepseek.com"), "deepseek");
 assert.equal(shared.aiCredentialScope("https://gateway.example/v1"),
   "custom:https://gateway.example/v1");
@@ -114,7 +112,6 @@ assert.equal(shared.resolveFullscreenState(true, null, true), false,
 assert.equal(shared.resolveFullscreenState(false, null, true), true,
   "the player class remains a fallback when the native API is unavailable");
 assert.equal(typeof shared.semanticUnitsFromAlignedChunks, "function");
-assert.equal(typeof shared.semanticBatchWindows, "function");
 assert.equal(typeof shared.semanticPrefetchBatchStarts, "function");
 assert.equal(typeof shared.deepSeekConcurrencyStatus, "function");
 assert.equal(typeof shared.mergeTimedCueTexts, "function");
@@ -124,20 +121,15 @@ assert.equal(shared.semanticPauseKind(3999, 900, 4000), "soft");
 assert.equal(shared.semanticPauseKind(4000, 900, 4000), "hard");
 assert.equal(typeof shared.cueReferenceAtoms, "function");
 assert.equal(typeof shared.referenceBatchWindows, "function");
-assert.equal(typeof shared.ownedSemanticTranslations, "function");
 assert.equal(typeof shared.shouldReseedSemanticCommitState, "function");
 assert.equal(typeof shared.semanticCommitRequestPlan, "function");
-assert.equal(typeof shared.canonicalSemanticUnits, "function");
 assert.equal(typeof shared.pendingTranslationScopeKey, "function");
-assert.equal(typeof shared.semanticCoverageGaps, "function");
-assert.equal(typeof shared.groupReferenceItemsByCue, "function");
 assert.equal(typeof shared.preparePromptContexts, "function");
 assert.equal(typeof shared.normalizeAiTokenUsage, "function");
 assert.equal(typeof shared.compactAiPromptCueRows, "function");
 assert.equal(typeof shared.compactAiPromptContextRows, "function");
 assert.equal(typeof shared.alignedTranslationsFromJsonText, "function");
 assert.equal(typeof shared.alignedChunkDisplayPlan, "function");
-assert.equal(typeof shared.aiJsonlLines, "function");
 assert.equal(typeof shared.aiJsonlObjects, "function");
 assert.equal(typeof shared.aiJsonlRecordFromLine, "function");
 assert.equal(typeof shared.createAiJsonlTranslationState, "function");
@@ -186,11 +178,6 @@ assert.equal(shared.cuePauseMs(
   { start: 1000, end: 2000, dur: 1000, lastOff: 1800 },
   { start: 3800 }
 ), 1800);
-
-assert.equal(shared.translationFromJsonText('{"translation":"译文"}'), "译文");
-assert.equal(shared.translationFromJsonText('```json\n{"translation":"带代码块"}\n```'), "带代码块");
-assert.equal(shared.translationFromJsonText('Result: {"translation":"带前缀"}'), "带前缀");
-assert.equal(shared.translationFromJsonText("not json"), "");
 
 const segmentItems = [
   { id: "0", text: "its own police force,", startMs: 0, endMs: 1200, hardAfter: false },
@@ -348,7 +335,6 @@ assert.doesNotMatch(background, /MAX_UNITS_PER_MINUTE/);
 assert.doesNotMatch(background, /state\.recent/);
 assert.match(sharedSource, /outsideIsland && \(!!urgent \|\| !playbackActive\)/);
 assert.doesNotMatch(content, /const inflightKey = `dsb:\$\{regionIndex\}:\$\{requestStart\}:\$\{requestEnd\}`/);
-assert.doesNotMatch(content, /YTDS_SHARED\.canonicalSemanticUnits/);
 assert.doesNotMatch(content, /semantic-unit-overlap-resolved/);
 assert.doesNotMatch(content, /semantic-coverage-repair-start/);
 assert.doesNotMatch(content, /resp\.partial \? "partial response" : "missing items"/);
@@ -390,7 +376,6 @@ assert.match(content, /function stopForInvalidatedExtensionContext/);
 assert.match(content, /function sendRuntimeMessage/);
 assert.doesNotMatch(content, /DEEPSEEK_DISPLAY_GAP_BRIDGE_MS/);
 assert.equal((content.match(/chrome\.runtime\.sendMessage/g) || []).length, 1);
-assert.equal(typeof shared.displayProtectedRanges, "function");
 assert.match(popup, /id="deepseekContextFuture"/);
 assert.match(popup, /id="deepseekPrefetchBatches"/);
 assert.match(popup, /id="deepseekContextPast" type="number" min="0" max="20"/);

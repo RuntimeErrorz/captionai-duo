@@ -615,7 +615,6 @@ input[type="color"] {
 input[type="color"]::-webkit-color-swatch-wrapper { padding: 3px; }
 input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 
-.check-row { flex-direction: row; }
 .chk {
   display: flex;
   align-items: center;

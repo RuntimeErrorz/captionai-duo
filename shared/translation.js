@@ -29,13 +29,6 @@
     return null;
   }
 
-  function translationFromJsonText(value) {
-    const parsed = jsonObjectFromText(value);
-    const translation = normalizeTranslatedText(parsed && parsed.translation);
-    if (translation) return translation;
-    return "";
-  }
-
   function segmentedTranslationsFromJsonText(value, items, diagnostics) {
     const reject = (reason) => {
       if (diagnostics && typeof diagnostics === "object") diagnostics.reason = reason;
@@ -87,24 +80,6 @@
     if (cursor !== expected.length) return reject(`missing cue coverage after offset ${cursor}`);
     if (diagnostics && typeof diagnostics === "object") diagnostics.reason = "";
     return translations;
-  }
-
-  function aiJsonlLines(value, flush) {
-    const input = String(value || "");
-    const lines = [];
-    let cursor = 0;
-    while (true) {
-      const newline = input.indexOf("\n", cursor);
-      if (newline < 0) break;
-      lines.push(input.slice(cursor, newline).replace(/\r$/, ""));
-      cursor = newline + 1;
-    }
-    let rest = input.slice(cursor);
-    if (flush && rest) {
-      lines.push(rest.replace(/\r$/, ""));
-      rest = "";
-    }
-    return { lines, rest };
   }
 
   // HTTP/SSE chunks and model-generated newlines are independent of JSON
@@ -747,5 +722,5 @@
     return translations;
   }
 
-  Object.assign(internal, { jsonObjectFromText, normalizeTranslatedText, translationFromJsonText, segmentedTranslationsFromJsonText, aiJsonlLines, aiJsonlObjects, aiJsonlAlignedChunkPrefix, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+  Object.assign(internal, { normalizeTranslatedText, segmentedTranslationsFromJsonText, aiJsonlObjects, aiJsonlAlignedChunkPrefix, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();

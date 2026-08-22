@@ -72,7 +72,7 @@ test("lexical density is bounded by transport item limits", () => {
   )), Array.from({ length: atoms.length }, (_v, index) => index));
 });
 
-test("overlapping request protection keeps no tax on overtime addressable as one unit", () => {
+test("overlapping request windows preserve the configured lexical core", () => {
   const cues = [
     { text: "provisions.", start: 0, end: 1000, dur: 1000 },
     { text: "No tax on tips, no tax on", start: 1000, end: 2000, dur: 1000 },
@@ -90,121 +90,6 @@ test("overlapping request protection keeps no tax on overtime addressable as one
   assert.equal(windows[1].start, 8);
   assert.equal(windows[1].requestStart, 8);
 
-  const noTax = atoms.findIndex((atom) => atom.sourceCueIndex === 1 && atom.text === "No");
-  const overtime = atoms.findIndex((atom) => atom.sourceCueIndex === 2 && atom.text === "overtime,");
-  const nextUnit = atoms.findIndex((atom) => atom.sourceCueIndex === 2 && atom.text === "and");
-  const translations = atoms.slice(windows[0].requestStart, windows[1].requestEnd + 1)
-    .map((atom, offset) => {
-      const id = windows[0].requestStart + offset;
-      const unitId = id < noTax ? "semantic-0-prev"
-        : id <= overtime ? `semantic-${noTax}-${overtime}` : `semantic-${nextUnit}-tail`;
-      return { id: String(id), unitId, translation: unitId.includes("tail") ? "以及……" : "小费和加班费不征税" };
-    });
-  const firstOwned = shared.ownedSemanticTranslations(
-    translations, windows[0].start, windows[0].end
-  );
-  const secondOwned = shared.ownedSemanticTranslations(
-    translations, windows[1].start, windows[1].end
-  );
-
-  assert.ok(firstOwned.some((item) => Number(item.id) === overtime));
-  assert.ok(!secondOwned.some((item) => Number(item.id) === overtime));
-  assert.ok(secondOwned.some((item) => Number(item.id) === nextUnit));
-});
-
-test("semantic overlap arbitration removes a boundary fragment regardless of response order", () => {
-  const complete = {
-    batchIndex: 7,
-    boundaryCandidate: false,
-    unitId: "semantic-423-436",
-    members: Array.from({ length: 14 }, (_, index) => 423 + index),
-    translation: "提前于计划，而且低于预算。"
-  };
-  const fragment = {
-    batchIndex: 8,
-    boundaryCandidate: true,
-    unitId: "semantic-431-436",
-    members: Array.from({ length: 6 }, (_, index) => 431 + index),
-    translation: "你的所有电影都提前且低于预算完成。"
-  };
-  const next = {
-    batchIndex: 8,
-    unitId: "semantic-437-440",
-    members: [437, 438, 439, 440],
-    translation: "下一个完整句子。"
-  };
-  const settled = new Set([7, 8]);
-
-  for (const candidates of [[complete, fragment, next], [next, fragment, complete]]) {
-    const selected = shared.canonicalSemanticUnits(candidates, settled);
-    assert.deepEqual(Array.from(selected, (unit) => unit.unitId), [
-      "semantic-423-436", "semantic-437-440"
-    ]);
-  }
-});
-
-test("a later boundary stays provisional until its predecessor response is known", () => {
-  const fragment = {
-    batchIndex: 8,
-    boundaryCandidate: true,
-    unitId: "semantic-431-436",
-    members: [431, 432, 433, 434, 435, 436]
-  };
-
-  assert.equal(shared.canonicalSemanticUnits([fragment], new Set([8])).length, 0);
-  assert.deepEqual(
-    Array.from(shared.canonicalSemanticUnits([fragment], new Set([7, 8])), (unit) => unit.unitId),
-    ["semantic-431-436"]
-  );
-});
-
-test("semantic overlap arbitration preserves every legitimate adjacent unit", () => {
-  const candidates = [
-    { batchIndex: 2, unitId: "semantic-20-24", members: [20, 21, 22, 23, 24] },
-    { batchIndex: 3, unitId: "semantic-25-27", members: [25, 26, 27] },
-    { batchIndex: 3, unitId: "semantic-28-31", members: [28, 29, 30, 31] }
-  ];
-  const selected = shared.canonicalSemanticUnits(candidates, new Set([1, 2, 3]));
-  assert.deepEqual(Array.from(selected, (unit) => unit.unitId), [
-    "semantic-20-24", "semantic-25-27", "semantic-28-31"
-  ]);
-});
-
-test("semantic interval selection is deterministic across randomized callback order", () => {
-  let seed = 0x3245001;
-  const random = () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    return seed / 0x100000000;
-  };
-  const canonical = [];
-  const candidates = [];
-  let cursor = 100;
-  for (let batchIndex = 0; batchIndex < 18; batchIndex++) {
-    const length = 3 + Math.floor(random() * 7);
-    const members = Array.from({ length }, (_, offset) => cursor + offset);
-    const unit = { batchIndex, unitId: `semantic-${cursor}-${cursor + length - 1}`, members };
-    canonical.push(unit.unitId);
-    candidates.push(unit);
-    if (batchIndex > 0) {
-      const fragmentStart = cursor + Math.floor(length / 2);
-      candidates.push({
-        batchIndex,
-        unitId: `semantic-${fragmentStart}-${cursor + length - 1}-fragment`,
-        members: members.filter((id) => id >= fragmentStart)
-      });
-    }
-    cursor += length;
-  }
-  const settled = new Set(Array.from({ length: 18 }, (_, index) => index));
-  for (let run = 0; run < 100; run++) {
-    const shuffled = candidates.slice();
-    for (let index = shuffled.length - 1; index > 0; index--) {
-      const swap = Math.floor(random() * (index + 1));
-      [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
-    }
-    const selected = shared.canonicalSemanticUnits(shuffled, settled);
-    assert.deepEqual(Array.from(selected, (unit) => unit.unitId), canonical);
-  }
 });
 
 test("loading scope remains stable while fast lexical tokens advance inside one batch", () => {
@@ -221,47 +106,6 @@ test("loading scope remains stable while fast lexical tokens advance inside one 
     shared.pendingTranslationScopeKey(2121, groupToBatch),
     "deepseek-batch:32"
   );
-});
-
-test("partial semantic overlap exposes only the uncovered tail for boundary repair", () => {
-  const candidates = [
-    { batchIndex: 30, unitId: "semantic-1931-1943", members: Array.from({ length: 13 }, (_, i) => 1931 + i) },
-    { batchIndex: 31, unitId: "semantic-1940-1952", members: Array.from({ length: 13 }, (_, i) => 1940 + i) }
-  ];
-  const settled = new Set([29, 30, 31]);
-  const selected = shared.canonicalSemanticUnits(candidates, settled);
-  assert.deepEqual(
-    Array.from(shared.semanticCoverageGaps(selected, 1940, 1952), (gap) => ({ ...gap })),
-    [{ start: 1944, end: 1952 }]
-  );
-
-  candidates.push({
-    batchIndex: 31,
-    unitId: "semantic-1944-1952-repair",
-    members: Array.from({ length: 9 }, (_, i) => 1944 + i)
-  });
-  const repaired = shared.canonicalSemanticUnits(candidates, settled);
-  assert.deepEqual(Array.from(repaired, (unit) => unit.unitId), [
-    "semantic-1931-1943", "semantic-1944-1952-repair"
-  ]);
-  assert.equal(shared.semanticCoverageGaps(repaired, 1940, 1952).length, 0);
-});
-
-test("invalid semantic output falls back to whole original cues, never individual tokens", () => {
-  const items = [
-    { id: "20", cueId: "7", text: "the", startMs: 1000, endMs: 1200 },
-    { id: "21", cueId: "7", text: "next", startMs: 1200, endMs: 1450 },
-    { id: "22", cueId: "7", text: "guy", startMs: 1450, endMs: 1800 },
-    { id: "23", cueId: "8", text: "his", startMs: 1800, endMs: 2050 },
-    { id: "24", cueId: "8", text: "son", startMs: 2050, endMs: 2400 }
-  ];
-  const groups = shared.groupReferenceItemsByCue(items);
-
-  assert.equal(groups.length, 2);
-  assert.deepEqual(Array.from(groups[0].ids), ["20", "21", "22"]);
-  assert.equal(groups[0].text, "the next guy");
-  assert.deepEqual(Array.from(groups[1].ids), ["23", "24"]);
-  assert.equal(groups[1].text, "his son");
 });
 
 test("lexical references preserve randomized cue text, order, timing and batch coverage", () => {

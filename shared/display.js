@@ -606,5 +606,5 @@
     }));
   }
 
-  Object.assign(internal, { resolveFullscreenState, alignedChunkDisplayPlan, displayProtectedRanges, splitTextForDisplay, splitAlignedSentencesForDisplay, displayPageAssignments, sourceRangeForDisplayMember, semanticDisplayPlan, shouldBridgeSemanticCueGap, semanticDisplayClusters });
+  Object.assign(internal, { resolveFullscreenState, alignedChunkDisplayPlan, splitTextForDisplay, splitAlignedSentencesForDisplay, displayPageAssignments, semanticDisplayPlan, shouldBridgeSemanticCueGap, semanticDisplayClusters });
 })();

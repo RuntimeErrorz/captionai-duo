@@ -80,7 +80,6 @@
   "fontSystem": { "message": "系统默认" },
   "fontMono": { "message": "等宽 Mono" },
   "fontCjk": { "message": "适合中文" },
-  "sizeLabel": { "message": "字号" },
   "windowSizeLabel": { "message": "窗口字号" },
   "fullscreenSizeLabel": { "message": "全屏字号" },
   "colText": { "message": "文字" },

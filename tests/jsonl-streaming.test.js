@@ -45,19 +45,6 @@ test("accelerated JSONL publishes a complete unit before the next unit arrives",
   assert.equal(observer.result(true).length, 2);
 });
 
-test("JSONL line buffering survives arbitrary network splits", () => {
-  const first = shared.aiJsonlLines('{"type":"unit","chunks":[{"ids":["0"],', false);
-  assert.equal(first.lines.length, 0);
-  const second = shared.aiJsonlLines(
-    first.rest + '"translation":"译文"}]}\r\n{"type":"done"}\n',
-    false
-  );
-  assert.equal(second.rest, "");
-  assert.equal(second.lines.length, 2);
-  assert.equal(shared.aiJsonlRecordFromLine(second.lines[0]).record.type, "unit");
-  assert.equal(shared.aiJsonlRecordFromLine(second.lines[1]).record.type, "done");
-});
-
 test("JSONL object framing survives pretty printing and arbitrary object splits", () => {
   const first = shared.aiJsonlObjects(
     '```jsonl\n{\n  "type": "unit",\n  "chunks": [{"ids":["0"],', false

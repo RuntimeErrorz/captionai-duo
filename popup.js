@@ -184,15 +184,6 @@ function sendRuntime(msg) {
   });
 }
 
-function setAiStatus(text, kind) {
-  const el = $("aiStatus");
-  if (!el) return;
-  el.textContent = text || "";
-  el.classList.toggle("warn", kind === "warn");
-  el.classList.toggle("ok", kind === "ok");
-  el.hidden = !text;
-}
-
 function showDebugMsg(text, kind) {
   const el = $("debugMsg");
   if (!el) return;

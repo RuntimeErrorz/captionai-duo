@@ -251,33 +251,6 @@
     return windows;
   }
 
-  // Overlapping request windows translate protection tokens on both sides of
-  // a disjoint core. A semantic unit belongs to the core containing its first
-  // token; accepting the entire owned unit preserves cross-boundary phrases,
-  // while filtering non-owned units prevents duplicate/racing cache writes.
-  function ownedSemanticTranslations(translations, coreStart, coreEnd) {
-    const list = Array.isArray(translations) ? translations.filter(Boolean) : [];
-    const start = Math.floor(Number(coreStart));
-    const end = Math.floor(Number(coreEnd));
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) return [];
-    const units = new Map();
-    for (const item of list) {
-      const id = Number(item && item.id);
-      if (!Number.isInteger(id) || id < 0) continue;
-      const unitId = String(item && item.unitId || `causal-${id}`);
-      const unit = units.get(unitId) || { first: id, items: [] };
-      unit.first = Math.min(unit.first, id);
-      unit.items.push(item);
-      units.set(unitId, unit);
-    }
-    const owned = [];
-    for (const unit of units.values()) {
-      if (unit.first < start || unit.first > end) continue;
-      owned.push(...unit.items);
-    }
-    return owned.sort((a, b) => Number(a.id) - Number(b.id));
-  }
-
   // Select the immutable prefix that a rolling semantic request may commit.
   // The caller deliberately distrusts model-provided deferred_ids: every
   // complete unit touching the trailing guard is carried to the next request
@@ -420,161 +393,12 @@
     };
   }
 
-  // Select one canonical, non-overlapping semantic timeline from responses
-  // produced by overlapping API windows. Later cores are intentionally held
-  // until their immediate predecessor has answered: otherwise a fast response
-  // for the later core could briefly paint a boundary fragment, only to be
-  // replaced by the complete unit from the predecessor a moment later.
-  //
-  // Ordering is derived only from source coordinates, never response arrival
-  // order. At an overlap, the unit with the earliest source start owns the
-  // boundary. A longer unit wins an equal start, which also makes retries that
-  // recover a complete phrase dominate a truncated version deterministically.
-  function canonicalSemanticUnits(candidates, settledBatches) {
-    const settled = settledBatches && typeof settledBatches.has === "function"
-      ? settledBatches : new Set(Array.isArray(settledBatches) ? settledBatches : []);
-    const normalized = [];
-    for (const candidate of Array.isArray(candidates) ? candidates : []) {
-      if (!candidate) continue;
-      const members = Array.from(new Set((Array.isArray(candidate.members) ? candidate.members : [])
-        .map(Number).filter((id) => Number.isInteger(id) && id >= 0))).sort((a, b) => a - b);
-      if (!members.length) continue;
-      const batchIndex = Math.floor(Number(candidate.batchIndex));
-      if (!Number.isInteger(batchIndex) || batchIndex < 0) continue;
-      // Only the first unit owned by a core can be a fragment of something
-      // that began in the previous core. Holding every unit would needlessly
-      // delay safe subtitles in the middle of the current window.
-      if (candidate.boundaryCandidate && batchIndex > 0 && !settled.has(batchIndex - 1)) continue;
-      normalized.push({
-        ...candidate,
-        batchIndex,
-        members,
-        first: members[0],
-        last: members[members.length - 1]
-      });
-    }
-    normalized.sort((a, b) =>
-      a.first - b.first ||
-      b.last - a.last ||
-      a.batchIndex - b.batchIndex ||
-      String(a.unitId || "").localeCompare(String(b.unitId || ""))
-    );
-    const selected = [];
-    let occupiedThrough = -1;
-    for (const candidate of normalized) {
-      if (candidate.first <= occupiedThrough) continue;
-      selected.push(candidate);
-      occupiedThrough = candidate.last;
-    }
-    return selected;
-  }
-
   function pendingTranslationScopeKey(groupIndex, groupToBatch) {
     const group = Math.floor(Number(groupIndex));
     if (!Number.isInteger(group) || group < 0) return "";
     const batch = Array.isArray(groupToBatch) ? Number(groupToBatch[group]) : NaN;
     return Number.isInteger(batch) && batch >= 0
       ? `deepseek-batch:${batch}` : `deepseek-group:${group}`;
-  }
-
-  function semanticCoverageGaps(units, rangeStart, rangeEnd) {
-    const start = Math.floor(Number(rangeStart));
-    const end = Math.floor(Number(rangeEnd));
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) return [];
-    const covered = new Set();
-    for (const unit of Array.isArray(units) ? units : []) {
-      for (const value of Array.isArray(unit && unit.members) ? unit.members : []) {
-        const id = Number(value);
-        if (Number.isInteger(id) && id >= start && id <= end) covered.add(id);
-      }
-    }
-    const gaps = [];
-    for (let id = start; id <= end;) {
-      if (covered.has(id)) { id++; continue; }
-      const gapStart = id;
-      while (id <= end && !covered.has(id)) id++;
-      gaps.push({ start: gapStart, end: id - 1 });
-    }
-    return gaps;
-  }
-
-  // Reassemble lexical references by their original player cue. This is used
-  // only when semantic batch validation fails, so the safety fallback remains
-  // cue-level instead of producing unusable word-by-word translations.
-  function groupReferenceItemsByCue(items) {
-    const list = Array.isArray(items) ? items.filter(Boolean) : [];
-    const groups = [];
-    for (const item of list) {
-      const cueId = String(item.cueId == null ? "" : item.cueId);
-      let group = groups[groups.length - 1];
-      if (!group || group.cueId !== cueId) {
-        group = { cueId, items: [] };
-        groups.push(group);
-      }
-      group.items.push(item);
-    }
-    return groups.map((group) => ({
-      cueId: group.cueId,
-      ids: group.items.map((item) => String(item.id)),
-      items: group.items,
-      text: mergeTimedCueTexts(group.items)
-    }));
-  }
-
-  const SEMANTIC_SENTENCE_END_RE = /[.!?…。！？]["'“”‘’」』》】)）\]]?\s*$/;
-
-  function semanticBoundaryAfter(cues, index) {
-    if (index >= cues.length - 1) return true;
-    const cue = cues[index] || {};
-    return cuePauseMs(cue, cues[index + 1]) > 900 ||
-      SEMANTIC_SENTENCE_END_RE.test(String(cue.text || ""));
-  }
-
-  // Keep the usual request compact, but never force a cut at that preferred
-  // size when the next few YouTube atoms complete the same sentence. This is
-  // important because future context is read-only: DeepSeek may use it to
-  // understand an item but cannot merge a future-context id into its output.
-  function semanticBatchWindows(cues, preferredSize, maxSize) {
-    const list = Array.isArray(cues) ? cues : [];
-    if (!list.length) return [];
-    const preferred = Math.max(2, Math.floor(Number(preferredSize) || 6));
-    const maximum = Math.max(preferred, Math.floor(Number(maxSize) || 10));
-    const windows = [];
-
-    for (let start = 0; start < list.length;) {
-      const preferredEnd = Math.min(list.length - 1, start + preferred - 1);
-      let end = preferredEnd;
-      let foundBoundary = preferredEnd >= list.length - 1;
-
-      if (!foundBoundary) {
-        // Preserve the prior behavior when a clean sentence/pause boundary is
-        // already available in the compact preferred window.
-        for (let i = preferredEnd; i >= start + 1; i--) {
-          if (semanticBoundaryAfter(list, i)) {
-            end = i;
-            foundBoundary = true;
-            break;
-          }
-        }
-      }
-
-      if (!foundBoundary) {
-        // No safe cut exists at or before the preferred edge. Look forward for
-        // the first natural ending, with a strict cap to bound latency/cost.
-        const extendedEnd = Math.min(list.length - 1, start + maximum - 1);
-        end = extendedEnd;
-        for (let i = preferredEnd + 1; i <= extendedEnd; i++) {
-          if (semanticBoundaryAfter(list, i)) {
-            end = i;
-            break;
-          }
-        }
-      }
-
-      windows.push({ start, end });
-      start = end + 1;
-    }
-    return windows;
   }
 
   // Return the starts of the next distinct semantic request windows. Looking
@@ -609,5 +433,5 @@
       : { allowed: false, reason: "local-concurrency", retryAfterMs: 1500 };
   }
 
-  Object.assign(internal, { videoIdFromUrl, isYoutubePageUrl, videoIdMatchesPageUrls, isAllowedTimedtextUrl, cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, ownedSemanticTranslations, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, canonicalSemanticUnits, pendingTranslationScopeKey, semanticCoverageGaps, groupReferenceItemsByCue, semanticBatchWindows, semanticPrefetchBatchStarts, deepSeekConcurrencyStatus });
+  Object.assign(internal, { videoIdFromUrl, isYoutubePageUrl, videoIdMatchesPageUrls, isAllowedTimedtextUrl, cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, deepSeekConcurrencyStatus });
 })();

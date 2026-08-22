@@ -80,7 +80,6 @@
   "fontSystem": { "message": "System default" },
   "fontMono": { "message": "Monospace" },
   "fontCjk": { "message": "CJK-friendly" },
-  "sizeLabel": { "message": "Font size" },
   "windowSizeLabel": { "message": "Window font size" },
   "fullscreenSizeLabel": { "message": "Fullscreen font size" },
   "colText": { "message": "Text" },
