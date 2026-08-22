@@ -237,7 +237,9 @@ function cueTick(event) {
   if (idx === captionSession.activeCueIdx && timedGroupIdx === captionSession.activeGroupIdx) {
     maybeReflowSemanticDisplay();
     const activeGroup = captionSession.activeGroupIdx;
-    if (activeGroup >= 0 && !captionSession.transCache.has(groupKey(activeGroup))) {
+    if (activeGroup >= 0 &&
+        !YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) &&
+        !captionSession.transCache.has(groupKey(activeGroup))) {
       // The 120ms cue loop is also the playback watchdog. A long semantic
       // group can remain active while its request stalls; without re-entering
       // the request state machine here, playback-lag detection only runs at a
@@ -317,6 +319,12 @@ function deepseekGroupForCueAt(cueIdx, timeMs) {
 function renderTranslationForCue(idx, cue, displayedSource, immediatePending) {
   const origText = displayedSource || cue.text;
 
+  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang)) {
+    clearPendingTimer();
+    setTranslation("", origText);
+    return;
+  }
+
   if (captionSession.activeGroupIdx >= 0) {
     const gCached = captionSession.transCache.get(groupKey(captionSession.activeGroupIdx));
     if (gCached !== undefined) {
@@ -340,6 +348,7 @@ function renderTranslationForCue(idx, cue, displayedSource, immediatePending) {
 
 function prefetchFrom(startIdx) {
   if (!settings.enabled || !captionSession.cueList) return;
+  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang)) return;
   if (captionSession.cueToGroup && captionSession.sentGroups) {
     const at = Math.max(0, Math.min(startIdx, captionSession.cueToGroup.length - 1));
     const g0 = at === captionSession.activeCueIdx && captionSession.activeGroupIdx >= 0
@@ -371,6 +380,7 @@ function deepseekPrefetchBatchCount() {
 }
 
 function prefetchDeepseekBatches(gIdx, includeCurrent, currentUrgent = false) {
+  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang)) return;
   if (!captionSession.sentGroups || !captionSession.deepseekBatchWindows.length) return;
   if (!Number.isInteger(gIdx) || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
   if (includeCurrent) deepseekRequestBatch(gIdx, true, !!currentUrgent);

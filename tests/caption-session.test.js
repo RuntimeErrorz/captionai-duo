@@ -5,12 +5,13 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadShared } = require("./helpers");
 
 const root = path.resolve(__dirname, "..");
 const sessionSource = fs.readFileSync(path.join(root, "content/session.js"), "utf8");
 const fallbackSource = fs.readFileSync(path.join(root, "content/fallback.js"), "utf8");
 
-function loadFallbackLifecycleHarness() {
+function loadFallbackLifecycleHarness(options = {}) {
   const timers = new Map();
   const requests = [];
   const messages = [];
@@ -49,7 +50,8 @@ function loadFallbackLifecycleHarness() {
     resetDeepseekCommitTimeline: () => {},
     clearDeepseekSeekSettle: () => {},
     clearPendingTimer: () => {},
-    settings: { enabled: true, targetLang: "zh-CN" },
+    settings: { enabled: true, targetLang: options.targetLang || "zh-CN" },
+    YTDS_SHARED: loadShared(),
     DEBOUNCE_MS: 450,
     setTranslation: (translation, source) => {
       session.lastTransSource = source || "";
@@ -77,6 +79,21 @@ function loadFallbackLifecycleHarness() {
     }
   };
 }
+
+test("same-language fallback captions reuse the original without a provider request", () => {
+  const harness = loadFallbackLifecycleHarness({ targetLang: "en" });
+  harness.session.cueSourceLang = "en";
+  harness.session.lastSource = "same-language source";
+
+  harness.schedule("same-language source");
+
+  assert.equal(harness.timers.size, 0);
+  assert.equal(harness.requests.length, 0);
+  assert.deepEqual(harness.painted, [{
+    translation: "",
+    source: "same-language source"
+  }]);
+});
 
 test("one session reset revokes every old callback and clears semantic owners", () => {
   const messages = [];

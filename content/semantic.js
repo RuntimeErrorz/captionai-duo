@@ -726,7 +726,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
 // Extend one hard-boundary-delimited stream's desired prefix. Transport
 // batches only define how far to preload; they never own semantic output.
 function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, requestOptions) {
-  if (captionSession.deepseekSeekSettling) return;
+  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) || captionSession.deepseekSeekSettling) return;
   if (!captionSession.sentGroups || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
   const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
   const region = captionSession.deepseekCommitRegions[regionIndex];

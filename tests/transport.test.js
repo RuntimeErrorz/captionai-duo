@@ -124,7 +124,7 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       cueVideoId: "video",
       currentVideoId: "video",
       cueEpoch: 1,
-      cueSourceLang: "en",
+      cueSourceLang: options.sourceLang || "en",
       cueList: [{ text: "source", start: 0, end: 1000 }],
       cueToGroup: [0],
       cueToGroups: [[0]],
@@ -156,7 +156,7 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       activeCueIdx: 0
     },
     settings: {
-      targetLang: "zh-CN", debugEnabled: true,
+      targetLang: options.targetLang || "zh-CN", debugEnabled: true,
       aiBaseUrl: options.aiBaseUrl || "https://api.deepseek.com"
     },
     DEEPSEEK_INITIAL_REQUEST_ITEMS: 48,
@@ -1481,6 +1481,30 @@ test("a repeated no-progress range is delayed and bypasses cache", async () => {
   assert.equal(harness.debug.some((entry) => entry.event === "batch-retry"), true);
 });
 
+test("same-language captions are shown directly without translation requests", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    targetLang: "en",
+    sourceLang: "en",
+    deferResponses: true
+  });
+  harness.context.settings.enabled = true;
+  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 0;
+  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 0;
+  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 0;
+  harness.context.PENDING_ELLIPSIS_MS = 400;
+  harness.context.captionSession.activeGroupIdx = 0;
+  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
+
+  vm.runInContext("prefetchFrom(0)", harness.context);
+  vm.runInContext(
+    "renderTranslationForCue(0, { text: 'same-language source' }, 'same-language source', false)",
+    harness.context
+  );
+
+  assert.equal(harness.messages.some((message) => message.type === "translateBatch"), false);
+  assert.deepEqual(harness.painted, [""]);
+});
+
 test("accelerated playback prefetches the current semantic batch before promotion", () => {
   const calls = [];
   const requestedAhead = [];
@@ -1502,6 +1526,7 @@ test("accelerated playback prefetches the current semantic batch before promotio
     deepseekRequestBatch: (group, _includePredecessor, urgent) =>
       calls.push({ group, urgent: !!urgent }),
     YTDS_SHARED: {
+      isSameLanguage: () => false,
       semanticPrefetchBatchStarts: (_group, _mapping, _windows, ahead) => {
         requestedAhead.push(ahead);
         return batchStarts.slice(1, ahead + 1);
@@ -1554,6 +1579,7 @@ test("same-group playback watchdog and rate change re-arm accelerated current pr
       context.captionSession.transCache.set("video g0", "ready");
     },
     YTDS_SHARED: {
+      isSameLanguage: () => false,
       semanticPrefetchBatchStarts: () => [],
       pendingTranslationScopeKey: () => "deepseek-batch:0"
     },
@@ -1728,6 +1754,7 @@ test("an invalidated fallback session cannot repaint unchanged source text", () 
       deepseekFocusGeneration: 0
     },
     settings: { targetLang: "zh-CN" },
+    YTDS_SHARED: loadShared(),
     DEBOUNCE_MS: 450,
     captureCaptionSession: () => sessionToken,
     isCaptionSessionCurrent: (token) => token === sessionToken,

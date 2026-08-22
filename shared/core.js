@@ -82,6 +82,41 @@
     return TARGET_LANG_SET.has(value) ? value : DEFAULTS.targetLang;
   }
 
+  function normalizeLanguageTag(value) {
+    const tag = String(value || "").trim().replace(/_/g, "-").toLowerCase();
+    if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2}$/.test(tag)) return null;
+    const parts = tag.split("-");
+    return {
+      tag,
+      primary: parts[0],
+      script: parts.slice(1).find((part) => /^[a-z]{4}$/.test(part)) || "",
+      region: parts.slice(1).find((part) => /^(?:[a-z]{2}|\d{3})$/.test(part)) || ""
+    };
+  }
+
+  function chineseScriptVariant(language) {
+    if (!language || language.primary !== "zh") return "";
+    if (language.script === "hans" ||
+        ["cn", "sg", "my"].includes(language.region)) return "simplified";
+    if (language.script === "hant" ||
+        ["tw", "hk", "mo"].includes(language.region)) return "traditional";
+    return "";
+  }
+
+  // Regional variants of a language use the same translation path. Chinese
+  // script variants remain distinct because zh-CN targets simplified Chinese.
+  // An empty/invalid source is not proof that the subtitle already uses the
+  // target language.
+  function isSameLanguage(sourceValue, targetValue) {
+    const source = normalizeLanguageTag(sourceValue);
+    const target = normalizeLanguageTag(targetValue);
+    if (!source || !target || source.primary !== target.primary) return false;
+    if (source.tag === target.tag || source.primary !== "zh") return true;
+    const sourceVariant = chineseScriptVariant(source);
+    const targetVariant = chineseScriptVariant(target);
+    return !sourceVariant || !targetVariant || sourceVariant === targetVariant;
+  }
+
   function isLocalAiHostname(hostname) {
     const host = String(hostname || "").toLowerCase();
     return host === "localhost" || host === "127.0.0.1";
@@ -439,7 +474,7 @@
 
   Object.assign(internal, {
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
-    normalizeTargetLang, normalizeAiBaseUrl, aiEndpointKind,
+    normalizeTargetLang, isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
     aiChatCompletionsUrl, aiOriginPattern, aiCredentialScope, aiRequestProfileScope,
     parseAiExtraBody, aiCompletionText,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,

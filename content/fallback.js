@@ -22,6 +22,12 @@ function cancelFallbackRequest() {
 
 function scheduleTranslate(text) {
   if (captionSession.debounceTimer) clearTimeout(captionSession.debounceTimer);
+  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang)) {
+    captionSession.debounceTimer = null;
+    captionSession.lastTransSource = text;
+    setTranslation("", text);
+    return;
+  }
   const scheduledSessionToken = captureCaptionSession();
   captionSession.debounceTimer = setTimeout(() => {
     if (!isCaptionSessionCurrent(scheduledSessionToken)) return;
@@ -118,6 +124,9 @@ function stopFallback() {
 function onNoCues(data) {
   if (!data || !captionSession.currentVideoId || data.videoId !== captionSession.currentVideoId) return;
   if (!Number.isInteger(data.nonce) || data.nonce !== captionSession.configNonce) return;
+  const sourceLang = typeof data.sourceLang === "string" &&
+    /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}$/.test(data.sourceLang)
+    ? data.sourceLang.slice(0, 24) : "";
   captionSession.nocuesFallback = true;
   stopCueLoop();
   resetCaptionSessionState("fallback-mode");
@@ -128,7 +137,7 @@ function onNoCues(data) {
   captionSession.deepseekBatchWindows = [];
   captionSession.deepseekGroupToBatch = [];
   captionSession.cueTrackKind = "";
-  captionSession.cueSourceLang = "";
+  captionSession.cueSourceLang = sourceLang;
   captionSession.cueTrackSignature = "";
   captionSession.duplicateCueEvents = 0;
   emitDebug("cues-unavailable", {

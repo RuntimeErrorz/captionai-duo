@@ -290,6 +290,7 @@
     post("nocues", {
       reason: String(reason || "fetch-error"),
       detail: String(detail || "").slice(0, 240),
+      sourceLang: trackLanguageOf(url),
       requestFreshSource: notifyFreshSource
     });
   }

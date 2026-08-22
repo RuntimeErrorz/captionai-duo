@@ -37,6 +37,10 @@ assert.equal(shared.DEFAULTS.origStrokeOpacity, shared.DEFAULTS.transStrokeOpaci
 assert.equal(shared.DEFAULTS.origStrokeWidth, shared.DEFAULTS.transStrokeWidth);
 assert.equal(shared.TARGET_LANGS.length, 15);
 assert.equal(shared.TARGET_LANGS.includes("zh-TW"), false);
+assert.equal(shared.isSameLanguage("EN", "en"), true);
+assert.equal(shared.isSameLanguage("en-US", "en"), true);
+assert.equal(shared.isSameLanguage("zh-Hant", "zh-CN"), false);
+assert.equal(shared.isSameLanguage("", "en"), false);
 assert.equal(shared.aiEndpointKind("https://api.deepseek.com"), "deepseek");
 assert.equal(shared.aiEndpointKind("https://gateway.example/v1"), "compatible");
 assert.equal(shared.normalizeAiBaseUrl("https://gateway.example/v1/"),

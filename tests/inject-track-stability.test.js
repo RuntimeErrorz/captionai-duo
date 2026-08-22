@@ -269,6 +269,7 @@ test("empty player URL is quarantined until the player rotates it", async () => 
   assert.equal(fetchCalls.length, 1, JSON.stringify(fetchCalls));
   const firstNoCues = posts.find((entry) => entry.type === "nocues");
   assert.equal(!!firstNoCues, true, JSON.stringify(posts));
+  assert.equal(firstNoCues.sourceLang, "en");
   assert.equal(firstNoCues.requestFreshSource, true, JSON.stringify(posts));
 
   await vm.runInContext("window.fetch(staleUrl)", context);
