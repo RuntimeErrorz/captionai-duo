@@ -19,6 +19,188 @@ function json3(text) {
   });
 }
 
+test("translated timedtext requests are normalized back to the original track", async () => {
+  const listeners = new Map();
+  const posts = [];
+  const fetchCalls = [];
+  const context = {
+    URL,
+    AbortController,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "abcdefghijk",
+      isAllowedTimedtextUrl: (url) =>
+        String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    XMLHttpRequest: function XMLHttpRequest() {},
+    performance: { getEntriesByType: () => [] },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {}
+  };
+  context.XMLHttpRequest.prototype.open = function open() {};
+  context.XMLHttpRequest.prototype.send = function send() {};
+  context.window = context;
+  context.addEventListener = (type, callback) => listeners.set(type, callback);
+  context.postMessage = (message) => posts.push(message);
+  context.fetch = async (url) => {
+    const value = String(url);
+    fetchCalls.push(value);
+    const params = new URL(value).searchParams;
+    const text = params.has("tlang") ? "自动翻译英文字幕" : "中文原文字幕";
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      text: async () => json3(text),
+      clone: () => ({ text: async () => json3(text) })
+    };
+  };
+
+  vm.createContext(context);
+  vm.runInContext(injectSource, context);
+  context.messageListener = listeners.get("message");
+  context.translatedUrl =
+    "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=zh&kind=asr&tlang=en&pot=fresh";
+  await vm.runInContext(
+    "messageListener({source: window, origin: location.origin, " +
+    "data: {source: 'ytds-content', type: 'config', nonce: 41}});" +
+    "window.fetch(translatedUrl);",
+    context
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const cuePosts = posts.filter((entry) => entry.type === "cues");
+  assert.equal(cuePosts.length, 1, JSON.stringify({ fetchCalls, posts }));
+  assert.equal(cuePosts[0].sourceLang, "zh");
+  assert.equal(cuePosts[0].cues[0].text, "中文原文字幕");
+  assert.equal(fetchCalls.some((url) => !new URL(url).searchParams.has("tlang")), true);
+});
+
+test("config waits for a player timedtext response already in flight", async () => {
+  const listeners = new Map();
+  const posts = [];
+  const fetchCalls = [];
+  const body = json3("player-owned original captions");
+  let resolvePlayerResponse;
+  const playerResponse = new Promise((resolve) => { resolvePlayerResponse = resolve; });
+  const context = {
+    URL,
+    AbortController,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "abcdefghijk",
+      isAllowedTimedtextUrl: (url) =>
+        String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    XMLHttpRequest: function XMLHttpRequest() {},
+    performance: { getEntriesByType: () => [] },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {}
+  };
+  context.XMLHttpRequest.prototype.open = function open() {};
+  context.XMLHttpRequest.prototype.send = function send() {};
+  context.window = context;
+  context.addEventListener = (type, callback) => listeners.set(type, callback);
+  context.postMessage = (message) => posts.push(message);
+  context.fetch = (url) => {
+    fetchCalls.push(String(url));
+    return playerResponse;
+  };
+
+  vm.createContext(context);
+  vm.runInContext(injectSource, context);
+  context.messageListener = listeners.get("message");
+  context.playerUrl =
+    "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en&kind=asr&pot=fresh";
+  vm.runInContext("window.fetch(playerUrl);", context);
+  vm.runInContext(
+    "messageListener({source: window, origin: location.origin, " +
+    "data: {source: 'ytds-content', type: 'config', nonce: 51}});",
+    context
+  );
+
+  assert.equal(fetchCalls.length, 1, JSON.stringify(fetchCalls));
+  resolvePlayerResponse({
+    ok: true,
+    status: 200,
+    headers: { get: () => "application/json" },
+    text: async () => body,
+    clone: () => ({ text: async () => body })
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const cuePosts = posts.filter((entry) => entry.type === "cues");
+  assert.equal(cuePosts.length, 1, JSON.stringify({ fetchCalls, posts }));
+  assert.equal(cuePosts[0].cues[0].text, "player-owned original captions");
+});
+
+test("an empty extension refetch requests a fresh player caption source", async () => {
+  const listeners = new Map();
+  const posts = [];
+  const fetchCalls = [];
+  const context = {
+    URL,
+    AbortController,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "abcdefghijk",
+      isAllowedTimedtextUrl: (url) =>
+        String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    XMLHttpRequest: function XMLHttpRequest() {},
+    performance: { getEntriesByType: () => [] },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {}
+  };
+  context.XMLHttpRequest.prototype.open = function open() {};
+  context.XMLHttpRequest.prototype.send = function send() {};
+  context.window = context;
+  context.addEventListener = (type, callback) => listeners.set(type, callback);
+  context.postMessage = (message) => posts.push(message);
+  context.fetch = async (url) => {
+    fetchCalls.push(String(url));
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "text/html" },
+      text: async () => "",
+      clone: () => ({ text: async () => "" })
+    };
+  };
+
+  vm.createContext(context);
+  vm.runInContext(injectSource, context);
+  context.messageListener = listeners.get("message");
+  context.translatedUrl =
+    "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en&kind=asr&tlang=zh&pot=stale";
+  vm.runInContext(
+    "messageListener({source: window, origin: location.origin, " +
+    "data: {source: 'ytds-content', type: 'config', nonce: 61}});" +
+    "window.fetch(translatedUrl);",
+    context
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const noCue = posts.find((entry) => entry.type === "nocues");
+  assert.equal(!!noCue, true, JSON.stringify({ fetchCalls, posts }));
+  assert.equal(noCue.requestFreshSource, true, JSON.stringify(posts));
+});
+
 test("competing timedtext tracks publish only the newest timeline", async () => {
   const listeners = new Map();
   const posts = [];

@@ -13,8 +13,9 @@
 
   const TIMEDTEXT_MARK = "/api/timedtext";
 
-  // The player's ORIGINAL-track fetch: a timedtext URL WITHOUT a "tlang" param.
-  // This is the only URL whose "pot" we may reuse.
+  // The source-track URL used to fetch original cues. It is normally the
+  // player's URL without "tlang", but can be derived from an auto-translated
+  // request when YouTube carries that selection across SPA navigation.
   let sourceUrl = "";
   // The videoId that sourceUrl was captured for. produceCues bails if this no
   // longer matches the current location video, so a stale (previous-video) URL
@@ -68,6 +69,19 @@
       return new URL(url, location.href).searchParams.has("tlang");
     } catch (_e) {
       return /[?&]tlang=/.test(url);
+    }
+  }
+
+  // YouTube can keep the previous video's auto-translate selection and request
+  // the current track with tlang. The lang track remains the source track; use
+  // the same proof-bearing URL with only the translation parameter removed.
+  function sourceTrackUrl(url) {
+    try {
+      const u = new URL(url, location.href);
+      u.searchParams.delete("tlang");
+      return u.toString();
+    } catch (_e) {
+      return "";
     }
   }
 
@@ -238,7 +252,7 @@
   }
 
   function sourceStillCurrent(url, revision) {
-    return url === sourceUrl && sourceVid === currentVideoId &&
+    return sourceTrackUrl(url) === sourceUrl && sourceVid === currentVideoId &&
       revision === sourceRevision;
   }
 
@@ -377,6 +391,15 @@
     }, 750);
   }
 
+  // A player request can start before content.js sends its first config. Keep
+  // that request authoritative across the config boundary, but only start the
+  // timeout once config exists and we can report a failed source.
+  function trackPendingPlayerResponse(url, revision) {
+    awaitingPlayerResponseUrl = url;
+    clearPlayerResponseTimer();
+    if (cfg) awaitPlayerResponse(url, revision);
+  }
+
   // Produce original cues from the captured source URL.
   async function produceCues(force) {
     if (!cfg || !sourceUrl) return;
@@ -422,15 +445,15 @@
       if (!cues.length) {
         postDiagnostic("cue-fetch-empty", { fetchNonce: myNonce, sourceRevision: mySourceRevision });
         rejectCurrentSource(
-          mySourceUrl, mySourceRevision, "empty-track", "timedtext contained no cues"
+          mySourceUrl, mySourceRevision, "empty-track", "timedtext contained no cues", true
         );
         return;
       }
 
       publishCues(cues, mySourceUrl, mySourceRevision, "refetch");
     } catch (err) {
-      // could not fetch/parse — let content.js fall back to scraping, but only
-      // if we are still on the same video the fetch was started for.
+      // Could not fetch/parse. Ask content.js to rotate the player's
+      // proof-bearing source immediately, but only for the same video/request.
       if (vid !== currentVideoId || sourceVid !== currentVideoId ||
           mySourceRevision !== sourceRevision || mySourceKey !== sourceKey) return;
       producedForUrl = "";
@@ -440,7 +463,7 @@
         sourceRevision: mySourceRevision,
         detail
       });
-      rejectCurrentSource(mySourceUrl, mySourceRevision, "fetch-error", detail);
+      rejectCurrentSource(mySourceUrl, mySourceRevision, "fetch-error", detail, true);
     } finally {
       if (cueFetchInFlightUrl === mySourceUrl) cueFetchInFlightUrl = "";
     }
@@ -448,9 +471,12 @@
 
   // Called whenever we capture a fresh source URL.
   function onSourceCaptured(expectPlayerResponse) {
+    if (expectPlayerResponse) {
+      trackPendingPlayerResponse(sourceUrl, sourceRevision);
+      return;
+    }
     if (!cfg) return;               // wait for config before fetching
-    if (expectPlayerResponse) awaitPlayerResponse(sourceUrl, sourceRevision);
-    else produceCues(false);
+    produceCues(false);
   }
 
   // Record a timedtext URL seen on the wire.
@@ -458,43 +484,42 @@
     try {
       if (!isTimedtext(url)) return;
       if (isInternalTimedtext(url)) return;
-      if (!hasTlang(url)) {
-        // The player's original-track fetch — the only pot we may reuse.
-        // Always keep the freshest exact URL (pot can rotate), but only treat
-        // it as a NEW source (and re-produce) when the track identity changes.
-        const key = normKey(url);
-        const exactChanged = url !== sourceUrl;
-        sourceUrl = url;
-        sourceVid = vidOfUrl(url);
-        if (exactChanged) {
-          producedForUrl = "";
-          quarantinedSourceUrl = "";
-          capturedPlayerCues = null;
-          capturedPlayerCuesUrl = "";
-          lastPublishedUrl = "";
-          lastPublishedNonce = 0;
-          freshSourceRequestedForUrl = "";
-          pendingFreshSourceRequest = false;
-        }
-        if (key !== sourceKey) {
-          sourceKey = key;
-          sourceRevision++;
-          postDiagnostic("timedtext-captured", {
-            sourceRevision,
-            sourceVideoMatches: sourceVid === currentVideoId,
-            trackKind: trackKindOf(url),
-            sourceLang: trackLanguageOf(url),
-            transport: String(captureMeta && captureMeta.transport || "observer"),
-            method: String(captureMeta && captureMeta.method || "GET").slice(0, 12)
-          });
-          onSourceCaptured(!!expectPlayerResponse);
-        } else if (expectPlayerResponse && cfg) {
-          awaitPlayerResponse(sourceUrl, sourceRevision);
-        } else if (exactChanged && cfg && producedForUrl === "") {
-          // Same track with a freshly rotated pot/signature after a failure.
-          // Retry immediately instead of waiting for a video navigation.
-          produceCues(true);
-        }
+      const candidate = sourceTrackUrl(url);
+      if (!candidate) return;
+      // Always keep the freshest exact URL (pot can rotate), but only treat it
+      // as a NEW source (and re-produce) when the track identity changes.
+      const key = normKey(candidate);
+      const exactChanged = candidate !== sourceUrl;
+      sourceUrl = candidate;
+      sourceVid = vidOfUrl(candidate);
+      if (exactChanged) {
+        producedForUrl = "";
+        quarantinedSourceUrl = "";
+        capturedPlayerCues = null;
+        capturedPlayerCuesUrl = "";
+        lastPublishedUrl = "";
+        lastPublishedNonce = 0;
+        freshSourceRequestedForUrl = "";
+        pendingFreshSourceRequest = false;
+      }
+      if (key !== sourceKey) {
+        sourceKey = key;
+        sourceRevision++;
+        postDiagnostic("timedtext-captured", {
+          sourceRevision,
+          sourceVideoMatches: sourceVid === currentVideoId,
+          trackKind: trackKindOf(candidate),
+          sourceLang: trackLanguageOf(candidate),
+          transport: String(captureMeta && captureMeta.transport || "observer"),
+          method: String(captureMeta && captureMeta.method || "GET").slice(0, 12)
+        });
+        onSourceCaptured(!!expectPlayerResponse);
+      } else if (expectPlayerResponse) {
+        trackPendingPlayerResponse(sourceUrl, sourceRevision);
+      } else if (exactChanged && cfg && producedForUrl === "") {
+        // Same track with a freshly rotated pot/signature after a failure.
+        // Retry immediately instead of waiting for a video navigation.
+        produceCues(true);
       }
     } catch (_e) { /* never throw */ }
   }
@@ -573,8 +598,9 @@
         if (capturedPlayerCues && capturedPlayerCuesUrl === sourceUrl) {
           publishCues(capturedPlayerCues, sourceUrl, sourceRevision, "player-cache");
         } else if (awaitingPlayerResponseUrl === sourceUrl) {
-          // The player's response is still authoritative; do not race it with
-          // an extension-side conversion request.
+          // The player's response is still authoritative; arm the timeout now
+          // if the request was observed before this config message arrived.
+          awaitPlayerResponse(sourceUrl, sourceRevision);
         } else if (quarantinedSourceUrl === sourceUrl) {
           if (pendingFreshSourceRequest) {
             rejectCurrentSource(
@@ -608,12 +634,13 @@
     XHR.send = function () {
       try {
         const url = this.__ytdsUrl;
-        if (isTimedtext(url) && !hasTlang(url) && !isInternalTimedtext(url)) {
+        if (isTimedtext(url) && !isInternalTimedtext(url)) {
           const method = this.__ytdsMethod || "GET";
           const startedAt = Date.now();
-          noteTimedtext(url, true, { transport: "xhr", method });
+          const watchesPlayerResponse = !hasTlang(url);
+          noteTimedtext(url, watchesPlayerResponse, { transport: "xhr", method });
           const revision = sourceRevision;
-          if (typeof this.addEventListener === "function") {
+          if (watchesPlayerResponse && typeof this.addEventListener === "function") {
             this.addEventListener("loadend", () => {
               try {
                 let text = "";
@@ -629,7 +656,7 @@
                 });
               } catch (_e) { playerResponseUnavailable(String(url), revision); }
             }, { once: true });
-          } else {
+          } else if (watchesPlayerResponse) {
             playerResponseUnavailable(String(url), revision);
           }
         }
