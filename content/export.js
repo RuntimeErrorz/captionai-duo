@@ -13,6 +13,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: handleDeepseekTranslationProgress(msg) });
     return;
   }
+  if (msg.type === "getCaptionTracks") {
+    sendResponse(captionTrackResponse());
+    return;
+  }
+  if (msg.type === "setCaptionTrack") {
+    sendResponse(setCaptionTrackSelection(msg.trackId));
+    return;
+  }
+  if (msg.type === "setTranslationTrack") {
+    sendResponse(setCaptionTranslationSelection(msg.trackId));
+    return;
+  }
   if (msg.type === "settingsPatch") {
     const patch = msg.patch && typeof msg.patch === "object" ? msg.patch : {};
     let needDisplayReflow = false;

@@ -268,24 +268,6 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace) {
         }
       }
       if (!publishStreamedAlignedChunks()) return status(true, "invalid-jsonl");
-      // Compatibility and circuit breaker: old models may begin the removed
-      // deferred_ids form and then enumerate thousands of invented numbers.
-      // The cursor already determines the suffix, so stop as soon as that
-      // obsolete prefix is recognizable instead of waiting for a newline.
-      if (!state.done && YTDS_SHARED.aiJsonlLegacyDonePrefix(recordBuffer)) {
-        const accepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, { type: "done" });
-        if (!accepted.ok) {
-          fail(accepted.error, recordBuffer);
-          return status(true, "invalid-jsonl");
-        }
-        if (trace && trace.debug) appendDebug("background", "semantic-jsonl-legacy-done-stopped", {
-          requestId: trace.requestId || "",
-          completedItems: state.cursor,
-          deferredCount: state.expected.length - state.cursor
-        });
-        recordBuffer = "";
-        return status(true, "legacy-deferred-list");
-      }
       return status(false, "");
     },
     hasProgress() {

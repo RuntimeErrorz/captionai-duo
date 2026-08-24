@@ -25,11 +25,16 @@ implementation condition.
 ## Implementation loop
 
 1. Read the nearest `AGENTS.md` and trace the complete state/data path.
-2. Reproduce with a focused test or documented Chrome scenario.
+2. Reproduce with a focused test or documented Chrome scenario. For a pure
+   popup CSS change, a documented visual scenario is sufficient; do not create
+   a regression fixture for a font, spacing, color, border, or arrow-position
+   adjustment.
 3. Fix the invariant at its owner boundary; avoid parallel state machines and
    downstream repair heuristics.
-4. Run the focused test after each meaningful edit.
-5. Run `npm run check` for syntax, load order, module size, and all regressions.
+4. Run the focused test after each meaningful behavioral edit. For CSS-only
+   changes, run the architecture check and the relevant popup smoke check.
+5. Run `npm run check` for runtime or behavioral changes: syntax, load order,
+   module size, and all regressions.
 6. Inspect `git diff --check` and the final diff. Explain the root cause, why the
    fix is general, verification evidence, and remaining risk.
 
@@ -53,14 +58,22 @@ Perform the relevant checks whenever behavior crosses the browser boundary:
   `state-transition` events with session revision, request ID, and the explicit
   reason whenever a stale callback or timer is discarded.
 
+For a pure popup presentation change, reload the unpacked extension and inspect
+the affected workspace at its normal, hover, focus, and open-menu states. Check
+that text remains readable, controls stay within the fixed popup width, and no
+nearby control changes state unexpectedly. This replaces a regression test for
+CSS-only edits.
+
 Record which checks were run in the pull request. If a check cannot be run, say
 why and describe the residual risk rather than calling the change fully verified.
 
 ## Definition of done
 
 - Acceptance criteria are met without example-specific branches.
-- The regression test fails on the old behavior and passes on the fix.
-- `npm run check` and `git diff --check` pass.
+- Runtime or behavioral changes have a regression test that fails on the old
+  behavior and passes on the fix. CSS-only changes have the relevant manual UI
+  check instead.
+- The applicable architecture/tests check and `git diff --check` pass.
 - Required manual checks are recorded for UI/lifecycle changes.
 - No new permission, secret exposure, compatibility branch, or duplicated state
   owner was introduced without explicit justification.

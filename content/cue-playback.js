@@ -72,8 +72,8 @@ function startCueLoop() {
   clearPendingTimer();
   invalidateCaptionSession("cue-loop-start");
   ensureOverlay();
-  // Clear any leftover text (e.g. last scraped fallback line, or a previous
-  // cue) so a start during a gap does not leave a stale line on screen.
+  // Clear any leftover cue text so a start during a gap does not leave a stale
+  // line on screen.
   setOriginal("");
   setTranslation("", "");
   const video = getVideo();
@@ -209,9 +209,10 @@ function cueTick(event) {
   const video = getVideo();
   if (!video) return;
   const t = video.currentTime * 1000;
+  const manualTranslation = manualTranslationSelected();
   const eventType = event && event.type || "";
-  if (eventType === "seeking") beginDeepseekSeek(t);
-  else if (eventType === "seeked") finishDeepseekSeek(t);
+  if (!manualTranslation && eventType === "seeking") beginDeepseekSeek(t);
+  else if (!manualTranslation && eventType === "seeked") finishDeepseekSeek(t);
   const seekJustSettled = eventType === "deepseek-seek-settled";
   const playbackRateChanged = eventType === "ratechange";
 
@@ -222,7 +223,7 @@ function cueTick(event) {
     // The first caption often starts after a short intro. Use that otherwise
     // idle lead time to translate the upcoming DeepSeek batch before it is
     // visible. This also warms the destination when seeking into a cue gap.
-    prefetchDeepseekAtTime(t);
+    if (!manualTranslation) prefetchDeepseekAtTime(t);
     if (captionSession.activeCueIdx !== -1) {
       captionSession.activeCueIdx = -1;
       captionSession.activeGroupIdx = -1;              // no cue ⟹ no group (explicit invariant)
@@ -230,6 +231,27 @@ function cueTick(event) {
       setOriginal("");
       setTranslation("", "");
     }
+    return;
+  }
+
+  if (manualTranslation) {
+    if (idx === captionSession.activeCueIdx && captionSession.activeGroupIdx === -1) {
+      setTranslation(manualTranslationTextAt(t), sourceForDisplayedCue(idx, captionSession.cueList[idx]));
+      return;
+    }
+    captionSession.activeCueIdx = idx;
+    captionSession.activeGroupIdx = -1;
+    const cue = captionSession.cueList[idx];
+    const displaySource = cue.text;
+    if (idx !== captionSession.lastDebugCueIdx || eventType === "seeking") {
+      captionSession.lastDebugCueIdx = idx;
+      emitDebug("cue-active", {
+        cueIdx: idx, groupIdx: -1, cueStartMs: cue.start, cueEndMs: cue.end,
+        source: cue.text, displaySource
+      });
+    }
+    setOriginal(displaySource);
+    setTranslation(manualTranslationTextAt(t), displaySource);
     return;
   }
 
@@ -318,6 +340,12 @@ function deepseekGroupForCueAt(cueIdx, timeMs) {
 
 function renderTranslationForCue(idx, cue, displayedSource, immediatePending) {
   const origText = displayedSource || cue.text;
+
+  if (manualTranslationSelected()) {
+    const video = getVideo();
+    setTranslation(manualTranslationTextAt(video ? video.currentTime * 1000 : cue.start), origText);
+    return;
+  }
 
   if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang)) {
     clearPendingTimer();

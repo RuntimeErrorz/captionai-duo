@@ -24,7 +24,6 @@ test("same-video navigate-finish preserves the active caption session", () => {
     emitCaptionStateTransition: (...args) => calls.push(["transition", ...args]),
     emitDebug: (...args) => calls.push(["debug", ...args]),
     stopCueLoop: () => calls.push(["stopCueLoop"]),
-    stopFallback: () => calls.push(["stopFallback"]),
     resetCaptionSessionState: () => calls.push(["reset"]),
     removeOverlay: () => calls.push(["removeOverlay"]),
     stopCueRecovery: () => calls.push(["stopRecovery"]),

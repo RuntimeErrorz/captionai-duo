@@ -13,9 +13,15 @@ order or moving code across execution worlds.
 3. Implement the smallest coherent root-cause fix. Do not add phrase-specific,
    video-specific, timestamp-specific, or provider-hostname exceptions when a
    protocol or state invariant can express the behavior.
-4. Add a behavioral regression test. Prefer executable state/transport tests
-   over source-text assertions; use randomized invariant tests for timelines.
-5. Run the nearest test while iterating, then run `npm run check` before handoff.
+4. For runtime, data-flow, lifecycle, or interaction changes, add a behavioral
+   regression test. Prefer executable state/transport tests over source-text
+   assertions; use randomized invariant tests for timelines. Purely visual
+   popup changes (font, spacing, color, border, arrow position, and similar CSS)
+   do not require a regression test; verify them with the relevant manual UI
+   smoke check instead.
+5. Run the nearest relevant check while iterating. Run `npm run check` before
+   handoff for runtime or behavioral changes; CSS-only changes need the
+   architecture check plus the relevant manual UI smoke check.
 6. Review the final diff for secret leakage, permission growth, stale compatibility
    paths, duplicated state transitions, and changes unrelated to the request.
 
@@ -34,8 +40,8 @@ order or moving code across execution worlds.
   for a documented, currently supported provider contract and cover it with a
   fixture.
 - A change is not complete solely because unit tests pass. UI, extension
-  lifecycle, permission, or first-load changes also require the manual Chrome
-  smoke checks in [docs/VERIFIED_DEVELOPMENT.md](docs/VERIFIED_DEVELOPMENT.md).
+  lifecycle, permission, or first-load changes also require the relevant manual
+  Chrome smoke checks in [docs/VERIFIED_DEVELOPMENT.md](docs/VERIFIED_DEVELOPMENT.md).
 - Use [docs/VIBE_CODING_WITH_CODEX.md](docs/VIBE_CODING_WITH_CODEX.md) as the
   human-facing operating manual for planning, steering, reviewing, and
   integrating Codex-assisted changes.

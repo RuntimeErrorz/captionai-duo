@@ -75,18 +75,6 @@ test("JSONL framing recovers a complete unit when only its outer wrapper is trun
   assert.deepEqual(Array.from(decoded.record.chunks[0].ids), ["0"]);
 });
 
-test("legacy enumerated done is recognized before its numeric list is generated", () => {
-  const prefix = '{"type":"done","deferred_ids":';
-  for (let index = 0; index < prefix.length; index++) {
-    assert.equal(shared.aiJsonlLegacyDonePrefix(prefix.slice(0, index)), false);
-  }
-  assert.equal(shared.aiJsonlLegacyDonePrefix(prefix), true);
-  assert.equal(shared.aiJsonlLegacyDonePrefix(
-    prefix + '["5818","5819","5820","5821"'
-  ), true);
-  assert.equal(shared.aiJsonlLegacyDonePrefix('{"type":"done"}'), false);
-});
-
 test("JSONL state derives the deferred suffix from its coverage cursor", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   const first = shared.pushAiJsonlTranslationRecord(state, {
@@ -182,17 +170,6 @@ test("JSONL state rejects reordered ids, hard-boundary crossings and records aft
   assert.match(shared.pushAiJsonlTranslationRecord(afterDone, {
     type: "unit", chunks: [{ ids: ["0"], translation: "多余" }]
   }).error, /after done/);
-});
-
-test("legacy deferred id lists are ignored instead of inviting numeric continuation", () => {
-  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
-  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "unit", chunks: [{ ids: ["0", "1"], translation: "已完成" }]
-  }).ok, true);
-  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "done", deferred_ids: ["999", "1000", "1001"]
-  }).ok, true);
-  assert.deepEqual(shared.aiJsonlTranslationResult(state, false).deferredIds, ["2", "3"]);
 });
 
 test("complete ordered coverage is final even when the model omits done", () => {

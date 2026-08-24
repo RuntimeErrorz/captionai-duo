@@ -195,57 +195,37 @@
     return ranges.some((range) => position > range.start && position < range.end);
   }
 
-  function displaySentenceBoundaries(text, locale) {
+  function displaySegmentBoundaries(text, locale, granularity, getBoundary) {
     if (typeof Intl !== "object" || typeof Intl.Segmenter !== "function") return null;
     try {
       const boundaries = new Set();
       const segments = new Intl.Segmenter(locale || undefined, {
-        granularity: "sentence"
+        granularity
       }).segment(text);
       for (const segment of segments) {
-        let end = segment.index + segment.segment.length;
-        while (end > segment.index && /\s/.test(text[end - 1])) end--;
+        const end = getBoundary(segment, segment.index + segment.segment.length);
         if (end > 0 && end < text.length) boundaries.add(end);
       }
       return boundaries;
     } catch (_e) {
       return null;
     }
+  }
+
+  function displaySentenceBoundaries(text, locale) {
+    return displaySegmentBoundaries(text, locale, "sentence", (segment, end) => {
+      while (end > segment.index && /\s/.test(text[end - 1])) end--;
+      return end;
+    });
   }
 
   function displayWordBoundaries(text, locale) {
-    if (typeof Intl !== "object" || typeof Intl.Segmenter !== "function") return null;
-    try {
-      const boundaries = new Set();
-      const segments = new Intl.Segmenter(locale || undefined, {
-        granularity: "word"
-      }).segment(text);
-      for (const segment of segments) {
-        if (segment.isWordLike === false) continue;
-        const end = segment.index + segment.segment.length;
-        if (end > 0 && end < text.length) boundaries.add(end);
-      }
-      return boundaries;
-    } catch (_e) {
-      return null;
-    }
+    return displaySegmentBoundaries(text, locale, "word",
+      (segment, end) => segment.isWordLike === false ? 0 : end);
   }
 
   function displayGraphemeBoundaries(text, locale) {
-    if (typeof Intl !== "object" || typeof Intl.Segmenter !== "function") return null;
-    try {
-      const boundaries = new Set();
-      const segments = new Intl.Segmenter(locale || undefined, {
-        granularity: "grapheme"
-      }).segment(text);
-      for (const segment of segments) {
-        const end = segment.index + segment.segment.length;
-        if (end > 0 && end < text.length) boundaries.add(end);
-      }
-      return boundaries;
-    } catch (_e) {
-      return null;
-    }
+    return displaySegmentBoundaries(text, locale, "grapheme", (_segment, end) => end);
   }
 
   // Pixel-aware safety pagination for responses without aligned model chunks

@@ -6,53 +6,55 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const root = path.resolve(__dirname, "..");
-const fallbackSource = fs.readFileSync(path.join(root, "content", "fallback.js"), "utf8");
+const bridgeSource = fs.readFileSync(
+  path.join(__dirname, "..", "content/bridge.js"), "utf8"
+);
 
-test("a confirmed empty player response requests one immediate fresh caption source", () => {
+test("an unavailable cue track schedules network recovery without rendered-caption fallback", () => {
   const calls = [];
+  const debug = [];
   const context = {
     captionSession: {
       currentVideoId: "abcdefghijk",
       configNonce: 31,
-      cueList: null,
-      sentGroups: null,
-      cueToGroup: null,
-      cueToGroups: null,
+      cueList: [{ text: "stale", start: 0, end: 1000 }],
+      cueVideoId: "abcdefghijk",
+      activeCueIdx: 2,
+      sentGroups: [],
+      cueToGroup: [],
+      cueToGroups: [],
       deepseekBatchWindows: [],
       deepseekGroupToBatch: [],
-      cueTrackKind: "",
-      cueSourceLang: "",
-      cueTrackSignature: "",
-      duplicateCueEvents: 0,
-      nocuesFallback: false
+      cueTrackKind: "asr",
+      cueSourceLang: "en",
+      cueTrackId: "track:en:asr:a.en",
+      cueTrackSignature: "old",
+      selectedTranslationTrackId: "ai"
     },
     settings: { enabled: true },
     stopCueLoop: () => calls.push("stopCueLoop"),
-    resetCaptionSessionState: () => calls.push("reset"),
-    emitDebug: () => {},
+    resetCaptionSessionState: (reason) => calls.push(["reset", reason]),
+    emitDebug: (...args) => debug.push(args),
     captionButtonDebugState: () => ({ present: true, pressed: "true", disabled: "" }),
-    ensureOverlay: () => calls.push("ensureOverlay"),
-    setInterval: () => 99,
-    forceCaptionReload: () => calls.push("forceCaptionReload"),
+    forceCaptionReload: (reason) => calls.push(["forceCaptionReload", reason]),
     scheduleCueRecovery: () => calls.push("scheduleCueRecovery")
   };
   vm.createContext(context);
-  vm.runInContext(fallbackSource, context);
+  vm.runInContext(bridgeSource, context, { filename: "content/bridge.js" });
 
-  vm.runInContext(`
-    onNoCues({
-      videoId: "abcdefghijk",
-      nonce: 31,
-      reason: "fetch-error",
-      detail: "player timedtext empty body",
-      requestFreshSource: true
-    });
-  `, context);
+  vm.runInContext(`onNoCues({
+    videoId: "abcdefghijk",
+    nonce: 31,
+    reason: "fetch-error",
+    detail: "timedtext empty body",
+    requestFreshSource: true
+  })`, context);
 
-  assert.deepEqual(
-    calls,
-    ["stopCueLoop", "reset", "ensureOverlay", "forceCaptionReload", "scheduleCueRecovery"]
-  );
-  assert.equal(context.captionSession.pollTimer, 99);
+  assert.deepEqual(calls, [
+    "stopCueLoop",
+    ["reset", "caption-cues-unavailable"],
+    ["forceCaptionReload", "empty-player-source"],
+    "scheduleCueRecovery"
+  ]);
+  assert.equal(debug[0][0], "cues-unavailable");
 });

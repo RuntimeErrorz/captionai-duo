@@ -44,19 +44,22 @@ function createCaptionSessionState(initialVideoId) {
     activeGroupIdx: -1,
     cueTrackKind: "",
     cueSourceLang: "",
+    cueTrackId: "",
     cueTrackSignature: "",
+    availableCaptionTracks: [],
+    preferredCaptionTrackId: "",
+    selectedCaptionTrackId: "auto",
+    selectedTranslationTrackId: "ai",
+    translationCueList: null,
+    translationCueVideoId: "",
+    translationCueTrackKind: "",
+    translationCueSourceLang: "",
+    translationCueTrackId: "",
+    translationCueSignature: "",
     duplicateCueEvents: 0,
     pendingTimer: null,
     pendingIndicatorKey: "",
-    pollTimer: null,
-    debounceTimer: null,
-    lastSource: "",
-    lastTransSource: "",
-    lastReqToken: 0,
-    fallbackRequestId: "",
-    fallbackSessionToken: null,
     currentVideoId: String(initialVideoId || ""),
-    nocuesFallback: false,
     configNonce: 0,
     nonceFallback: 0,
     cueRecoveryTimer: null,
@@ -144,11 +147,6 @@ function resetCaptionSessionState(reason, options) {
     try { sendRuntimeMessage({ type: "cancelDeepSeek", videoId: previousVideoId }); }
     catch (_e) { /* worker unavailable */ }
   }
-  cancelFallbackRequest();
-  captionSession.fallbackSessionToken = null;
-  captionSession.lastReqToken++;
-  captionSession.lastTransSource = "";
-
   captionSession.transCache.clear();
   captionSession.deepseekUnitCache.clear();
   captionSession.deepseekSourceCache.clear();

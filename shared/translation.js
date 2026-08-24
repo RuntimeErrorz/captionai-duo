@@ -324,11 +324,6 @@
     }
   }
 
-  function aiJsonlLegacyDonePrefix(value) {
-    return /^\s*\{\s*"type"\s*:\s*"done"\s*,\s*"deferred_ids"\s*:/
-      .test(String(value || ""));
-  }
-
   function createAiJsonlTranslationState(itemsValue, targetLang) {
     const items = Array.isArray(itemsValue) ? itemsValue.filter(Boolean) : [];
     return {
@@ -359,9 +354,8 @@
     if (record.type === "done") {
       const remaining = state.expected.slice(state.cursor);
       state.done = true;
-      // The stream cursor is the source of truth. Older models may still attach
-      // a deferred_ids array, but reading or trusting an enumerated suffix only
-      // invites numeric continuation and cannot add any coverage information.
+      // The stream cursor is the source of truth; a done record never supplies
+      // coverage information of its own.
       return { ok: true, type: "done", deferredIds: remaining, translations: [] };
     }
 
@@ -722,5 +716,5 @@
     return translations;
   }
 
-  Object.assign(internal, { normalizeTranslatedText, segmentedTranslationsFromJsonText, aiJsonlObjects, aiJsonlAlignedChunkPrefix, aiJsonlRecordFromLine, aiJsonlLegacyDonePrefix, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+  Object.assign(internal, { normalizeTranslatedText, segmentedTranslationsFromJsonText, aiJsonlObjects, aiJsonlAlignedChunkPrefix, aiJsonlRecordFromLine, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();

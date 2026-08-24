@@ -226,8 +226,7 @@ async function getAiConfig() {
   ]);
   const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(stored.aiBaseUrl);
   const endpointKind = YTDS_SHARED.aiEndpointKind(baseUrl);
-  const model = String(stored.aiModel || stored.deepseekModel ||
-    YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160);
+  const model = String(stored.aiModel || YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160);
   const profiles = local.aiExtraBodyProfiles && typeof local.aiExtraBodyProfiles === "object"
     ? local.aiExtraBodyProfiles : {};
   const profileScope = YTDS_SHARED.aiRequestProfileScope(baseUrl, model);
@@ -255,14 +254,12 @@ async function aiRawCompletion(
     throw err;
   }
   const stored = await chrome.storage.local.get({
-    aiApiKeys: {}, aiApiKey: "", deepseekApiKey: ""
+    aiApiKeys: {}
   });
   const keys = stored.aiApiKeys && typeof stored.aiApiKeys === "object"
     ? stored.aiApiKeys : {};
   const credentialScope = YTDS_SHARED.aiCredentialScope(config.baseUrl);
-  const legacyKey = config.endpointKind === "deepseek"
-    ? stored.aiApiKey || stored.deepseekApiKey || "" : "";
-  const apiKey = String(keys[credentialScope] || legacyKey).trim();
+  const apiKey = String(keys[credentialScope] || "").trim();
   if (config.endpointKind === "deepseek" && !apiKey) {
     const err = new Error("AI API key is not configured");
     err.needsKey = true;

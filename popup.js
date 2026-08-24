@@ -10,13 +10,15 @@ let state = { ...DEFAULTS };
 let activeLine = "trans";        // which line the tab editor is bound to
 let activeWorkspace = "translation"; // translation | display | tools
 let exportVariant = "bi";        // SRT export content: "bi" | "orig" | "trans" (local, not stored)
+let captionTrackRefreshSerial = 0;
 
 // ---- i18n ----------------------------------------------------------------
 // Safe wrapper: returns the localized message, or the fallback if the key is
 // missing/empty so the hardcoded markup keeps working in any environment.
-function t(key, fallback) {
+function t(key, fallback, substitutions) {
   try {
-    const m = chrome.i18n && chrome.i18n.getMessage(key);
+    const m = chrome.i18n && (substitutions === undefined
+      ? chrome.i18n.getMessage(key) : chrome.i18n.getMessage(key, substitutions));
     if (m) return m;
   } catch (_e) { /* ignore */ }
   return fallback;
@@ -151,6 +153,77 @@ function sendToTab(tabId, msg) {
       });
     } catch (_e) { resolve(null); }
   });
+}
+
+function safeCaptionTrack(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = String(value.id || "").trim().slice(0, 160);
+  const languageCode = String(value.languageCode || "").trim().slice(0, 24);
+  const label = String(value.label || languageCode).replace(/\s+/g, " ").trim().slice(0, 120);
+  if (!id || !/^[A-Za-z0-9._:-]+$/.test(id) ||
+      !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/.test(languageCode) || !label) return null;
+  return { id, languageCode, label, kind: value.kind === "asr" ? "asr" : "manual" };
+}
+
+function paintCaptionTrackOptions(response) {
+  const select = $("captionTrackSelect");
+  const translationSelect = $("translationTrackSelect");
+  const hint = $("captionTrackHint");
+  if (!select || !translationSelect || !hint) return;
+  const tracks = Array.isArray(response && response.tracks)
+    ? response.tracks.map(safeCaptionTrack).filter(Boolean).slice(0, 100) : [];
+  const auto = document.createElement("option");
+  auto.value = "auto";
+  auto.textContent = t("captionTrackAuto", "自动（原始音轨）");
+  const originalOptions = [auto];
+  const ai = document.createElement("option");
+  ai.value = "ai";
+  ai.textContent = t("translationTrackAi", "AI 翻译");
+  const translationOptions = [ai];
+  for (const track of tracks) {
+    const label = track.label;
+    const originalOption = document.createElement("option");
+    originalOption.value = track.id;
+    originalOption.textContent = label;
+    originalOptions.push(originalOption);
+    const translationOption = document.createElement("option");
+    translationOption.value = track.id;
+    translationOption.textContent = label;
+    translationOptions.push(translationOption);
+  }
+  select.replaceChildren(...originalOptions);
+  translationSelect.replaceChildren(...translationOptions);
+  const wanted = String(response && response.selectedTrackId || "auto");
+  const wantedTranslation = String(response && response.selectedTranslationTrackId || "ai");
+  select.value = originalOptions.some((option) => option.value === wanted) ? wanted : "auto";
+  translationSelect.value = translationOptions.some((option) => option.value === wantedTranslation)
+    ? wantedTranslation : "ai";
+  if (tracks.length) {
+    hint.textContent = "";
+    hint.hidden = true;
+    hint.classList.remove("warn");
+  } else {
+    hint.hidden = false;
+    hint.textContent = t("captionTrackUnavailable", "No selectable caption tracks for this video.");
+    hint.classList.add("warn");
+  }
+}
+
+async function refreshCaptionTracks(retries) {
+  const serial = ++captionTrackRefreshSerial;
+  const retryCount = Number.isInteger(retries) ? retries : 2;
+  const tab = await getActiveTab();
+  const response = tab && tab.id != null
+    ? await sendToTab(tab.id, { type: "getCaptionTracks" }) : null;
+  if (serial !== captionTrackRefreshSerial) return;
+  if (response && response.ok) {
+    paintCaptionTrackOptions(response);
+    if ((!response.tracks || !response.tracks.length) && retryCount > 0) {
+      setTimeout(() => refreshCaptionTracks(retryCount - 1), 350);
+    }
+    return;
+  }
+  paintCaptionTrackOptions({ tracks: [], selectedTrackId: "auto" });
 }
 
 function activateWorkspace(workspace, scrollToTop) {
@@ -451,7 +524,6 @@ function bindLineControls() {
 
 // ---- bind whole UI from state -------------------------------------------
 function bindUI() {
-  $("enabled").checked = state.enabled;
   $("debugEnabled").checked = !!state.debugEnabled;
   $("targetLang").value = state.targetLang;
   $("aiBaseUrl").value = state.aiBaseUrl;
@@ -472,9 +544,11 @@ function bindUI() {
 function wire() {
   wireAiConfigProfileManager();
   document.querySelectorAll(".workspace-tab").forEach((button) => {
-    button.addEventListener("click", () => activateWorkspace(button.dataset.workspace, true));
+    button.addEventListener("click", () => {
+      activateWorkspace(button.dataset.workspace, true);
+      if (button.dataset.workspace === "translation") refreshCaptionTracks(2);
+    });
   });
-  $("enabled").addEventListener("change", (e) => setKey("enabled", e.target.checked));
   $("targetLang").addEventListener("change", async (e) => {
     const value = YTDS_SHARED.normalizeTargetLang(e.target.value);
     setKey("targetLang", value);
@@ -570,6 +644,19 @@ function wire() {
   document.querySelectorAll("#order button").forEach((b) =>
     b.addEventListener("click", () => { setKey("order", b.dataset.val); paintSegs(); }));
 
+  $("captionTrackSelect").addEventListener("change", async (e) => {
+    const tab = await getActiveTab();
+    const response = tab && tab.id != null
+      ? await sendToTab(tab.id, { type: "setCaptionTrack", trackId: e.target.value }) : null;
+    if (!response || !response.ok) refreshCaptionTracks(1);
+  });
+  $("translationTrackSelect").addEventListener("change", async (e) => {
+    const tab = await getActiveTab();
+    const response = tab && tab.id != null
+      ? await sendToTab(tab.id, { type: "setTranslationTrack", trackId: e.target.value }) : null;
+    if (!response || !response.ok) refreshCaptionTracks(1);
+  });
+
   // row gap
   $("rowGap").addEventListener("input", (e) => {
     $("rowGapV").textContent = e.target.value + "px";
@@ -641,16 +728,7 @@ window.addEventListener("pagehide", () => {
 chrome.storage.sync.get(null, (got) => {
   got = got || {};
   state = { ...DEFAULTS, ...got };
-  const migration = {};
-  const normalizedTargetLang = YTDS_SHARED.normalizeTargetLang(state.targetLang);
-  if (normalizedTargetLang !== state.targetLang) migration.targetLang = normalizedTargetLang;
-  if (!Object.prototype.hasOwnProperty.call(got, "aiBaseUrl")) {
-    migration.aiBaseUrl = YTDS_SHARED.AI_DEFAULT_BASE_URL;
-  }
-  if (!Object.prototype.hasOwnProperty.call(got, "aiModel") && got.deepseekModel) {
-    migration.aiModel = got.deepseekModel;
-  }
-  Object.assign(state, migration);
+  state.targetLang = YTDS_SHARED.normalizeTargetLang(state.targetLang);
   const normalizedBase = YTDS_SHARED.normalizeAiBaseUrl(state.aiBaseUrl);
   if (normalizedBase) state.aiBaseUrl = normalizedBase;
   state.aiModel = String(state.aiModel || "").trim();
@@ -660,87 +738,15 @@ chrome.storage.sync.get(null, (got) => {
     YTDS_SHARED.normalizeAiContextCount(state.deepseekContextFuture, DEFAULTS.deepseekContextFuture);
   state.deepseekPrefetchBatches =
     YTDS_SHARED.normalizeDeepseekPrefetchBatches(state.deepseekPrefetchBatches);
-  // migrate legacy global bgOpacity onto per-line defaults
-  if (typeof got.bgOpacity === "number") {
-    if (typeof got.origBgOpacity !== "number") state.origBgOpacity = got.bgOpacity;
-    if (typeof got.transBgOpacity !== "number") state.transBgOpacity = got.bgOpacity;
-  }
-  // Move untouched legacy visual defaults to the clearer subtitle treatment.
-  // Exact-value checks preserve settings that the user actually customized.
-  if (Number(got.visualDefaultsVersion || 0) < 2) {
-    if (!Object.prototype.hasOwnProperty.call(got, "order") || got.order === "orig-top") {
-      migration.order = "trans-top";
-    }
-    if (!Object.prototype.hasOwnProperty.call(got, "transColor") ||
-        String(got.transColor).toLowerCase() === "#ffe98a") {
-      migration.transColor = "#ffffff";
-    }
-    const oldTransBgOpacity = Object.prototype.hasOwnProperty.call(got, "transBgOpacity")
-      ? Number(got.transBgOpacity) : Number(got.bgOpacity);
-    if (!Number.isFinite(oldTransBgOpacity) || oldTransBgOpacity === 0.6) {
-      migration.transBgOpacity = 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(got, "transStrokeOpacity") ||
-        Number(got.transStrokeOpacity) === 0) {
-      migration.transStrokeOpacity = 1;
-    }
-    migration.visualDefaultsVersion = 2;
-    Object.assign(state, migration);
-  }
-  if (Number(got.contextDefaultsVersion || 0) < 2) {
-    if (!Object.prototype.hasOwnProperty.call(got, "deepseekContextPast") ||
-        Number(got.deepseekContextPast) === 5) {
-      migration.deepseekContextPast = 1;
-    }
-    if (!Object.prototype.hasOwnProperty.call(got, "deepseekContextFuture") ||
-        Number(got.deepseekContextFuture) === 0) {
-      migration.deepseekContextFuture = 1;
-    }
-    migration.contextDefaultsVersion = 2;
-    Object.assign(state, migration);
-  }
-  if (Number(got.lineDefaultsVersion || 0) < 2) {
-    if (!Object.prototype.hasOwnProperty.call(got, "origSize") || Number(got.origSize) === 22) {
-      migration.origSize = 24;
-    }
-    if (!Object.prototype.hasOwnProperty.call(got, "origFullscreenSize") ||
-        Number(got.origFullscreenSize) === 30) {
-      migration.origFullscreenSize = 34;
-    }
-    const oldOrigBgOpacity = Object.prototype.hasOwnProperty.call(got, "origBgOpacity")
-      ? Number(got.origBgOpacity) : Number(got.bgOpacity);
-    if (!Number.isFinite(oldOrigBgOpacity) || oldOrigBgOpacity === 0.6) {
-      migration.origBgOpacity = 0;
-    }
-    if (!Object.prototype.hasOwnProperty.call(got, "origStrokeOpacity") ||
-        Number(got.origStrokeOpacity) === 0) {
-      migration.origStrokeOpacity = 1;
-    }
-    migration.lineDefaultsVersion = 2;
-    Object.assign(state, migration);
-  }
-  if (Object.keys(migration).length) chrome.storage.sync.set(migration);
-  const obsoleteSyncKeys = ["aiProvider", "aiThinking", "deepseekThinking"].filter(
-    (key) => Object.prototype.hasOwnProperty.call(got, key)
-  );
-  if (obsoleteSyncKeys.length) {
-    chrome.storage.sync.remove(obsoleteSyncKeys);
-  }
   chrome.storage.local.get({
-    aiApiKeys: {}, aiApiKey: "", deepseekApiKey: "", aiExtraBodyProfiles: {},
+    aiApiKeys: {}, aiExtraBodyProfiles: {},
     [AI_CONFIG_PROFILE_STORE_KEY]: null
   }, async (local) => {
-    const keys = local.aiApiKeys && typeof local.aiApiKeys === "object" ? { ...local.aiApiKeys } : {};
-    if (!keys.deepseek && (local.aiApiKey || local.deepseekApiKey)) {
-      keys.deepseek = String(local.aiApiKey || local.deepseekApiKey).trim();
-      await chrome.storage.local.set({ aiApiKeys: keys });
-      await chrome.storage.local.remove(["aiApiKey", "deepseekApiKey"]);
-      local.aiApiKeys = keys;
-    }
     await initializeAiConfigProfiles(local);
     bindUI();
     await Promise.all([loadCurrentAiApiKey(), loadCurrentAiExtraBody()]);
     wire();
+    refreshCaptionTracks(2);
     refreshEngineStatus();
     refreshAiTokenUsage();
   });

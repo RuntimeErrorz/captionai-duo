@@ -30,6 +30,9 @@
         "shared/display.js",
         "shared/stream.js",
         "shared.js",
+        "inject/caption-tracks.js",
+        "inject/track-transport.js",
+        "inject/translation-track.js",
         "inject.js"
       ],
       "run_at": "document_start",
@@ -55,7 +58,6 @@
         "content/display.js",
         "content/semantic-requests.js",
         "content/semantic.js",
-        "content/fallback.js",
         "content/export.js",
         "content/bridge.js",
         "content/lifecycle.js"

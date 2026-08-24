@@ -22,7 +22,6 @@ const CONTENT_FILES = Object.freeze([
   "content/display.js",
   "content/semantic-requests.js",
   "content/semantic.js",
-  "content/fallback.js",
   "content/export.js",
   "content/bridge.js",
   "content/lifecycle.js"
@@ -40,6 +39,13 @@ const POPUP_FILES = Object.freeze([
   "popup/ai-profiles.js",
   "popup/config-transfer.js",
   "popup.js"
+]);
+
+const MAIN_FILES = Object.freeze([
+  "inject/caption-tracks.js",
+  "inject/track-transport.js",
+  "inject/translation-track.js",
+  "inject.js"
 ]);
 
 function readSourceFiles(files) {
@@ -67,6 +73,7 @@ function loadSharedGlobal() {
 
 module.exports = {
   SHARED_FILES,
+  MAIN_FILES,
   CONTENT_FILES,
   BACKGROUND_FILES,
   POPUP_FILES,

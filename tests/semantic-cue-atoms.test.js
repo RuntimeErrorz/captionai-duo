@@ -50,6 +50,40 @@ test("CJK cues without spaces still expose contiguous reference coordinates", ()
   assert.equal(atoms.map((atom) => atom.text).join(""), "全球经济越来越糟。权力会变化。");
 });
 
+test("raw overlapping cue lines remain separate source cues", () => {
+  const overlapping = [
+    { text: "Who wants to take the subway?", start: 0, dur: 2000 },
+    { text: "Who wants to take the subway?", start: 1000, dur: 2000 },
+    { text: "Who wants to take the subway?", start: 5000, dur: 1000 }
+  ];
+  const atoms = shared.cueReferenceAtoms(overlapping);
+
+  assert.deepEqual(
+    Array.from(atoms, (atom) => [atom.sourceCueIndex, atom.text]),
+    [
+      [0, "Who"], [0, "wants"], [0, "to"], [0, "take"], [0, "the"], [0, "subway?"],
+      [1, "Who"], [1, "wants"], [1, "to"], [1, "take"], [1, "the"], [1, "subway?"],
+      [2, "Who"], [2, "wants"], [2, "to"], [2, "take"], [2, "the"], [2, "subway?"]
+    ]
+  );
+});
+
+test("repeated text inside one source cue remains part of that cue", () => {
+  const atoms = shared.cueReferenceAtoms([
+    { text: "I'm good, I'm good.", start: 0, dur: 1000 }
+  ]);
+  assert.deepEqual(Array.from(atoms, (atom) => atom.text), ["I'm", "good,", "I'm", "good."]);
+});
+
+test("adjacent repeated cues remain separate source cues", () => {
+  const adjacent = [
+    { text: "Please wait.", start: 0, dur: 2000 },
+    { text: "Please wait.", start: 2000, dur: 1000 }
+  ];
+  const atoms = shared.cueReferenceAtoms(adjacent);
+  assert.deepEqual(Array.from(atoms, (atom) => atom.sourceCueIndex), [0, 0, 1, 1]);
+});
+
 test("lexical density is bounded by transport item limits", () => {
   const cues = [
     [">> I did receive approximately 140 marriage", 635400, 640839],

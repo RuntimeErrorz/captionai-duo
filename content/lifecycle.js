@@ -9,7 +9,6 @@ function teardownAll(reason) {
     reason: String(reason || "teardown")
   });
   stopCueLoop();
-  stopFallback();
   resetCaptionSessionState(reason || "teardown");
   removeOverlay();
   captionSession.cueList = null;
@@ -22,11 +21,21 @@ function teardownAll(reason) {
   captionSession.deepseekGroupToBatch = [];
   captionSession.cueTrackKind = "";
   captionSession.cueSourceLang = "";
+  captionSession.cueTrackId = "";
   captionSession.cueTrackSignature = "";
+  captionSession.availableCaptionTracks = [];
+  captionSession.preferredCaptionTrackId = "";
+  captionSession.selectedCaptionTrackId = "auto";
+  captionSession.selectedTranslationTrackId = "ai";
+  captionSession.translationCueList = null;
+  captionSession.translationCueVideoId = "";
+  captionSession.translationCueTrackKind = "";
+  captionSession.translationCueSourceLang = "";
+  captionSession.translationCueTrackId = "";
+  captionSession.translationCueSignature = "";
   captionSession.duplicateCueEvents = 0;
   captionSession.lastDebugCueIdx = -1;
   stopCueRecovery();
-  captionSession.nocuesFallback = false;
 }
 
 function applyStateToDom(sendConfiguration) {
@@ -34,10 +43,8 @@ function applyStateToDom(sendConfiguration) {
   if (!settings.enabled) {
     teardownAll();
   } else {
-    // ensure overlay exists; cue mode will fill it once cues arrive,
-    // fallback fills it if we end up scraping.
+    // ensure overlay exists; cue mode will fill it once cues arrive.
     ensureOverlay();
-    if (captionSession.nocuesFallback) startFallback();
     if (sendConfiguration) sendConfig("state");
   }
 }

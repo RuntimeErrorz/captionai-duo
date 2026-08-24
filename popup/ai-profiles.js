@@ -83,14 +83,9 @@ function updateActiveAiConfigProfile(patch) {
 }
 
 async function readAiCredentialState() {
-  const stored = await chrome.storage.local.get({
-    aiApiKeys: {}, aiApiKey: "", deepseekApiKey: ""
-  });
+  const stored = await chrome.storage.local.get({ aiApiKeys: {} });
   const keys = stored.aiApiKeys && typeof stored.aiApiKeys === "object"
     ? { ...stored.aiApiKeys } : {};
-  if (!keys.deepseek && (stored.aiApiKey || stored.deepseekApiKey)) {
-    keys.deepseek = String(stored.aiApiKey || stored.deepseekApiKey).trim();
-  }
   return keys;
 }
 
@@ -109,9 +104,6 @@ async function saveCurrentAiApiKey(value) {
   if (key) keys[scope] = key;
   else delete keys[scope];
   await chrome.storage.local.set({ aiApiKeys: keys });
-  if (scope === "deepseek") {
-    await chrome.storage.local.remove(["aiApiKey", "deepseekApiKey"]);
-  }
   await updateActiveAiConfigProfile({ apiKey: key });
   setKey("aiExtraBodyRevision", Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1);
   return true;

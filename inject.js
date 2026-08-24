@@ -1,7 +1,7 @@
 // inject.js — MAIN world, document_start.
 // Hooks XMLHttpRequest + fetch to capture the YouTube player's OWN
 // /api/timedtext request URL (which carries a valid "pot"), then reuses that
-// exact URL to fetch the original json3 cues.
+// proof-bearing URL to fetch the selected json3 cue track.
 //
 // NEVER throw into the page: every hook body is wrapped in try/catch.
 (() => {
@@ -12,24 +12,38 @@
   window.__ytdsInjected = true;
 
   const TIMEDTEXT_MARK = "/api/timedtext";
-
-  // The source-track URL used to fetch original cues. It is normally the
-  // player's URL without "tlang", but can be derived from an auto-translated
-  // request when YouTube carries that selection across SPA navigation.
+  const trackCatalog = window.__ytdsCaptionTrackCatalog;
+  const trackTransport = window.__ytdsCaptionTrackTransport;
+  const translationTrack = window.__ytdsCaptionTranslationTrack;
+  const hasTlang = trackTransport.hasTlang;
+  const trackKindOf = trackTransport.trackKindOf;
+  const sourceLanguageOf = trackTransport.sourceLanguageOf;
+  const vidOfUrl = (url) => trackTransport.vidOfUrl(url, videoIdFromLocation()), hasSessionParams = trackTransport.hasSessionParams;
   let sourceUrl = "";
   // The videoId that sourceUrl was captured for. produceCues bails if this no
   // longer matches the current location video, so a stale (previous-video) URL
   // can never be fetched and posted under the new videoId.
   let sourceVid = "";
-  // Identity of the captured source track, IGNORING fmt/tlang. Used so our own
+  // Identity of the captured source track, ignoring fmt/pot/tlang. Used so our own
   // json3 re-fetches (and pot rotations on the same track) are not mistaken for
   // a brand-new source — which would otherwise re-trigger produceCues in a loop.
-  let sourceKey = "";
+  let sourceKey = "", sourceTrackId = "";
   // Monotonic identity of the player's selected source track. Two different
   // timedtext tracks can be requested close together. Only the newest capture
   // may publish cues; otherwise completed fetches can replace each other's
   // timeline in content.js.
   let sourceRevision = 0;
+  let selectedCaptionTrackId = "auto";
+  let availableCaptionTracks = [];
+  let captionTrackSources = new Map();
+  let captionTrackSourceKeys = new Map();
+  let captionTrackFingerprint = "";
+  let catalogPreferredCaptionTrackId = "";
+  let preferredCaptionTrackId = "";
+  let selectedTranslationTrackId = "ai";
+  let translationFetchRevision = 0;
+  let pendingTranslationTrackId = "";
+  let latestOriginalUrl = "", sessionDonorUrl = "";
 
   // Keep our own timedtext refetches out of noteTimedtext(). Both the fetch hook
   // and Resource Timing observe these requests. Without provenance, concurrent
@@ -37,8 +51,6 @@
   // original subtitle flash between two timelines.
   const internalTimedtextUrls = new Map();
   const INTERNAL_TIMEDTEXT_TTL_MS = 20000;
-  const pageFetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
-
   let currentVideoId = videoIdFromLocation();
 
   // pending config from content.js (set once popup config arrives)
@@ -64,14 +76,6 @@
     return YTDS_SHARED.videoIdFromUrl(location.href);
   }
 
-  function hasTlang(url) {
-    try {
-      return new URL(url, location.href).searchParams.has("tlang");
-    } catch (_e) {
-      return /[?&]tlang=/.test(url);
-    }
-  }
-
   // YouTube can keep the previous video's auto-translate selection and request
   // the current track with tlang. The lang track remains the source track; use
   // the same proof-bearing URL with only the translation parameter removed.
@@ -83,6 +87,16 @@
     } catch (_e) {
       return "";
     }
+  }
+
+  // Auto mode deliberately follows the source/original track even when
+  // YouTube carries an old auto-translation parameter across navigation.
+  function selectedTrackUrl(url) { return sourceTrackUrl(url); }
+
+  function normalizeCaptionTrackSelection(value) {
+    const text = String(value || "").trim().slice(0, 160);
+    if (!text || text === "auto") return "auto";
+    return /^[A-Za-z0-9._:-]+$/.test(text) ? text : "";
   }
 
   function isTimedtext(url) {
@@ -115,104 +129,17 @@
   // Track identity ignoring the params that rotate or that WE vary. "pot" (the
   // proof-of-origin token) is rotated by the player periodically for the SAME
   // track — if we kept it in the key, each rotation would look like a brand-new
-  // source and re-trigger produceCues, causing the overlay to flicker. So strip
-  // pot/fmt/tlang; what remains (v, lang, kind, ...) is the stable track id.
+  // source and re-trigger produceCues, causing the overlay to flicker. The
+  // Track identity ignores "tlang" because it is never part of a selected
+  // source-track identity.
   function normKey(url) {
     try {
       const u = new URL(url, location.href);
-      u.searchParams.delete("fmt");
-      u.searchParams.delete("tlang");
-      u.searchParams.delete("pot");
+      for (const key of ["fmt", "pot", "potc", "c", "cver", "cplayer", "cbr", "cbrver", "cos", "cosver", "cplatform", "tlang", "expire", "sig", "signature", "sparams"])
+        u.searchParams.delete(key);
       return u.toString();
     } catch (_e) {
       return url;
-    }
-  }
-
-  // Track kind of a captured timedtext URL: auto-generated (ASR) tracks carry
-  // kind=asr; human tracks have no kind param.
-  function trackKindOf(url) {
-    try {
-      return new URL(url, location.href).searchParams.get("kind") === "asr"
-        ? "asr" : "manual";
-    } catch (_e) {
-      return "manual";
-    }
-  }
-
-  // Parse the "v" param off a captured timedtext URL when present; otherwise
-  // fall back to the current location video id.
-  function vidOfUrl(url) {
-    try {
-      const u = new URL(url, location.href);
-      return u.searchParams.get("v") || videoIdFromLocation();
-    } catch (_e) {
-      return videoIdFromLocation();
-    }
-  }
-
-  // Build a fetch URL from the captured source URL: preserve every param
-  // (including pot + signature), force fmt=json3, drop any stray tlang.
-  function buildUrl(base) {
-    const u = new URL(base, location.href);
-    u.searchParams.delete("tlang");
-    u.searchParams.set("fmt", "json3");
-    return u.toString();
-  }
-
-  // Parse json3 into cue objects. Robust against missing/empty segs.
-  function parseJson3(json) {
-    const cues = [];
-    if (!json || !Array.isArray(json.events)) return cues;
-    for (const ev of json.events) {
-      if (!ev || !Array.isArray(ev.segs)) continue;
-      let text = "";
-      let off = 0;
-      const parts = [];
-      for (const s of ev.segs) {
-        if (s && typeof s.utf8 === "string") {
-          text += s.utf8;
-          // Track the last NON-BLANK word's offset. ASR tracks carry per-word
-          // tOffsetMs; blank segs ("\n") may carry one too and would inflate it.
-          if (s.utf8.trim()) {
-            const part = { text: s.utf8 };
-            if (typeof s.tOffsetMs === "number" && Number.isFinite(s.tOffsetMs)) {
-              off = s.tOffsetMs;
-              part.offsetMs = s.tOffsetMs;
-            }
-            parts.push(part);
-          }
-        }
-      }
-      text = text.replace(/\s+/g, " ").trim();
-      if (!text) continue;          // skip style/window/blank events
-      const start = typeof ev.tStartMs === "number" ? ev.tStartMs : 0;
-      const dur = typeof ev.dDurationMs === "number" ? ev.dDurationMs : 0;
-      // lastOff = absolute time of the event's last word. Manual tracks have no
-      // per-word segs, so lastOff === start — sentence grouping in content.js
-      // reads the pause as (next.start - lastOff), which for manual tracks is
-      // roughly the cue duration and therefore almost always a sentence break.
-      cues.push({ start, dur, text, lastOff: start + off, parts });
-    }
-    return cues;
-  }
-
-  // page-context fetch — same-origin youtube.com so pot/signature stay valid.
-  async function fetchJson3(url) {
-    if (!pageFetch) throw new Error("fetch unavailable");
-    rememberInternalTimedtext(url);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const res = await pageFetch(url, {
-        method: "GET", credentials: "include", signal: controller.signal
-      });
-      if (!res.ok) throw new Error("timedtext http " + res.status);
-      const txt = await res.text();
-      if (!txt) throw new Error("timedtext empty body");
-      return JSON.parse(txt);
-    } finally {
-      clearTimeout(timer);
     }
   }
 
@@ -237,78 +164,262 @@
     if (nocuesTimer) { clearTimeout(nocuesTimer); nocuesTimer = null; }
   }
 
-  function trackLanguageOf(url) {
-    try {
-      const lang = new URL(url, location.href).searchParams.get("lang") || "";
-      return /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}$/.test(lang)
-        ? lang.slice(0, 24) : "";
-    } catch (_e) {
-      return "";
-    }
-  }
-
   function clearPlayerResponseTimer() {
     if (playerResponseTimer) { clearTimeout(playerResponseTimer); playerResponseTimer = null; }
   }
 
-  function sourceStillCurrent(url, revision) {
-    return sourceTrackUrl(url) === sourceUrl && sourceVid === currentVideoId &&
-      revision === sourceRevision;
+  function captionTrackIdForUrl(url) {
+    return trackCatalog && typeof trackCatalog.trackIdForUrl === "function"
+      ? trackCatalog.trackIdForUrl(url, availableCaptionTracks, captionTrackSourceKeys) : "";
   }
 
+  function sourceTrackIdForUrl(url) { return captionTrackIdForUrl(selectedTrackUrl(url)); }
+  function sourceIdentityMatches(url) {
+    const incomingTrackId = sourceTrackIdForUrl(url);
+    if (sourceTrackId && incomingTrackId) return sourceTrackId === incomingTrackId;
+    return selectedTrackUrl(url) === sourceUrl || normKey(url) === sourceKey;
+  }
+  function publishCaptionTracks() { post("caption-tracks", {
+    tracks: availableCaptionTracks.map((track) => ({ ...track })),
+    selectedTrackId: selectedCaptionTrackId,
+    preferredTrackId: preferredCaptionTrackId,
+    selectedTranslationTrackId
+  }); }
+
+  function postCaptionTracks(force, skipSourceSelection) {
+    if (!trackCatalog || typeof trackCatalog.scan !== "function") {
+      return availableCaptionTracks.length > 0;
+    }
+    let catalog = null;
+    try { catalog = trackCatalog.scan(currentVideoId); } catch (_e) {
+      return availableCaptionTracks.length > 0;
+    }
+    if (!catalog || !Array.isArray(catalog.tracks) || !catalog.tracks.length) {
+      return availableCaptionTracks.length > 0;
+    }
+    const nextTracks = catalog.tracks.slice(0, 100);
+    const nextCatalogPreferred = nextTracks.some((track) => track.id === catalog.preferredTrackId)
+      ? catalog.preferredTrackId : "";
+    const retainedPreferred = preferredCaptionTrackId && nextTracks.some((track) =>
+      track.id === preferredCaptionTrackId) ? preferredCaptionTrackId : "";
+    const nextPreferred = nextCatalogPreferred || retainedPreferred ||
+      (nextTracks.length === 1 ? nextTracks[0].id : "");
+    const catalogSources = new Map(Object.entries(catalog.sources || {}));
+    const catalogSourceKeys = new Map(
+      Object.entries(catalog.sourceKeys || {}).map(([id, key]) => [key, id])
+    );
+    const changed = force || catalog.fingerprint !== captionTrackFingerprint ||
+      nextPreferred !== preferredCaptionTrackId ||
+      nextCatalogPreferred !== catalogPreferredCaptionTrackId;
+    if (changed) {
+      const previousSelected = availableCaptionTracks.find((track) =>
+        track.id === selectedCaptionTrackId
+      );
+      const previousTranslation = availableCaptionTracks.find((track) =>
+        track.id === selectedTranslationTrackId
+      );
+      if (selectedCaptionTrackId !== "auto" && previousSelected &&
+          !nextTracks.some((track) => track.id === selectedCaptionTrackId)) {
+        const replacement = nextTracks.filter((track) =>
+          track.languageCode === previousSelected.languageCode &&
+          track.kind === previousSelected.kind
+        );
+        if (replacement.length === 1) selectedCaptionTrackId = replacement[0].id;
+      }
+      if (selectedTranslationTrackId !== "ai" && previousTranslation &&
+          !nextTracks.some((track) => track.id === selectedTranslationTrackId)) {
+        const replacement = nextTracks.filter((track) =>
+          track.languageCode === previousTranslation.languageCode &&
+          track.kind === previousTranslation.kind
+        );
+        if (replacement.length === 1) selectedTranslationTrackId = replacement[0].id;
+      }
+      availableCaptionTracks = nextTracks;
+      catalogPreferredCaptionTrackId = nextCatalogPreferred;
+      preferredCaptionTrackId = nextPreferred;
+      captionTrackSources = catalogSources;
+      captionTrackSourceKeys = catalogSourceKeys;
+      captionTrackFingerprint = String(catalog.fingerprint || "");
+      publishCaptionTracks();
+    } else {
+      for (const [id, source] of catalogSources) captionTrackSources.set(id, source);
+      for (const [key, id] of catalogSourceKeys) captionTrackSourceKeys.set(key, id);
+    }
+    if (skipSourceSelection || selectedCaptionTrackId === "auto") {
+      return availableCaptionTracks.length > 0;
+    }
+    const selectedSource = captionTrackSources.get(selectedCaptionTrackId) || "";
+    if (selectedSource && (sourceTrackId !== selectedCaptionTrackId || sourceVid !== currentVideoId || pendingFreshSourceRequest)) {
+      const selectedTrack = availableCaptionTracks.find((track) => track.id === selectedCaptionTrackId);
+      const playerRequested = typeof trackCatalog.requestPlayerTrack === "function";
+      const freshSourceRetry = pendingFreshSourceRequest;
+      if (freshSourceRetry) pendingFreshSourceRequest = false;
+      if (!freshSourceRetry) resetSelectedSource();
+      selectSourceCandidate(selectedSource, playerRequested, {
+        transport: playerRequested ? "player-track" : "track-catalog", method: ""
+      }, selectedCaptionTrackId);
+      if (playerRequested) requestPlayerTrackOrFallback(selectedTrack);
+    }
+    return availableCaptionTracks.length > 0;
+  }
+  function rememberObservedCaptionTrack(url) {
+    if (!trackCatalog || typeof trackCatalog.mergeObserved !== "function") return false;
+    let merged = null;
+    try {
+      merged = trackCatalog.mergeObserved(
+        url, currentVideoId, availableCaptionTracks,
+        captionTrackSources, captionTrackSourceKeys
+      );
+    } catch (_e) { return false; }
+    if (!merged) return false;
+    availableCaptionTracks = merged.tracks;
+    captionTrackSources = merged.sources;
+    captionTrackSourceKeys = merged.sourceKeys;
+    if (merged.changed && selectedCaptionTrackId === "auto" &&
+        !catalogPreferredCaptionTrackId) {
+      preferredCaptionTrackId = availableCaptionTracks[availableCaptionTracks.length - 1].id;
+    } else if (!preferredCaptionTrackId && availableCaptionTracks.length === 1) {
+      preferredCaptionTrackId = availableCaptionTracks[0].id;
+    }
+    if (merged.changed) publishCaptionTracks();
+    return true;
+  }
+  function requestPlayerTrackOrFallback(track) {
+    if (trackCatalog.requestPlayerTrack && trackCatalog.requestPlayerTrack(track)) return true;
+    awaitingPlayerResponseUrl = ""; clearPlayerResponseTimer(); produceCues(true);
+    return false;
+  }
+  function selectedIncomingTrack(url) {
+    const originalUrl = sourceTrackUrl(url);
+    const matchedId = captionTrackIdForUrl(originalUrl);
+    if (selectedCaptionTrackId === "auto") {
+      const preferredId = preferredCaptionTrackId &&
+        availableCaptionTracks.some((track) => track.id === preferredCaptionTrackId)
+        ? preferredCaptionTrackId : availableCaptionTracks.length === 1
+          ? availableCaptionTracks[0].id : "";
+      if (preferredId && matchedId && matchedId !== preferredId) {
+        const preferredSource = captionTrackSources.get(preferredId) || "";
+        if (preferredSource) {
+          return { originalUrl, matchedId, candidate: preferredSource, watches: false, trackId: preferredId };
+        }
+      }
+      return { originalUrl, matchedId, candidate: originalUrl, watches: !hasTlang(url), trackId: matchedId || preferredId };
+    }
+    const candidate = matchedId === selectedCaptionTrackId
+      ? originalUrl : captionTrackSources.get(selectedCaptionTrackId) || "";
+    return { originalUrl, matchedId, candidate,
+      watches: !!candidate && matchedId === selectedCaptionTrackId, trackId: matchedId };
+  }
+  function activeCaptionTrackId(url) {
+    return selectedCaptionTrackId === "auto"
+      ? captionTrackIdForUrl(url) || preferredCaptionTrackId || "auto" : selectedCaptionTrackId;
+  }
+  function resetSelectedSource() {
+    sourceUrl = "";
+    sourceVid = "";
+    sourceKey = "";
+    sourceTrackId = "";
+    sourceRevision++;
+    producedForUrl = "";
+    cueFetchInFlightUrl = "";
+    quarantinedSourceUrl = "";
+    awaitingPlayerResponseUrl = "";
+    capturedPlayerCues = null;
+    capturedPlayerCuesUrl = "";
+    lastPublishedUrl = "";
+    lastPublishedNonce = 0;
+    freshSourceRequestedForUrl = "";
+    pendingFreshSourceRequest = false;
+    clearNocuesTimer();
+    clearPlayerResponseTimer();
+  }
+  function sourceStillCurrent(url, revision) {
+    return sourceVid === currentVideoId &&
+      revision === sourceRevision && sourceIdentityMatches(url);
+  }
+  function requestFreshTranslationTrack(trackId) {
+    const track = availableCaptionTracks.find((item) => item.id === trackId);
+    if (!track || trackId === selectedCaptionTrackId || pendingTranslationTrackId === trackId || !trackCatalog || typeof trackCatalog.requestPlayerTrack !== "function") return;
+    pendingTranslationTrackId = trackId;
+    if (!trackCatalog.requestPlayerTrack(track)) pendingTranslationTrackId = "";
+  }
+  async function fetchManualTranslationCues(sourceOverride) {
+    const trackId = selectedTranslationTrackId;
+    const revision = sourceOverride ? translationFetchRevision : ++translationFetchRevision; if (!sourceOverride) pendingTranslationTrackId = "";
+    if (trackId === "ai") {
+      post("translation-cleared", { captionTrackId: "ai" });
+      return;
+    }
+    const url = String(sourceOverride || captionTrackSources.get(trackId) || "");
+    if (!url || !translationTrack) { postDiagnostic("translation-fetch-error", { captionTrackId: trackId, detail: "source-unavailable" }); post("translation-nocues", { captionTrackId: trackId, reason: "source-unavailable" }); requestFreshTranslationTrack(trackId); return; }
+    const videoId = currentVideoId;
+    postDiagnostic("translation-fetch-start", { captionTrackId: trackId, sourceLang: sourceLanguageOf(url), sourceUrlKind: trackKindOf(url) });
+    translationTrack.fetchTrack({
+      trackId, sourceUrl: url,
+      donorUrl: sessionDonorUrl && vidOfUrl(sessionDonorUrl) === currentVideoId ? sessionDonorUrl : "",
+      markInternal: rememberInternalTimedtext,
+      isCurrent: () => videoId === currentVideoId && revision === translationFetchRevision && trackId === selectedTranslationTrackId,
+      onCues: (cues) => (postDiagnostic("translation-fetch-success", { captionTrackId: trackId, cueCount: Array.isArray(cues) ? cues.length : 0 }), post("translation-cues", { cues, trackKind: trackKindOf(url), sourceLang: sourceLanguageOf(url), captionTrackId: trackId })),
+      onNocues: (reason) => (postDiagnostic("translation-fetch-error", { captionTrackId: trackId, detail: reason }), post("translation-nocues", { captionTrackId: trackId, reason }), !sourceOverride && requestFreshTranslationTrack(trackId))
+    });
+  }
   function publishCues(cues, url, revision, origin) {
     if (!Array.isArray(cues) || !cues.length || !sourceStillCurrent(url, revision)) return;
+    const candidateUrl = selectedTrackUrl(url);
+    const activeTrackId = activeCaptionTrackId(candidateUrl);
     capturedPlayerCues = cues;
-    capturedPlayerCuesUrl = url;
-    producedForUrl = url;
+    capturedPlayerCuesUrl = candidateUrl;
+    producedForUrl = candidateUrl;
     quarantinedSourceUrl = "";
     if (!cfg) return;
     const publishNonce = reqNonce;
-    if (lastPublishedUrl === url && lastPublishedNonce === publishNonce) return;
-    lastPublishedUrl = url;
+    if (lastPublishedUrl === candidateUrl && lastPublishedNonce === publishNonce) return;
+    lastPublishedUrl = candidateUrl;
     lastPublishedNonce = publishNonce;
     postDiagnostic("cue-fetch-success", {
       cueCount: cues.length,
       fetchNonce: publishNonce,
       sourceRevision: revision,
-      trackKind: trackKindOf(url),
-      sourceLang: trackLanguageOf(url),
+      trackKind: trackKindOf(candidateUrl),
+      sourceLang: sourceLanguageOf(candidateUrl),
+      captionTrackId: activeTrackId,
       responseOrigin: String(origin || "refetch")
     });
     post("cues", {
       cues,
-      trackKind: trackKindOf(url),
-      sourceLang: trackLanguageOf(url),
+      trackKind: trackKindOf(candidateUrl),
+      sourceLang: sourceLanguageOf(candidateUrl),
+      captionTrackId: activeTrackId,
       nonce: publishNonce
     });
   }
-
   function rejectCurrentSource(url, revision, reason, detail, requestFreshSource) {
     if (!sourceStillCurrent(url, revision)) return;
-    quarantinedSourceUrl = url;
+    const candidateUrl = selectedTrackUrl(url);
+    quarantinedSourceUrl = candidateUrl;
     producedForUrl = "";
     capturedPlayerCues = null;
     capturedPlayerCuesUrl = "";
     lastPublishedUrl = "";
     lastPublishedNonce = 0;
     const shouldRequestFreshSource = !!requestFreshSource &&
-      freshSourceRequestedForUrl !== url;
+      freshSourceRequestedForUrl !== candidateUrl;
     if (shouldRequestFreshSource) {
-      freshSourceRequestedForUrl = url;
+      freshSourceRequestedForUrl = candidateUrl;
       pendingFreshSourceRequest = true;
     }
     if (!cfg) return;
     const notifyFreshSource = pendingFreshSourceRequest &&
-      freshSourceRequestedForUrl === url;
-    if (notifyFreshSource) pendingFreshSourceRequest = false;
+      freshSourceRequestedForUrl === candidateUrl;
+    if (notifyFreshSource) pendingFreshSourceRequest = selectedCaptionTrackId !== "auto";
     post("nocues", {
       reason: String(reason || "fetch-error"),
       detail: String(detail || "").slice(0, 240),
-      sourceLang: trackLanguageOf(url),
+      sourceLang: sourceLanguageOf(candidateUrl),
+      captionTrackId: selectedCaptionTrackId,
       requestFreshSource: notifyFreshSource
     });
   }
-
   function consumePlayerTimedtext(url, text, revision, responseMeta) {
     if (!sourceStillCurrent(url, revision)) return;
     awaitingPlayerResponseUrl = "";
@@ -323,12 +434,10 @@
       status,
       contentType: String(meta.contentType || "").slice(0, 120),
       responseChars: body.length,
-      elapsedMs: Math.max(0, Math.round(Number(meta.elapsedMs) || 0))
+      elapsedMs: Math.max(0, Math.round(Number(meta.elapsedMs) || 0)),
+      captionTrackId: selectedCaptionTrackId
     });
-    // XHR reports status 0 when YouTube aborts an in-flight caption request
-    // during player state changes. That is not an HTTP empty response and must
-    // not quarantine the URL or consume its one fresh-source recovery. Another
-    // request for the same track commonly completes moments later.
+    // Status 0 is an aborted/incomplete player request, not an empty track.
     if (status <= 0) {
       postDiagnostic("cue-fetch-error", {
         fetchNonce: reqNonce,
@@ -353,7 +462,7 @@
       return;
     }
     try {
-      const cues = parseJson3(JSON.parse(body));
+      const cues = trackTransport.parseCaptionResponse(body);
       if (cues.length) {
         publishCues(cues, url, revision, "player");
         return;
@@ -372,14 +481,12 @@
       produceCues(true);
     }
   }
-
   function playerResponseUnavailable(url, revision) {
     if (!sourceStillCurrent(url, revision)) return;
     awaitingPlayerResponseUrl = "";
     clearPlayerResponseTimer();
     produceCues(true);
   }
-
   function awaitPlayerResponse(url, revision) {
     awaitingPlayerResponseUrl = url;
     clearPlayerResponseTimer();
@@ -388,9 +495,8 @@
       if (awaitingPlayerResponseUrl !== url || !sourceStillCurrent(url, revision)) return;
       awaitingPlayerResponseUrl = "";
       produceCues(true);
-    }, 750);
+    }, 2500);
   }
-
   // A player request can start before content.js sends its first config. Keep
   // that request authoritative across the config boundary, but only start the
   // timeout once config exists and we can report a failed source.
@@ -399,25 +505,23 @@
     clearPlayerResponseTimer();
     if (cfg) awaitPlayerResponse(url, revision);
   }
-
-  // Produce original cues from the captured source URL.
+  // Produce cues from the configured caption track.
   async function produceCues(force) {
     if (!cfg || !sourceUrl) return;
     // The captured source URL must belong to the CURRENT video. Without this,
     // a config round-trip on SPA nav could refetch the previous video's URL and
     // post it stamped with the new videoId.
     if (sourceVid !== currentVideoId) return;
-    if (!force && producedForUrl === sourceUrl) return;
-    if (quarantinedSourceUrl === sourceUrl) return;
+    if (!force && producedForUrl && sourceIdentityMatches(producedForUrl)) return;
+    if (quarantinedSourceUrl && sourceIdentityMatches(quarantinedSourceUrl)) return;
     if (awaitingPlayerResponseUrl === sourceUrl) return;
-    if (cueFetchInFlightUrl === sourceUrl) return;
+    if (awaitingPlayerResponseUrl && sourceIdentityMatches(awaitingPlayerResponseUrl)) return;
+    if (cueFetchInFlightUrl && sourceIdentityMatches(cueFetchInFlightUrl)) return;
     producedForUrl = sourceUrl;
     cueFetchInFlightUrl = sourceUrl;
     clearNocuesTimer();
-
     const vid = currentVideoId;
     const mySourceUrl = sourceUrl;
-    const mySourceKey = sourceKey;
     const mySourceRevision = sourceRevision;
     // Capture the nonce NOW, at produce start. post() must stamp the reply with
     // THIS nonce, not the live global reqNonce at send-time: otherwise two
@@ -426,36 +530,30 @@
     // content.js -> double cue-loop restart -> startup flicker.
     const myNonce = reqNonce;
     const kind = trackKindOf(mySourceUrl);
-    const sourceLang = trackLanguageOf(mySourceUrl);
+    const sourceLang = sourceLanguageOf(mySourceUrl);
     postDiagnostic("cue-fetch-start", {
       force: !!force,
       fetchNonce: myNonce,
       sourceRevision: mySourceRevision,
       trackKind: kind,
-      sourceLang
+      sourceLang,
+      captionTrackId: selectedCaptionTrackId,
+      hasSessionDonor: !!sessionDonorUrl && vidOfUrl(sessionDonorUrl) === currentVideoId
     });
     try {
-      const origJson = await fetchJson3(buildUrl(mySourceUrl));
-      const cues = parseJson3(origJson);
-
+      const donor = sessionDonorUrl && vidOfUrl(sessionDonorUrl) === currentVideoId
+        ? sessionDonorUrl : "";
+      const result = await trackTransport.fetchCaptionCues(
+        mySourceUrl, donor, rememberInternalTimedtext
+      );
       // ignore if we navigated away mid-fetch (or the source no longer matches)
-      if (vid !== currentVideoId || sourceVid !== currentVideoId ||
-          mySourceRevision !== sourceRevision || mySourceKey !== sourceKey) return;
-
-      if (!cues.length) {
-        postDiagnostic("cue-fetch-empty", { fetchNonce: myNonce, sourceRevision: mySourceRevision });
-        rejectCurrentSource(
-          mySourceUrl, mySourceRevision, "empty-track", "timedtext contained no cues", true
-        );
-        return;
-      }
-
-      publishCues(cues, mySourceUrl, mySourceRevision, "refetch");
+      if (vid !== currentVideoId || !sourceStillCurrent(mySourceUrl, mySourceRevision)) return;
+      publishCues(result.cues, mySourceUrl, mySourceRevision,
+        result.usedSession ? "refetch-session" : "refetch");
     } catch (err) {
       // Could not fetch/parse. Ask content.js to rotate the player's
       // proof-bearing source immediately, but only for the same video/request.
-      if (vid !== currentVideoId || sourceVid !== currentVideoId ||
-          mySourceRevision !== sourceRevision || mySourceKey !== sourceKey) return;
+      if (vid !== currentVideoId || !sourceStillCurrent(mySourceUrl, mySourceRevision)) return;
       producedForUrl = "";
       const detail = String(err && err.message || err || "cue fetch failed").slice(0, 240);
       postDiagnostic("cue-fetch-error", {
@@ -468,7 +566,6 @@
       if (cueFetchInFlightUrl === mySourceUrl) cueFetchInFlightUrl = "";
     }
   }
-
   // Called whenever we capture a fresh source URL.
   function onSourceCaptured(expectPlayerResponse) {
     if (expectPlayerResponse) {
@@ -478,50 +575,79 @@
     if (!cfg) return;               // wait for config before fetching
     produceCues(false);
   }
-
-  // Record a timedtext URL seen on the wire.
-  function noteTimedtext(url, expectPlayerResponse, captureMeta) {
+  function selectSourceCandidate(candidate, expectPlayerResponse, captureMeta, trackId) {
+    if (!candidate) return;
+    const key = normKey(candidate);
+    const nextTrackId = normalizeCaptionTrackSelection(trackId || captionTrackIdForUrl(candidate) ||
+      (selectedCaptionTrackId !== "auto" ? selectedCaptionTrackId : ""));
+    const identityChanged = sourceTrackId && nextTrackId
+      ? sourceTrackId !== nextTrackId : key !== sourceKey;
+    const exactChanged = candidate !== sourceUrl;
+    sourceUrl = candidate; sourceVid = vidOfUrl(candidate);
+    sourceKey = key; sourceTrackId = nextTrackId;
+    if (exactChanged && identityChanged) {
+      producedForUrl = "";
+      quarantinedSourceUrl = "";
+      capturedPlayerCues = null;
+      capturedPlayerCuesUrl = "";
+      lastPublishedUrl = "";
+      lastPublishedNonce = 0;
+      freshSourceRequestedForUrl = "";
+      pendingFreshSourceRequest = false;
+    }
+    if (identityChanged) {
+      sourceRevision++;
+      postDiagnostic("timedtext-captured", {
+        sourceRevision,
+        sourceVideoMatches: sourceVid === currentVideoId,
+        trackKind: trackKindOf(candidate),
+        sourceLang: sourceLanguageOf(candidate),
+        captionTrackId: selectedCaptionTrackId,
+        sourceTrackId,
+        transport: String(captureMeta && captureMeta.transport || "observer"),
+        method: String(captureMeta && captureMeta.method || "GET").slice(0, 12)
+      });
+      onSourceCaptured(!!expectPlayerResponse);
+    } else if (expectPlayerResponse) {
+      trackPendingPlayerResponse(sourceUrl, sourceRevision);
+    } else if (exactChanged && cfg && producedForUrl === "" && !awaitingPlayerResponseUrl) {
+      // Same track with a freshly rotated pot/signature after a failure.
+      // Retry immediately instead of waiting for a video navigation.
+      produceCues(true);
+    }
+  }
+  // Record a timedtext URL and select the automatic source or explicit
+  // catalog entry. Return whether this is the selected player's response.
+  function noteTimedtext(url, playerTransport, captureMeta) {
     try {
-      if (!isTimedtext(url)) return;
-      if (isInternalTimedtext(url)) return;
-      const candidate = sourceTrackUrl(url);
-      if (!candidate) return;
-      // Always keep the freshest exact URL (pot can rotate), but only treat it
-      // as a NEW source (and re-produce) when the track identity changes.
-      const key = normKey(candidate);
-      const exactChanged = candidate !== sourceUrl;
-      sourceUrl = candidate;
-      sourceVid = vidOfUrl(candidate);
-      if (exactChanged) {
-        producedForUrl = "";
-        quarantinedSourceUrl = "";
-        capturedPlayerCues = null;
-        capturedPlayerCuesUrl = "";
-        lastPublishedUrl = "";
-        lastPublishedNonce = 0;
-        freshSourceRequestedForUrl = "";
-        pendingFreshSourceRequest = false;
+      if (!isTimedtext(url) || isInternalTimedtext(url)) return false;
+      const donor = sourceTrackUrl(url);
+      if (donor && vidOfUrl(donor) === currentVideoId && hasSessionParams(donor)) sessionDonorUrl = donor;
+      postCaptionTracks(false, true);
+      rememberObservedCaptionTrack(url);
+      const incoming = selectedIncomingTrack(url);
+      const translationTrackId = captionTrackIdForUrl(incoming.originalUrl);
+      if (pendingTranslationTrackId && translationTrackId === pendingTranslationTrackId &&
+          selectedTranslationTrackId === pendingTranslationTrackId) {
+        pendingTranslationTrackId = "";
+        captionTrackSources.set(translationTrackId, incoming.originalUrl);
+        captionTrackSourceKeys.set(normKey(incoming.originalUrl), translationTrackId);
+        fetchManualTranslationCues(incoming.originalUrl);
+        return false;
       }
-      if (key !== sourceKey) {
-        sourceKey = key;
-        sourceRevision++;
-        postDiagnostic("timedtext-captured", {
-          sourceRevision,
-          sourceVideoMatches: sourceVid === currentVideoId,
-          trackKind: trackKindOf(candidate),
-          sourceLang: trackLanguageOf(candidate),
-          transport: String(captureMeta && captureMeta.transport || "observer"),
-          method: String(captureMeta && captureMeta.method || "GET").slice(0, 12)
-        });
-        onSourceCaptured(!!expectPlayerResponse);
-      } else if (expectPlayerResponse) {
-        trackPendingPlayerResponse(sourceUrl, sourceRevision);
-      } else if (exactChanged && cfg && producedForUrl === "") {
-        // Same track with a freshly rotated pot/signature after a failure.
-        // Retry immediately instead of waiting for a video navigation.
-        produceCues(true);
+      if (!incoming.originalUrl ||
+          (selectedCaptionTrackId !== "auto" && incoming.matchedId !== selectedCaptionTrackId)) {
+        return false;
       }
-    } catch (_e) { /* never throw */ }
+      latestOriginalUrl = incoming.candidate || incoming.originalUrl;
+      if (incoming.matchedId) {
+        captionTrackSources.set(incoming.matchedId, incoming.originalUrl);
+        captionTrackSourceKeys.set(normKey(incoming.originalUrl), incoming.matchedId);
+      }
+      const watches = !!playerTransport && incoming.watches;
+      selectSourceCandidate(incoming.candidate, watches, captureMeta, incoming.trackId);
+      return watches;
+    } catch (_e) { return false; }
   }
 
   // ---- video-change reset --------------------------------------------------
@@ -531,28 +657,29 @@
       const v = videoIdFromLocation();
       if (v !== currentVideoId) {
         currentVideoId = v;
-        sourceUrl = "";
-        sourceVid = "";
-        sourceKey = "";
-        sourceRevision++;
-        producedForUrl = "";
-        cueFetchInFlightUrl = "";
-        quarantinedSourceUrl = "";
-        awaitingPlayerResponseUrl = "";
-        capturedPlayerCues = null;
-        capturedPlayerCuesUrl = "";
-        lastPublishedUrl = "";
-        lastPublishedNonce = 0;
-        freshSourceRequestedForUrl = "";
-        pendingFreshSourceRequest = false;
-        clearNocuesTimer();
-        clearPlayerResponseTimer();
+        latestOriginalUrl = "";
+        sessionDonorUrl = "";
+        selectedCaptionTrackId = "auto";
+        selectedTranslationTrackId = "ai";
+        pendingTranslationTrackId = "";
+        preferredCaptionTrackId = "";
+        catalogPreferredCaptionTrackId = "";
+        translationFetchRevision++;
+        availableCaptionTracks = [];
+        captionTrackSources = new Map();
+        captionTrackSourceKeys = new Map();
+        captionTrackFingerprint = "";
+        resetSelectedSource();
+        postCaptionTracks(true);
         return true;
       }
     } catch (_e) { /* never throw */ }
     return false;
   }
-  setInterval(checkVideoChange, 500);
+  setInterval(() => {
+    checkVideoChange();
+    postCaptionTracks(false);
+  }, 500);
 
   // ---- nocues watchdog -----------------------------------------------------
   function armNocuesTimer() {
@@ -587,17 +714,50 @@
         // captured for the now-current video.
         checkVideoChange();
         currentVideoId = videoIdFromLocation();
-        cfg = true;
+        const nextTrackId = normalizeCaptionTrackSelection(d.captionTrackId);
+        const nextTranslationTrackId = translationTrack.normalizeSelection(d.translationTrackId);
+        if (!nextTrackId || !nextTranslationTrackId) return;
+        const selectionChanged = selectedCaptionTrackId !== nextTrackId;
+        const translationSelectionChanged = selectedTranslationTrackId !== nextTranslationTrackId;
+        selectedCaptionTrackId = nextTrackId;
+        selectedTranslationTrackId = nextTranslationTrackId;
+        cfg = {
+          captionTrackId: selectedCaptionTrackId,
+          translationTrackId: selectedTranslationTrackId
+        };
         // Adopt the content-supplied nonce so our posts correlate to THIS
         // sendConfig(); content.js drops any reply with an older nonce.
         if (typeof d.nonce === "number") reqNonce = d.nonce;
         postDiagnostic("bridge-config-received", {
           hasCapturedSource: !!sourceUrl,
-          sourceVideoMatches: !!sourceUrl && sourceVid === currentVideoId
+          sourceVideoMatches: !!sourceUrl && sourceVid === currentVideoId,
+          captionTrackId: selectedCaptionTrackId,
+          translationTrackId: selectedTranslationTrackId
         });
-        if (capturedPlayerCues && capturedPlayerCuesUrl === sourceUrl) {
+        postCaptionTracks(true, true);
+        const actualSelectionChanged = selectionChanged || selectedCaptionTrackId !== nextTrackId;
+        const actualTranslationChanged = translationSelectionChanged ||
+          selectedTranslationTrackId !== nextTranslationTrackId;
+        if (actualTranslationChanged) fetchManualTranslationCues();
+        if (actualSelectionChanged) {
+          resetSelectedSource();
+          const candidate = selectedCaptionTrackId === "auto"
+            ? latestOriginalUrl : captionTrackSources.get(selectedCaptionTrackId) || "";
+          if (candidate) {
+            const selectedTrack = availableCaptionTracks.find((track) => track.id === selectedCaptionTrackId);
+            const playerRequested = selectedCaptionTrackId !== "auto" && typeof trackCatalog.requestPlayerTrack === "function";
+            selectSourceCandidate(candidate, playerRequested,
+              { transport: playerRequested ? "player-track" : "config", method: "" },
+              selectedCaptionTrackId === "auto" ? preferredCaptionTrackId || captionTrackIdForUrl(candidate) : selectedCaptionTrackId);
+            if (playerRequested) requestPlayerTrackOrFallback(selectedTrack);
+          } else {
+            armNocuesTimer();
+          }
+          return;
+        }
+        if (capturedPlayerCues && sourceIdentityMatches(capturedPlayerCuesUrl)) {
           publishCues(capturedPlayerCues, sourceUrl, sourceRevision, "player-cache");
-        } else if (awaitingPlayerResponseUrl === sourceUrl) {
+        } else if (awaitingPlayerResponseUrl && sourceIdentityMatches(awaitingPlayerResponseUrl)) {
           // The player's response is still authoritative; arm the timeout now
           // if the request was observed before this config message arrived.
           awaitPlayerResponse(sourceUrl, sourceRevision);
@@ -637,23 +797,23 @@
         if (isTimedtext(url) && !isInternalTimedtext(url)) {
           const method = this.__ytdsMethod || "GET";
           const startedAt = Date.now();
-          const watchesPlayerResponse = !hasTlang(url);
-          noteTimedtext(url, watchesPlayerResponse, { transport: "xhr", method });
+          const watchesPlayerResponse = noteTimedtext(url, true, { transport: "xhr", method });
           const revision = sourceRevision;
           if (watchesPlayerResponse && typeof this.addEventListener === "function") {
             this.addEventListener("loadend", () => {
               try {
-                let text = "";
-                if (!this.responseType || this.responseType === "text") text = this.responseText || "";
-                else if (this.responseType === "json") text = JSON.stringify(this.response || null);
-                consumePlayerTimedtext(String(url), text, revision, {
+                const responseMeta = {
                   transport: "xhr",
                   method,
                   status: Number(this.status) || 0,
                   contentType: typeof this.getResponseHeader === "function"
                     ? this.getResponseHeader("content-type") || "" : "",
                   elapsedMs: Date.now() - startedAt
-                });
+                };
+                Promise.resolve(trackTransport.xhrResponseText(this)).then(
+                  (text) => consumePlayerTimedtext(String(url), text, revision, responseMeta),
+                  () => playerResponseUnavailable(String(url), revision)
+                );
               } catch (_e) { playerResponseUnavailable(String(url), revision); }
             }, { once: true });
           } else if (watchesPlayerResponse) {
@@ -682,8 +842,7 @@
             if (input.method) method = String(input.method).toUpperCase();
           }
           if (init && init.method) method = String(init.method).toUpperCase();
-          watchesPlayerResponse = isTimedtext(url) && !hasTlang(url) && !isInternalTimedtext(url);
-          noteTimedtext(url, watchesPlayerResponse, { transport: "fetch", method });
+          watchesPlayerResponse = noteTimedtext(url, true, { transport: "fetch", method });
           revision = sourceRevision;
         } catch (_e) { /* ignore */ }
         const result = origFetch.apply(this, arguments);

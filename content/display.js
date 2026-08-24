@@ -203,6 +203,10 @@ function cacheDeepseekDisplayNeighborhood(changedMembers, logPages) {
 }
 
 function repaintActiveDeepseekTranslation() {
+  if (manualTranslationSelected()) {
+    if (captionSession.cueList) cueTick();
+    return;
+  }
   const activeTranslation = captionSession.activeGroupIdx >= 0
     ? captionSession.transCache.get(groupKey(captionSession.activeGroupIdx)) : "";
   if (!activeTranslation || captionSession.activeCueIdx < 0 || !captionSession.cueList) {

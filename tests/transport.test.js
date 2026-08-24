@@ -12,7 +12,6 @@ const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8"
 const semanticSource = ["content/semantic-requests.js", "content/semantic.js"].map((file) =>
   fs.readFileSync(path.join(root, file), "utf8")).join("\n");
 const playbackSource = fs.readFileSync(path.join(root, "content/cue-playback.js"), "utf8");
-const fallbackSource = fs.readFileSync(path.join(root, "content/fallback.js"), "utf8");
 const networkSource = fs.readFileSync(path.join(root, "background/network.js"), "utf8");
 const translationSource = fs.readFileSync(path.join(root, "background/translation.js"), "utf8");
 
@@ -190,6 +189,8 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     repaintActiveDeepseekTranslation: () => {},
     clearPendingTimer: () => {},
     sourceForDisplayedCue: () => "source",
+    manualTranslationSelected: () => false,
+    manualTranslationTextAt: () => "",
     setTranslation: (text) => painted.push(text),
     t: (_key, fallback) => fallback,
     getVideo: () => ({
@@ -212,6 +213,35 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
   return {
     context, state, debug, timers, messages, pendingCallbacks, painted, retryKey,
     invalidateSession: () => { activeSessionToken = Object.freeze({ revision: 2 }); }
+  };
+}
+
+function loadPlaybackPrefetchHarness(options = {}) {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: options.windowItems ?? 80,
+    targetThrough: options.targetThrough ?? 40,
+    urgentTarget: options.urgentTarget ?? 0,
+    playbackRate: options.playbackRate ?? 3,
+    batchSize: options.batchSize ?? 64,
+    deferResponses: true,
+    groupCount: options.groupCount ?? 801,
+    limitEnd: options.limitEnd ?? 800,
+    aiBaseUrl: options.aiBaseUrl
+  });
+  harness.context.settings.enabled = true;
+  for (const [name, value] of Object.entries({
+    DEEPSEEK_MAX_PREFETCH_BATCHES: options.maxPrefetchBatches,
+    DEEPSEEK_FAST_PREFETCH_BATCHES: options.fastPrefetchBatches,
+    DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES: options.highSpeedPrefetchBatches
+  })) {
+    if (value != null) harness.context[name] = value;
+  }
+  harness.context.captionSession.activeGroupIdx = 0;
+  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
+  vm.runInContext("prefetchFrom(0)", harness.context);
+  return {
+    harness,
+    requests: harness.messages.filter((message) => message.type === "translateBatch")
   };
 }
 
@@ -1039,19 +1069,12 @@ test("accelerated prefetch skips the live writer and uses the fast transport pat
 });
 
 test("3x DeepSeek playback dispatches the visible writer and eleven future ranges before any response", () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+  const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
-    batchSize: 64, deferResponses: true, groupCount: 1201, limitEnd: 1200
+    batchSize: 64, groupCount: 1201, limitEnd: 1200,
+    maxPrefetchBatches: 12, fastPrefetchBatches: 6, highSpeedPrefetchBatches: 12
   });
-  harness.context.settings.enabled = true;
-  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 6;
-  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12;
-  harness.context.captionSession.activeGroupIdx = 0;
-  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
-  vm.runInContext("prefetchFrom(0)", harness.context);
 
-  const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.deepEqual(requests.map((message) => message.requestStart), [
     0, 64, 160, 256, 352, 448, 544, 640, 736, 832, 928, 1024
   ]);
@@ -1062,71 +1085,45 @@ test("3x DeepSeek playback dispatches the visible writer and eleven future range
 });
 
 test("3x DeepSeek uses a short visible writer while Gemini keeps the wider lane", () => {
-  const deepseek = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+  const deepseek = loadPlaybackPrefetchHarness({
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
-    batchSize: 32, deferResponses: true, groupCount: 801, limitEnd: 800
+    batchSize: 32, maxPrefetchBatches: 12, highSpeedPrefetchBatches: 12
   });
-  deepseek.context.settings.enabled = true;
-  deepseek.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-  deepseek.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12;
-  deepseek.context.captionSession.activeGroupIdx = 0;
-  vm.runInContext(playbackSource, deepseek.context, { filename: "content/cue-playback.js" });
-  vm.runInContext("prefetchFrom(0)", deepseek.context);
-  const deepseekRequests = deepseek.messages.filter((message) => message.type === "translateBatch");
+  const deepseekRequests = deepseek.requests;
   assert.equal(deepseekRequests[0].requestStart, 0);
   assert.equal(deepseekRequests[0].items.length, 48);
   assert.ok(deepseekRequests[1].requestStart > deepseekRequests[0].requestEnd);
 
-  const gemini = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+  const gemini = loadPlaybackPrefetchHarness({
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
-    batchSize: 32, deferResponses: true, groupCount: 801, limitEnd: 800,
+    batchSize: 32, maxPrefetchBatches: 12, highSpeedPrefetchBatches: 12,
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai"
   });
-  gemini.context.settings.enabled = true;
-  gemini.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-  gemini.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12;
-  gemini.context.captionSession.activeGroupIdx = 0;
-  vm.runInContext(playbackSource, gemini.context, { filename: "content/cue-playback.js" });
-  vm.runInContext("prefetchFrom(0)", gemini.context);
-  const geminiRequests = gemini.messages.filter((message) => message.type === "translateBatch");
+  const geminiRequests = gemini.requests;
   assert.equal(geminiRequests[0].requestStart, 0);
   assert.equal(geminiRequests[0].items.length, 80);
 });
 
 test("3x compatible playback keeps a provider-safe speculative lane", () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+  const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
-    batchSize: 64, deferResponses: true, groupCount: 801, limitEnd: 800,
+    batchSize: 64, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
+    highSpeedPrefetchBatches: 12,
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai"
   });
-  harness.context.settings.enabled = true;
-  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 6;
-  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12;
-  harness.context.captionSession.activeGroupIdx = 0;
-  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
-  vm.runInContext("prefetchFrom(0)", harness.context);
 
-  const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.deepEqual(requests.map((message) => message.requestStart), [0, 80, 176, 272]);
   assert.equal(harness.pendingCallbacks.length, 4);
   assert.ok(requests.every((message) => message.endpointKind === "compatible"));
 });
 
 test("2x DeepSeek playback also fills an accelerated runway", () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+  const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 2,
-    batchSize: 64, deferResponses: true, groupCount: 801, limitEnd: 800
+    batchSize: 64, maxPrefetchBatches: 8, fastPrefetchBatches: 8,
+    highSpeedPrefetchBatches: 12
   });
-  harness.context.settings.enabled = true;
-  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 8;
-  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 8;
-  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12;
-  harness.context.captionSession.activeGroupIdx = 0;
-  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
-  vm.runInContext("prefetchFrom(0)", harness.context);
 
-  const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.deepEqual(requests.map((message) => message.requestStart), [
     0, 64, 160, 256, 352, 448, 544, 640
   ]);
@@ -1585,6 +1582,8 @@ test("same-group playback watchdog and rate change re-arm accelerated current pr
     },
     captureCaptionSession: () => sessionToken,
     isCaptionSessionCurrent: (token) => token === sessionToken,
+    manualTranslationSelected: () => false,
+    manualTranslationTextAt: () => "",
     emitDebug: () => {}, emitCaptionStateTransition: () => {},
     clearPendingTimer: () => {}, setOriginal: () => {}, setTranslation: () => {},
     t: (_key, fallback) => fallback
@@ -1732,53 +1731,6 @@ test("seeking and seeked only schedule a trailing-edge focus change", () => {
   assert.equal(context.captionSession.deepseekSeekSettling, true);
   assert.equal(context.captionSession.deepseekPendingSeekTimeMs, 3000);
   assert.equal(timers.length, 3);
-});
-
-test("an invalidated fallback session cannot repaint unchanged source text", () => {
-  const timers = [];
-  const callbacks = [];
-  const painted = [];
-  let sessionToken = Object.freeze({ revision: 1 });
-  const context = {
-    setTimeout: (callback) => { timers.push(callback); return timers.length; },
-    clearTimeout: () => {},
-    captionSession: {
-      debounceTimer: null,
-      fallbackRequestId: "",
-      fallbackSessionToken: null,
-      lastReqToken: 0,
-      lastSource: "same caption",
-      lastTransSource: "",
-      currentVideoId: "video",
-      cueSourceLang: "en",
-      deepseekFocusGeneration: 0
-    },
-    settings: { targetLang: "zh-CN" },
-    YTDS_SHARED: loadShared(),
-    DEBOUNCE_MS: 450,
-    captureCaptionSession: () => sessionToken,
-    isCaptionSessionCurrent: (token) => token === sessionToken,
-    sendRuntimeMessage: (_message, callback) => callbacks.push(callback),
-    emitCaptionStateTransition: () => {},
-    setTranslation: (translation) => painted.push(translation)
-  };
-  vm.createContext(context);
-  vm.runInContext(fallbackSource, context, { filename: "content/fallback.js" });
-  const schedule = vm.runInContext("scheduleTranslate", context);
-
-  schedule("same caption");
-  timers[0]();
-  assert.equal(callbacks.length, 1);
-
-  // Configuration/navigation invalidation may leave the native caption text
-  // unchanged. Its old provider response must still lose repaint authority.
-  sessionToken = Object.freeze({ revision: 2 });
-  callbacks[0]({
-    ok: true,
-    translations: [{ id: "0", translation: "stale translation" }]
-  }, null);
-
-  assert.deepEqual(painted, []);
 });
 
 test("webRequest diagnostics preserve Chromium's underlying net error", () => {

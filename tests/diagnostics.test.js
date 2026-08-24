@@ -130,7 +130,6 @@ test("caption invalidation emits an ordered state transition with both revisions
     videoIdFromLocation: () => "video",
     extensionContextAlive: () => true,
     sendRuntimeMessage: () => {},
-    cancelFallbackRequest: () => {},
     resetDeepseekCommitTimeline: () => {},
     clearDeepseekSeekSettle: () => {},
     clearPendingTimer: () => {},

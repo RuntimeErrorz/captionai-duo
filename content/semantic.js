@@ -97,7 +97,7 @@ function deepseekCueContextEntry(cueIdx, temporal) {
     temporal: temporal === "future" ? "future" : "past"
   };
 }
-function cueTrackFingerprint(videoId, trackKind, sourceLang, cues) {
+function cueTrackFingerprint(videoId, trackKind, sourceLang, trackId, cues) {
   let hash = 2166136261;
   const add = (value) => {
     const text = String(value == null ? "" : value);
@@ -112,6 +112,7 @@ function cueTrackFingerprint(videoId, trackKind, sourceLang, cues) {
   add(settings.targetLang);
   add(trackKind);
   add(sourceLang);
+  add(trackId);
   add(cues.length);
   for (const cue of cues) {
     add(cue.start);
@@ -120,7 +121,6 @@ function cueTrackFingerprint(videoId, trackKind, sourceLang, cues) {
   }
   return `${cues.length}:${hash >>> 0}`;
 }
-
 function deepseekContextsForRange(requestStart, requestEnd) {
   const startCue = Math.max(0,
     Number(captionSession.sentGroups[requestStart] && captionSession.sentGroups[requestStart].startIdx) || 0);
@@ -419,17 +419,6 @@ function commitDeepseekResponsePrefix(
   return plan.carryStart;
 }
 function handleDeepseekTranslationProgress(msg) {
-  if (String(msg && msg.requestId || "") === captionSession.fallbackRequestId &&
-      isCaptionSessionCurrent(captionSession.fallbackSessionToken) &&
-      String(msg && msg.videoId || "") === captionSession.currentVideoId &&
-      Number(msg && msg.focusGeneration) === captionSession.deepseekFocusGeneration) {
-    const translated = Array.isArray(msg.translations) && msg.translations[0] &&
-      String(msg.translations[0].translation || "").trim();
-    if (translated && captionSession.lastSource) {
-      setTranslation(translated, captionSession.lastSource);
-      return true;
-    }
-  }
   const found = deepseekRequestById(msg && msg.requestId);
   if (!found) {
     emitCaptionStateTransition("semantic-progress", "discarded", {
@@ -844,24 +833,23 @@ function armPendingTranslationIndicator(gIdx, immediate) {
 function onCues(data) {
   if (!captionSession.currentVideoId || data.videoId !== captionSession.currentVideoId) return;
   if (!Number.isInteger(data.nonce) || data.nonce !== captionSession.configNonce) return;
-  captionSession.nocuesFallback = false;
   stopCueRecovery();
-  stopFallback();                 // cue mode wins; stop scraping
-
   // Sort the original json3 cue timeline before assigning lexical coordinates.
   const nextCueList = sanitizeCueList(data.cues);
   if (!nextCueList) { onNoCues(data); return; }
   nextCueList.sort((a, b) => a.start - b.start);
   computeCueEnds(nextCueList);
-
   const nextVideoId = data.videoId || captionSession.currentVideoId;
   const nextTrackKind = data.trackKind === "asr" ? "asr"
                       : data.trackKind ? "manual" : "";
   const nextSourceLang = typeof data.sourceLang === "string" &&
     /^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,2}$/.test(data.sourceLang)
     ? data.sourceLang.slice(0, 24) : "";
+  const nextTrackId = typeof data.captionTrackId === "string" &&
+    /^[A-Za-z0-9._:-]{1,160}$/.test(data.captionTrackId)
+    ? data.captionTrackId : "auto";
   const nextSignature = cueTrackFingerprint(
-    nextVideoId, nextTrackKind, nextSourceLang, nextCueList
+    nextVideoId, nextTrackKind, nextSourceLang, nextTrackId, nextCueList
   );
   if (captionSession.cueTimer && captionSession.cueVideoId === nextVideoId && captionSession.cueTrackSignature === nextSignature) {
     captionSession.duplicateCueEvents++;
@@ -873,15 +861,14 @@ function onCues(data) {
     }
     return;
   }
-
   captionSession.duplicateCueEvents = 0;
   captionSession.cueTrackSignature = nextSignature;
   captionSession.cueList = nextCueList;
   captionSession.cueVideoId = nextVideoId;
   captionSession.cueTrackKind = nextTrackKind;
   captionSession.cueSourceLang = nextSourceLang;
+  captionSession.cueTrackId = nextTrackId;
   captionSession.lastDebugCueIdx = -1;
-
   if (!captionSession.cueList.length) { onNoCues(data); return; }
   buildHybridCueGroups(captionSession.cueList);
   emitDebug("cues-loaded", {

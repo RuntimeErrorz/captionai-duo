@@ -17,7 +17,13 @@ in `manifest.json` in order, and the service worker loads its modules through
 - `background/` contains service-worker state, Chromium network diagnostics,
   HTTP transport, translation, and message routing. `background.js` only
   declares their deterministic order.
-- `inject.js` is the MAIN-world timedtext interceptor.
+- `inject/caption-tracks.js` catalogs the current video's YouTube caption
+  tracks in the MAIN world while keeping proof-bearing URLs private.
+- `inject/track-transport.js` fetches and parses proof-bearing json3 tracks in
+  the MAIN world for both the source and an optional manual translation track.
+- `inject/translation-track.js` owns the optional manual translation-track
+  loader and its selection validation in the MAIN world.
+- `inject.js` is the MAIN-world timedtext interceptor and caption source loader.
 - `popup/` contains local connection-profile/configuration logic;
   `popup.js` is the remaining popup controller.
 

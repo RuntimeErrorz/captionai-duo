@@ -12,7 +12,6 @@
     "ru", "pt", "it", "ar", "hi", "id", "th", "vi"
   ]);
   const TARGET_LANG_SET = new Set(TARGET_LANGS);
-
   const AI_DEFAULT_BASE_URL = "https://api.deepseek.com";
   const AI_DEFAULT_MODEL = "deepseek-v4-flash";
   const AI_EXTRA_BODY_MAX_CHARS = 4096;
@@ -463,7 +462,8 @@
 
   Object.assign(internal, {
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
-    normalizeTargetLang, isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
+    normalizeTargetLang,
+    isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
     aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,
     parseAiExtraBody, aiCompletionText,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,

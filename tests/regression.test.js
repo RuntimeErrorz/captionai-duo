@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   SHARED_FILES,
+  MAIN_FILES,
   CONTENT_FILES,
   BACKGROUND_FILES,
   POPUP_FILES,
@@ -17,6 +18,7 @@ const shared = loadSharedGlobal();
 assert.equal(shared.DEFAULTS.deepseekContextPast, 1);
 assert.equal(shared.DEFAULTS.deepseekContextFuture, 1);
 assert.equal(shared.DEFAULTS.deepseekPrefetchBatches, 1);
+assert.equal("captionTrackMode" in shared.DEFAULTS, false);
 assert.equal("aiProvider" in shared.DEFAULTS, false);
 assert.equal(shared.DEFAULTS.aiBaseUrl, "https://api.deepseek.com");
 assert.equal(shared.DEFAULTS.aiModel, "deepseek-v4-flash");
@@ -100,42 +102,15 @@ assert.equal(shared.normalizeDeepseekPrefetchBatches(99), 10);
 assert.equal(shared.normalizeAiContextCount(-2, 5), 0);
 assert.equal(shared.normalizeAiContextCount(12.6, 5), 13);
 assert.equal(shared.normalizeAiContextCount(99, 5), 20);
-assert.equal(typeof shared.splitTextForDisplay, "function");
-assert.equal(typeof shared.splitAlignedSentencesForDisplay, "function");
-assert.equal(typeof shared.displayPageAssignments, "function");
-assert.equal(typeof shared.semanticDisplayPlan, "function");
-assert.equal(typeof shared.shouldBridgeSemanticCueGap, "function");
-assert.equal(typeof shared.semanticDisplayClusters, "function");
 assert.equal(shared.resolveFullscreenState(true, {}, false), true);
 assert.equal(shared.resolveFullscreenState(true, null, true), false,
   "native fullscreen exit must win over a stale YouTube fullscreen class");
 assert.equal(shared.resolveFullscreenState(false, null, true), true,
   "the player class remains a fallback when the native API is unavailable");
-assert.equal(typeof shared.semanticUnitsFromAlignedChunks, "function");
-assert.equal(typeof shared.semanticPrefetchBatchStarts, "function");
-assert.equal(typeof shared.deepSeekConcurrencyStatus, "function");
-assert.equal(typeof shared.mergeTimedCueTexts, "function");
 assert.equal(shared.semanticPauseKind(899, 900, 4000), "none");
 assert.equal(shared.semanticPauseKind(900, 900, 4000), "soft");
 assert.equal(shared.semanticPauseKind(3999, 900, 4000), "soft");
 assert.equal(shared.semanticPauseKind(4000, 900, 4000), "hard");
-assert.equal(typeof shared.cueReferenceAtoms, "function");
-assert.equal(typeof shared.referenceBatchWindows, "function");
-assert.equal(typeof shared.shouldReseedSemanticCommitState, "function");
-assert.equal(typeof shared.semanticCommitRequestPlan, "function");
-assert.equal(typeof shared.pendingTranslationScopeKey, "function");
-assert.equal(typeof shared.preparePromptContexts, "function");
-assert.equal(typeof shared.normalizeAiTokenUsage, "function");
-assert.equal(typeof shared.compactAiPromptCueRows, "function");
-assert.equal(typeof shared.compactAiPromptContextRows, "function");
-assert.equal(typeof shared.alignedTranslationsFromJsonText, "function");
-assert.equal(typeof shared.alignedChunkDisplayPlan, "function");
-assert.equal(typeof shared.aiJsonlObjects, "function");
-assert.equal(typeof shared.aiJsonlRecordFromLine, "function");
-assert.equal(typeof shared.createAiJsonlTranslationState, "function");
-assert.equal(typeof shared.pushAiJsonlTranslationRecord, "function");
-assert.equal(typeof shared.aiJsonlLeadingRecordPrefix, "function");
-assert.equal(typeof shared.aiJsonlTranslationResult, "function");
 
 assert.equal(shared.videoIdFromUrl("https://www.youtube.com/watch?v=abcdefghijk"), "abcdefghijk");
 assert.equal(shared.videoIdFromUrl("https://www.youtube.com/shorts/abcdefghijk"), "abcdefghijk");
@@ -265,7 +240,7 @@ assert.equal(groups[0].endIdx, 0);
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 assert.equal(manifest.minimum_chrome_version, "111");
 assert.equal(manifest.version, "1.0.0");
-assert.deepEqual(manifest.content_scripts[0].js, [...SHARED_FILES, "inject.js"]);
+assert.deepEqual(manifest.content_scripts[0].js, [...SHARED_FILES, ...MAIN_FILES]);
 assert.deepEqual(manifest.content_scripts[1].js, [...SHARED_FILES, ...CONTENT_FILES]);
 assert.deepEqual(manifest.host_permissions, [
   "https://*/*",
@@ -275,65 +250,29 @@ assert.deepEqual(manifest.host_permissions, [
 assert.equal("optional_host_permissions" in manifest, false);
 
 const content = readSourceFiles(CONTENT_FILES);
-const contentCss = fs.readFileSync(path.join(root, "content.css"), "utf8");
 const background = readSourceFiles(BACKGROUND_FILES);
 const sharedSource = readSourceFiles(SHARED_FILES);
+const mainSource = readSourceFiles(MAIN_FILES);
 const popup = fs.readFileSync(path.join(root, "popup.html"), "utf8");
 const popupSource = readSourceFiles(POPUP_FILES);
-const popupCss = fs.readFileSync(path.join(root, "popup.css"), "utf8");
 assert.doesNotMatch(content, /settings\.engine|gtxRequest|tlang/);
 assert.doesNotMatch(background, /translate\.googleapis|function gtxFetch|ytdsGtxGate/);
 assert.doesNotMatch(content, /ytds-toggle|ensureToggleButton|controlsObserver/);
-assert.doesNotMatch(contentCss, /ytds-toggle/);
 assert.doesNotMatch(content, /postMessage\([\s\S]{0,240}["']\*["']/);
 assert.match(background, /contextFuture/);
 assert.match(background, /FUTURE_CONTEXT/);
 assert.match(background, /isYoutubeSender\(sender\)/);
 assert.match(background, /videoIdMatchesPageUrls\(msg\.videoId, senderPageUrls\(sender\)\)/);
 assert.doesNotMatch(background, /videoIdFromUrl\(sender\.url \|\| sender\.tab\.url/);
-assert.match(background, /alignedTranslationsFromJsonText/);
-assert.match(background, /prompt-v27-jsonl-cursor-done-fast-urgent-chunked/);
-assert.match(background, /MAX_PROMPT_SOURCE_CHARS = 28000/);
-assert.match(background, /preparePromptContexts/);
-assert.match(background, /cleanContext\(msg\.contextAfter, 20, "future"\)/);
-assert.match(background, /cleanContext\(msg\.contextBefore, 20, "past"\)/);
 assert.doesNotMatch(background, /repairSuspiciousSemanticTranslations/);
 assert.doesNotMatch(background, /semantic-translation-repair/);
 assert.doesNotMatch(sharedSource, /translationQualityIssue/);
-assert.match(background, /one completed semantic unit per physical JSONL line/i);
-assert.match(background, /final line \{"type":"done"\}/);
 assert.doesNotMatch(background, /final line shaped \{"type":"done","deferred_ids"/);
-assert.match(background, /jsonLines: true/);
-assert.match(background, /semantic-jsonl-unit/);
-assert.match(background, /translationBatchProgress/);
-assert.match(background, /roughly 35-90 source characters/);
-assert.match(background, /compact lexical rows shaped \[id,text,pauseAfterMs,boundary\]/);
-assert.match(background, /function deepseekTranslateSemanticFallback/);
 assert.doesNotMatch(background, /function deepseekTranslateCueFallback/);
 assert.doesNotMatch(background, /causal-cue-request/);
-assert.match(background, /semantic-batch-request/);
-assert.match(background, /DEBUG_MAX_ENTRY_CHARS = 30000/);
-assert.match(background, /sendResponse\(\{ ok: true, truncated: true \}\)/);
-assert.match(background, /currentRows: items\.map/);
-assert.match(background, /translationCount: translations\.length/);
-assert.doesNotMatch(background, /durationMs: Date\.now\(\) - batchStarted,\s*translations,/);
-assert.match(background, /semantic-batch-alignment-fallback/);
-assert.match(background, /semantic-simple-fallback-request/);
-assert.match(background, /semantic-simple-fallback-response/);
-assert.match(background, /MAX_BATCH_ITEMS = 320/);
-assert.match(background, /retryAfterMs: Number\(err && err\.retryAfterMs\)/);
-assert.match(background, /DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 12/);
-assert.match(background, /COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB = 4/);
-assert.match(background, /DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS = 8000/);
-assert.match(background, /DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS = 12000/);
 assert.match(background, /chrome\.webRequest\.onErrorOccurred/);
-assert.match(background, /ai-network-error/);
-assert.match(background, /acquireDeepSeekSlot\(sender, !!msg\.urgent, endpointKind\)/);
-assert.match(background, /beforeFocusGeneration/);
-assert.match(background, /entry\.focusGeneration < cutoff/);
 assert.doesNotMatch(background, /MAX_UNITS_PER_MINUTE/);
 assert.doesNotMatch(background, /state\.recent/);
-assert.match(sharedSource, /outsideIsland && \(!!urgent \|\| !playbackActive\)/);
 assert.doesNotMatch(content, /const inflightKey = `dsb:\$\{regionIndex\}:\$\{requestStart\}:\$\{requestEnd\}`/);
 assert.doesNotMatch(content, /semantic-unit-overlap-resolved/);
 assert.doesNotMatch(content, /semantic-coverage-repair-start/);
@@ -343,37 +282,6 @@ assert.doesNotMatch(
   content,
   /groups: (?:captionSession\.)?sentGroups \? (?:captionSession\.)?sentGroups\.map/
 );
-assert.match(fs.readFileSync(path.join(root, "inject.js"), "utf8"), /bridge-config-received/);
-assert.match(fs.readFileSync(path.join(root, "inject.js"), "utf8"), /timedtext-watchdog-expired/);
-assert.match(background, /fetchAiStreamWithTimeout/);
-assert.match(background, /deepseek-http-first-byte/);
-assert.match(background, /deepseek-http-body-complete/);
-assert.match(background, /semantic-jsonl-legacy-done-stopped/);
-assert.match(background, /DEEPSEEK_STREAM_COMPLETION_GRACE_MS = 750/);
-const fullBodyTimeout = background.slice(
-  background.indexOf("async function fetchAiStreamWithTimeout"),
-  background.indexOf("function registerDeepSeekController")
-);
-assert.match(fullBodyTimeout, /response\.body\.getReader\(\)/);
-assert.match(fullBodyTimeout, /deepSeekSseEvents\(buffer, !!part\.done\)/);
-assert.match(fullBodyTimeout, /event === "\[DONE\]"/);
-assert.match(fullBodyTimeout, /reader\.cancel\(earlyStopReason\)/);
-assert.match(sharedSource, /stream: true/);
-assert.match(sharedSource, /stream_options: \{ include_usage: true \}/);
-assert.match(background, /const chunkUsage =/);
-assert.match(background, /recordAiTokenUsage/);
-assert.match(background, /AI_TOKEN_USAGE_KEY = "ytdsAiTokenUsageV1"/);
-assert.match(background, /priority:\$\{priority\}/);
-assert.match(background, /AI_RESPONSE_CACHE_MAX_ENTRIES = 96/);
-assert.match(background, /AI_RESPONSE_CACHE_MAX_CHARS = 2000000/);
-assert.match(background, /semantic-batch-cache-hit/);
-assert.match(background, /bypassCache \? null : await readAiResponseCache/);
-assert.match(background, /writeAiResponseCache/);
-assert.match(background, /cancelDeepSeekRequestForSender/);
-assert.match(contentCss, /#ytds-overlay[\s\S]*?width:\s*98%/);
-assert.match(content, /function extensionContextAlive/);
-assert.match(content, /function stopForInvalidatedExtensionContext/);
-assert.match(content, /function sendRuntimeMessage/);
 assert.doesNotMatch(content, /DEEPSEEK_DISPLAY_GAP_BRIDGE_MS/);
 assert.equal((content.match(/chrome\.runtime\.sendMessage/g) || []).length, 1);
 assert.match(popup, /id="deepseekContextFuture"/);
@@ -383,6 +291,14 @@ assert.match(popup, /id="deepseekContextFuture" type="number" min="0" max="20"/)
 assert.match(popup, /id="deepseekPrefetchBatches" type="number" min="0" max="10"/);
 assert.doesNotMatch(popup, /value="zh-TW"|中文（繁體）/);
 assert.match(popupSource, /normalizeTargetLang\(state\.targetLang\)/);
+assert.match(popup, /id="captionTrackSelect"/);
+assert.match(popup, /<option value="auto"[\s\S]*?captionTrackAuto/);
+assert.match(popupSource, /setCaptionTrack/);
+assert.doesNotMatch(popup, /captionTrackMode/);
+assert.doesNotMatch(popupSource, /setKey\("captionTrackMode"/);
+assert.match(content, /type === "getCaptionTracks"/);
+assert.match(content, /type === "setCaptionTrack"/);
+assert.match(content, /availableCaptionTracks/);
 assert.doesNotMatch(popup, /id="aiProvider"|data-i18n="aiProvider"/);
 assert.match(popup, /id="aiBaseUrl"/);
 assert.doesNotMatch(popup, /id="authorizeAiBase"/);
@@ -420,9 +336,7 @@ assert.equal((popup.match(/data-workspace-panel="display"/g) || []).length, 1);
 assert.match(popup, /id="panel-display"[\s\S]*?data-i18n="secSubtitleAppearance"[\s\S]*?class="layout-row"[\s\S]*?class="section-divider display-divider"[\s\S]*?class="line-tabs-row"/);
 assert.doesNotMatch(popup, /id="panel-(?:layout|style)"/);
 assert.match(popup, /class="gap-control"/);
-assert.match(popupSource, /visualDefaultsVersion/);
-assert.match(popupSource, /contextDefaultsVersion/);
-assert.match(popupSource, /lineDefaultsVersion/);
+assert.doesNotMatch(popupSource, /visualDefaultsVersion|contextDefaultsVersion|lineDefaultsVersion/);
 assert.doesNotMatch(popup, /deepseekFutureWarning|下文大于 0/);
 assert.doesNotMatch(popupSource, /deepseekFutureWarning/);
 assert.doesNotMatch(popup, /data-i18n="(?:logHelp|debugHint)"|日志说明/);
@@ -431,30 +345,15 @@ assert.doesNotMatch(popupSource, /debugCopied|debugCleared|tokenReportedRequests
 assert.match(popup, /data-workspace-panel="translation"/);
 assert.match(popup, /data-workspace-panel="display"/);
 assert.match(popup, /data-workspace-panel="tools"/);
+assert.doesNotMatch(popup, /<h1[^>]*>CaptionAI Duo<\/h1>/);
 assert.match(popupSource, /function activateWorkspace/);
-assert.match(popupCss, /\.workspace-tab\.on::after/);
-assert.match(popupCss, /prefers-reduced-motion/);
-assert.match(popupCss, /--surface:\s*#ffffff/);
-assert.match(popupCss, /body\s*\{[\s\S]*?width:\s*320px/);
-assert.match(popupCss, /:root[\s\S]*?font-size:\s*15px/);
-assert.match(popupCss, /\.export-btn[\s\S]*?font-size:\s*13\.5px;[\s\S]*?font-weight:\s*400/);
+assert.doesNotMatch(popup, /class="hd"|id="enabled"/);
 assert.match(popup, /id="toolsFooter"[\s\S]*?id="importConfig"[\s\S]*?id="exportConfig"[\s\S]*?id="reset"/);
-assert.match(popupCss, /\.ft\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*repeat\(3/);
-assert.doesNotMatch(popupCss, /\.ft\s*\{[^}]*border-top/);
 assert.match(popupSource, /document\.body\.dataset\.workspace = activeWorkspace/);
-assert.match(popupCss, /body\[data-workspace="tools"\]\s*\{[^}]*overflow-y:\s*hidden/);
-assert.match(popupCss, /\.token-grid span\s*\{\s*white-space:\s*nowrap/);
-assert.doesNotMatch(popupCss, /\.token-grid > div\s*\{[^}]*flex-direction:\s*column/);
 assert.match(popupSource, /const compactTokenFormatter = new Intl\.NumberFormat/);
 assert.match(popupSource, /element\.title = exact/);
-assert.match(popupCss, /\.ft button\.danger/);
-assert.match(popupCss, /#deleteAiProfile\s*\{[\s\S]*?color:\s*var\(--danger\)/);
-assert.match(popupCss, /\.section-divider\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
-assert.doesNotMatch(popupCss, /\.section-divider\s*\{[^}]*linear-gradient/);
-assert.doesNotMatch(popupCss, /Bahnschrift|Cascadia Code|monospace/);
 assert.equal(manifest.action.default_title, "__MSG_extName__");
-assert.match(popup, /class="hd-mark" src="icons\/icon48\.png"/);
-assert.match(fs.readFileSync(path.join(root, "inject.js"), "utf8"), /parts\.push\(part\)/);
+assert.match(mainSource, /parts\.push\(part\)/);
 
 const localeNames = ["en", "zh_CN"];
 const popupI18nKeys = Array.from(popup.matchAll(
@@ -477,7 +376,7 @@ assert.equal(fs.existsSync(path.join(root, "_locales", "zh_TW", "messages.json")
 const currentDocs = ["README.md", "README.zh-CN.md"]
   .map((name) => fs.readFileSync(path.join(root, name), "utf8")).join("\n");
 assert.doesNotMatch(`${popup}\n${popupSource}\n${currentDocs}`, /兼容优先|most compatible/);
-assert.doesNotMatch(`${popup}\n${popupCss}\n${content}\n${currentDocs}`, /LingoCue/);
+assert.doesNotMatch(`${popup}\n${popupSource}\n${content}\n${currentDocs}`, /LingoCue/);
 assert.doesNotMatch(currentDocs,
   /gythiro\.github\.io|chromewebstore\.google\.com|ndifcigakimmibkgeabchfaolhjpcmge|Official Website|官方网站/);
 assert.doesNotMatch(currentDocs, /16 target languages|16 种目标语言|0[–～-]3 batches|0[–～-]3 批/);

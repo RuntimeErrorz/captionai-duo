@@ -70,7 +70,7 @@ let dragStartY = 0;
 let dragSaveTimer = null;
 const DRAG_THRESHOLD = 3;    // px the pointer must move before it counts as a drag
 
-// Video/track/request/display/fallback state is owned by captionSession, which
+// Video/track/request/display/recovery state is owned by captionSession, which
 // is initialized by the next ordered content module.
 const ZERO_DUR_FLOOR_MS = 1000; // min visible window for a trailing zero-dur cue
 const MAX_CUE_COUNT = 50000;
@@ -109,8 +109,6 @@ const DEEPSEEK_COLD_RETRY_DELAYS_MS = Object.freeze([400, 1200, 2500]);
 const DEEPSEEK_RATE_RETRY_LIMIT = 6;
 const PENDING_ELLIPSIS_MS = 400; // show "…" if the active group is still in flight
 
-const DEBOUNCE_MS = 450;
-
 const INITIAL_CUE_RECOVERY_MS = 7000;
 
 function extensionContextAlive() {
@@ -128,7 +126,6 @@ function stopForInvalidatedExtensionContext() {
   settings.enabled = false;
   invalidateCaptionSession("extension-context-invalid");
   stopCueLoop();
-  stopFallback();
   stopCueRecovery();
   clearPendingTimer();
   captionSession.transInflight.clear();
@@ -165,9 +162,6 @@ function loadSettings() {
     chrome.storage.sync.get(null, (got) => {
       got = got || {};
       settings = { ...DEFAULTS, ...got };
-      if (!Object.prototype.hasOwnProperty.call(got, "aiModel") && got.deepseekModel) {
-        settings.aiModel = got.deepseekModel;
-      }
       settings.targetLang = YTDS_SHARED.normalizeTargetLang(settings.targetLang);
       settings.deepseekContextPast =
         YTDS_SHARED.normalizeAiContextCount(settings.deepseekContextPast, 1);
@@ -175,12 +169,6 @@ function loadSettings() {
         YTDS_SHARED.normalizeAiContextCount(settings.deepseekContextFuture, 1);
       settings.deepseekPrefetchBatches =
         YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
-      // migrate legacy global bgOpacity -> per-line bg opacities if present
-      // and the per-line keys were never set.
-      if (typeof got.bgOpacity === "number") {
-        if (typeof got.origBgOpacity !== "number") settings.origBgOpacity = got.bgOpacity;
-        if (typeof got.transBgOpacity !== "number") settings.transBgOpacity = got.bgOpacity;
-      }
       resolve();
     });
   });
@@ -190,7 +178,7 @@ function loadSettings() {
 const RECUE_KEYS = new Set(["targetLang"]);
 const DEEPSEEK_RETRANSLATE_KEYS = new Set([
   "aiBaseUrl", "aiModel", "aiExtraBodyRevision",
-  "deepseekModel", "deepseekContextPast", "deepseekContextFuture"
+  "deepseekContextPast", "deepseekContextFuture"
 ]);
 const LIVE_STYLE_KEYS = new Set([
   "order", "rowGap", "position", "posMode", "posXpct", "posYpct",
@@ -253,7 +241,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
     // A language change refreshes configuration; model/context changes reuse cues.
     if (needRecue) sendConfig("settings-recue");
     else if (captionSession.cueList) cueTick();
-    if (captionSession.nocuesFallback && captionSession.lastSource) scheduleTranslate(captionSession.lastSource);
   }
   if (enabledChanged && settings.enabled && !needRecue) {
     sendConfig("enabled");
@@ -295,19 +282,6 @@ function getVideo() {
   return (p && p.querySelector("video")) ||
          document.querySelector("video.html5-main-video") ||
          document.querySelector("video");
-}
-
-// Read the currently displayed native caption text (fallback path).
-// Read ONLY .ytp-caption-segment (the combined node would duplicate text).
-function readNativeCaption() {
-  const segs = document.querySelectorAll(".ytp-caption-segment");
-  if (!segs.length) return "";
-  let parts = [];
-  segs.forEach((s) => {
-    const t = s.textContent.trim();
-    if (t) parts.push(t);
-  });
-  return parts.join(" ").replace(/\s+/g, " ").trim();
 }
 
 // ---- overlay -------------------------------------------------------------
@@ -589,7 +563,6 @@ function setTranslation(text, forSource) {
   if (!ensureOverlay()) return;
   const previous = transEl.textContent;
   transEl.textContent = text || "";
-  if (arguments.length > 1) captionSession.lastTransSource = forSource || "";
   updateEmptyState();
   if (previous !== transEl.textContent) {
     emitDebug("translation-painted", {
@@ -738,8 +711,7 @@ function scheduleCueRecovery(delayOverride) {
     captionSession.cueRecoveryAttempt++;
     emitDebug("cue-recovery-attempt", {
       attempt: captionSession.cueRecoveryAttempt,
-      captionButton: captionButtonDebugState(),
-      nativeCaptionVisible: !!readNativeCaption()
+      captionButton: captionButtonDebugState()
     });
     ensureCaptionsOn(6, "scheduled-recovery");
     // Recovery runs only while no cue list exists, so always ask the MAIN
@@ -749,7 +721,7 @@ function scheduleCueRecovery(delayOverride) {
     sendConfig("recovery", true);
     // Every second failed attempt, force YouTube to issue a fresh timedtext
     // request with a new pot instead of remaining stuck on a stale URL.
-    if (!captionSession.lastSource && captionSession.cueRecoveryAttempt % 2 === 0) {
+    if (captionSession.cueRecoveryAttempt % 2 === 0) {
       forceCaptionReload("scheduled-recovery");
     }
     scheduleCueRecovery();

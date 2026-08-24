@@ -156,7 +156,7 @@ test("configuration backup round-trips settings, profiles, and API keys", () => 
 test("restore allow-lists storage fields and emits one newer configuration revision", async () => {
   const { context, sync, local, writes } = transferContext({
     sync: { aiExtraBodyRevision: 12, unrelatedSyncData: "keep" },
-    local: { unrelatedLocalData: "keep", aiApiKey: "legacy" }
+    local: { unrelatedLocalData: "keep" }
   });
   context.backup = vm.runInContext(`createConfigBackup({
     ...YTDS_SHARED.DEFAULTS,
@@ -182,7 +182,6 @@ test("restore allow-lists storage fields and emits one newer configuration revis
   assert.equal(local.aiApiKeys.deepseek, "restored-secret");
   assert.equal(local.untrusted, undefined);
   assert.equal(local.unrelatedLocalData, "keep");
-  assert.equal(local.aiApiKey, undefined);
   assert.equal(writes.filter(([kind]) => kind === "sync.set").length, 1);
 });
 

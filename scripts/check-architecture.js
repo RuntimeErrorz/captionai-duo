@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const { execFileSync } = require("node:child_process");
 const {
   SHARED_FILES,
+  MAIN_FILES,
   CONTENT_FILES,
   BACKGROUND_FILES,
   POPUP_FILES,
@@ -35,7 +36,7 @@ const runtimeFiles = Array.from(new Set([
   ...BACKGROUND_FILES,
   ...POPUP_FILES,
   "background.js",
-  "inject.js",
+  ...MAIN_FILES,
 ]));
 
 for (const file of runtimeFiles) {
@@ -77,12 +78,13 @@ assert.match(pullRequestTemplate, /Verification evidence/);
 
 // Compiling the ordered classic-script groups as one program catches duplicate
 // global lexical declarations and accidental splits inside a function/block.
+new vm.Script(readSourceFiles(MAIN_FILES), { filename: "main-runtime.js" });
 new vm.Script(readSourceFiles(CONTENT_FILES), { filename: "content-runtime.js" });
 new vm.Script(readSourceFiles(BACKGROUND_FILES), { filename: "background-runtime.js" });
 new vm.Script(readSourceFiles(POPUP_FILES), { filename: "popup-runtime.js" });
 
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
-assert.deepEqual(manifest.content_scripts[0].js, [...SHARED_FILES, "inject.js"]);
+assert.deepEqual(manifest.content_scripts[0].js, [...SHARED_FILES, ...MAIN_FILES]);
 assert.deepEqual(manifest.content_scripts[1].js, [...SHARED_FILES, ...CONTENT_FILES]);
 assert.equal(manifest.background.service_worker, "background.js");
 assert.equal(fs.existsSync(path.join(root, "content.js")), false,

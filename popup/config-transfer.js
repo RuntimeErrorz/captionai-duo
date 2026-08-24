@@ -7,9 +7,6 @@ const CONFIG_BACKUP_MAX_BYTES = 1024 * 1024;
 const CONFIG_LOCAL_KEYS = Object.freeze([
   "aiApiKeys", "aiExtraBodyProfiles", AI_CONFIG_PROFILE_STORE_KEY
 ]);
-const CONFIG_SYNC_META_KEYS = Object.freeze([
-  "visualDefaultsVersion", "contextDefaultsVersion", "lineDefaultsVersion"
-]);
 
 function configPlainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -213,12 +210,10 @@ async function restoreConfigBackup(backupValue) {
     Number(current.aiExtraBodyRevision) || 0,
     backup.settings.aiExtraBodyRevision
   ) + 1;
-  for (const key of CONFIG_SYNC_META_KEYS) backup.settings[key] = 2;
 
   await Promise.all([
     chrome.storage.sync.set(backup.settings),
-    chrome.storage.local.set(backup.local),
-    chrome.storage.local.remove(["aiApiKey", "deepseekApiKey"])
+    chrome.storage.local.set(backup.local)
   ]);
   return backup;
 }
