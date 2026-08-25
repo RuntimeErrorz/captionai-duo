@@ -13,7 +13,10 @@
       start: cue.start,
       end: cue.end,
       lastOff: cue.lastOff,
-      dur: cue.dur
+      dur: cue.dur,
+      pauseAfterMs: cue.pauseAfterMs,
+      softAfter: cue.softAfter,
+      hardAfter: cue.hardAfter
     }));
   }
 

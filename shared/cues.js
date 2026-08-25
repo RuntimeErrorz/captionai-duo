@@ -166,7 +166,11 @@
       for (const part of Array.isArray(cue.parts) ? cue.parts : []) {
         const words = lexicalMatches(String(part && part.text || "").replace(/\s+/g, " ").trim());
         for (const word of words) {
-          timed.push({ word: word[0], offsetMs: Number(part && part.offsetMs) });
+          timed.push({
+            word: word[0],
+            offsetMs: Number(part && part.offsetMs),
+            durationMs: Number(part && part.durationMs)
+          });
         }
       }
       const exactTimedSequence = timed.length === matches.length && timed.every((part, index) =>
@@ -201,9 +205,45 @@
         starts.push(value);
       }
 
+      const positiveIntervals = [];
+      for (let index = 0; index + 1 < starts.length; index++) {
+        const interval = starts[index + 1] - starts[index];
+        if (Number.isFinite(interval) && interval > 0) positiveIntervals.push(interval);
+      }
+      const orderedIntervals = positiveIntervals.slice().sort((a, b) => a - b);
+      const middle = Math.floor(orderedIntervals.length / 2);
+      const typicalInterval = orderedIntervals.length
+        ? orderedIntervals.length % 2 ? orderedIntervals[middle]
+          : (orderedIntervals[middle - 1] + orderedIntervals[middle]) / 2 : 0;
+      const pauseAfter = (index, atomStart, nextStart) => {
+        if (!useTimedOffsets || index >= starts.length - 1) return 0;
+        const interval = Math.max(0, nextStart - atomStart);
+        const durationMs = Number(timed[index] && timed[index].durationMs);
+        if (Number.isFinite(durationMs) && durationMs > 0) {
+          return Math.max(0, nextStart - Math.min(end, atomStart + durationMs));
+        }
+        // JSON3 normally exposes word onsets but not word durations. Treat a
+        // large outlier in those onsets as timing evidence. The robust local
+        // baseline prevents uniformly slow speech from becoming a fabricated
+        // boundary, while preserving a real one-second onset gap such as the
+        // common ASR shape where the first segment has an implicit zero offset.
+        if (positiveIntervals.length < 3 || !typicalInterval ||
+            interval < Math.max(900, typicalInterval * 2.5)) return 0;
+        // Without word durations the exact silence is unknowable. Keep the
+        // observed onset gap as the conservative signal sent to the model;
+        // it must not be erased merely because the preceding word's duration
+        // was omitted by JSON3.
+        return interval;
+      };
+
       for (let index = 0; index < matches.length; index++) {
         const atomStart = starts[index];
-        const atomEnd = index + 1 < starts.length ? Math.max(atomStart, starts[index + 1]) : end;
+        const nextStart = index + 1 < starts.length ? Math.max(atomStart, starts[index + 1]) : end;
+        const durationMs = Number(timed[index] && timed[index].durationMs);
+        const timedEnd = Number.isFinite(durationMs) && durationMs > 0
+          ? Math.min(end, atomStart + durationMs) : nextStart;
+        const atomEnd = index + 1 < starts.length
+          ? Math.max(atomStart, Math.min(nextStart, timedEnd)) : end;
         atoms.push({
           ...cue,
           parts: undefined,
@@ -215,9 +255,42 @@
           sourceCueIndex: cueIndex,
           sourceCuePart: index,
           sourceCueParts: matches.length,
-          timed: useTimedOffsets
+          timed: useTimedOffsets,
+          pauseAfterMs: Math.round(pauseAfter(index, atomStart, nextStart))
         });
       }
+    }
+    // JSON3 events are often split at caption-window edges even when the
+    // spoken stream is continuous. When both adjacent events carry reliable
+    // word onsets, preserve an isolated onset outlier across that edge too;
+    // the raw display-cue duration is allowed to overlap and is not enough.
+    for (let index = 0; index + 1 < atoms.length; index++) {
+      const current = atoms[index];
+      const next = atoms[index + 1];
+      if (!current || !next || current.sourceCueIndex === next.sourceCueIndex ||
+          current.timed !== true || next.timed !== true) continue;
+      const interval = Number(next.start) - Number(current.start);
+      if (!Number.isFinite(interval) || interval <= 0) continue;
+      const nearbyIntervals = [];
+      const from = Math.max(0, index - 8);
+      const through = Math.min(atoms.length - 2, index + 8);
+      for (let neighbor = from; neighbor <= through; neighbor++) {
+        if (neighbor === index) continue;
+        const left = atoms[neighbor];
+        const right = atoms[neighbor + 1];
+        if (!left || !right || left.sourceCueIndex !== right.sourceCueIndex) continue;
+        const value = Number(right.start) - Number(left.start);
+        if (Number.isFinite(value) && value > 0) nearbyIntervals.push(value);
+      }
+      if (nearbyIntervals.length < 3) continue;
+      nearbyIntervals.sort((a, b) => a - b);
+      const middle = Math.floor(nearbyIntervals.length / 2);
+      const typicalInterval = nearbyIntervals.length % 2
+        ? nearbyIntervals[middle]
+        : (nearbyIntervals[middle - 1] + nearbyIntervals[middle]) / 2;
+      if (!typicalInterval || interval < Math.max(900, typicalInterval * 2.5)) continue;
+      current.pauseAfterMs = Math.max(Number(current.pauseAfterMs) || 0,
+        Math.round(interval));
     }
     return atoms;
   }
@@ -258,12 +331,14 @@
   // so no response can create a hole or overwrite an earlier decision.
   function monotonicSemanticCommitPlan(
     translations, cursorValue, requestEndValue, regionEndValue, guardItemsValue,
-    commitFloorValue
+    commitFloorValue, minimumRunwayItemsValue
   ) {
     const cursor = Math.floor(Number(cursorValue));
     const requestEnd = Math.floor(Number(requestEndValue));
     const regionEnd = Math.floor(Number(regionEndValue));
     const guardItems = Math.max(0, Math.floor(Number(guardItemsValue) || 0));
+    const minimumRunwayItems = Math.max(0,
+      Math.floor(Number(minimumRunwayItemsValue) || 0));
     const rawCommitFloor = commitFloorValue == null ? cursor : Math.floor(Number(commitFloorValue));
     const commitFloor = Math.max(cursor, Math.min(requestEnd, rawCommitFloor));
     if (!Number.isInteger(cursor) || !Number.isInteger(requestEnd) ||
@@ -272,9 +347,10 @@
       return { translations: [], units: [], commitStart: cursor, commitThrough: cursor - 1,
         carryStart: cursor, guardStart: cursor };
     }
-    const guardStart = requestEnd >= regionEnd
-      ? regionEnd + 1
-      : Math.max(cursor, requestEnd - guardItems + 1);
+    const guardStart = requestEnd >= regionEnd ? regionEnd + 1 : Math.min(
+      Math.max(cursor, requestEnd - guardItems + 1),
+      Math.max(cursor, requestEnd - minimumRunwayItems + 1)
+    );
     const ordered = Array.isArray(translations) ? translations : [];
     const units = [];
     const unitById = new Map();

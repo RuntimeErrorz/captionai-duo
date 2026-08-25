@@ -71,6 +71,22 @@ test("a guard-blocking unit can recover an immutable prefix from model-aligned c
   assert.equal(recovered[40].translation, "第二段");
 });
 
+test("a short rolling window cannot make its leading units immutable", () => {
+  const translations = [
+    ...unit(0, 2, "第一小段"),
+    ...unit(3, 6, "第二小段"),
+    ...unit(7, 11, "第三小段"),
+    ...unit(12, 21, "尚未确认的尾部")
+  ];
+  const plan = shared.monotonicSemanticCommitPlan(
+    translations, 0, 21, 100, 7, 0, 32
+  );
+
+  assert.equal(plan.commitThrough, -1);
+  assert.equal(plan.carryStart, 0);
+  assert.equal(plan.guardStart, 0);
+});
+
 test("only a contiguous prefix can commit; a hole cannot be repaired by a later unit", () => {
   const translations = [
     ...unit(10, 14),

@@ -92,6 +92,7 @@ const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
 const DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x
 const DEEPSEEK_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
 const DEEPSEEK_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
+const DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
 const DEEPSEEK_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
 const DEEPSEEK_FAST_TARGET_TAIL_ITEMS = 192; // extra runway at >=1.75x playback
 const DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS = 224; // extra runway at >=2.5x playback
@@ -538,6 +539,11 @@ function sanitizeCueList(value) {
         const offsetMs = Number(rawPart && rawPart.offsetMs);
         if (Number.isFinite(offsetMs) && offsetMs >= 0 && offsetMs <= dur) {
           part.offsetMs = offsetMs;
+        }
+        const durationMs = Number(rawPart && rawPart.durationMs);
+        if (Number.isFinite(durationMs) && durationMs >= 0 &&
+            durationMs <= Math.max(dur, 60 * 60 * 1000)) {
+          part.durationMs = durationMs;
         }
         parts.push(part);
       }

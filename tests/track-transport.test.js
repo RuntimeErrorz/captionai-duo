@@ -46,6 +46,47 @@ test("caption transport reads arraybuffer player responses", async () => {
   assert.equal(text, "WEBVTT\n\n00:00.000 --> 00:01.000\nready\n");
 });
 
+test("json3 transport keeps per-word durations for intra-cue pause detection", () => {
+  const transport = loadTransport();
+  const cues = transport.parseJson3({ events: [{
+    tStartMs: 200000,
+    dDurationMs: 4000,
+    segs: [
+      { utf8: "we ", tOffsetMs: 0, tDurationMs: 300 },
+      { utf8: "pause ", tOffsetMs: 1800, tDurationMs: 400 },
+      { utf8: "here", tOffsetMs: 2400, tDurationMs: 500 }
+    ]
+  }] });
+
+  assert.equal(JSON.stringify(cues[0].parts), JSON.stringify([
+    { text: "we ", offsetMs: 0, durationMs: 300 },
+    { text: "pause ", offsetMs: 1800, durationMs: 400 },
+    { text: "here", offsetMs: 2400, durationMs: 500 }
+  ]));
+  assert.equal(cues[0].lastOff, 202900);
+});
+
+test("json3 transport preserves the implicit zero offset on the first ASR word", () => {
+  const transport = loadTransport();
+  const cues = transport.parseJson3({ events: [{
+    tStartMs: 741000,
+    dDurationMs: 4760,
+    segs: [
+      { utf8: "used" },
+      { utf8: " now", tOffsetMs: 1000 },
+      { utf8: " green", tOffsetMs: 1240 },
+      { utf8: " and", tOffsetMs: 1480 },
+      { utf8: " white", tOffsetMs: 1639 },
+      { utf8: " was", tOffsetMs: 1839 },
+      { utf8: " chosen", tOffsetMs: 1959 }
+    ]
+  }] });
+
+  assert.equal(cues.length, 1);
+  assert.equal(cues[0].parts[0].offsetMs, 0);
+  assert.equal(cues[0].parts[1].offsetMs, 1000);
+});
+
 test("caption transport grafts missing player session parameters without replacing track parameters", () => {
   const transport = loadTransport();
   const target = "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en&kind=asr&signature=target";

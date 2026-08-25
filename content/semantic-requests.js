@@ -21,7 +21,6 @@ function deepseekEndpointKind() {
   return typeof YTDS_SHARED.aiEndpointKind === "function"
     ? YTDS_SHARED.aiEndpointKind(baseUrl) : "deepseek";
 }
-
 function deepseekMaxSpeculativeRequests() {
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
@@ -38,13 +37,8 @@ function deepseekMaxSpeculativeRequests() {
   }
   return deepseek ? DEEPSEEK_MAX_SPECULATIVE_REQUESTS : 1;
 }
-
 function deepseekRequestHasProgress(request) {
   if (!request) return false;
-  // Buffered model output is not playback progress. A request can receive
-  // left-guard context or a provisional outer unit for several seconds while
-  // the monotonic commit cursor remains unchanged. Only a committed cursor
-  // advance may extend the grace period or keep stale prefetch alive.
   const requestStart = Number(request.requestStart);
   const progressCursor = Number(request.progressCursor);
   const lastProgressAt = Number(request.lastProgressAt);
@@ -53,14 +47,12 @@ function deepseekRequestHasProgress(request) {
       lastProgressAt <= 0) return false;
   return Date.now() - lastProgressAt < DEEPSEEK_STALE_PREFETCH_GRACE_MS;
 }
-
 function deepseekRequestHasBufferedProgress(request) {
   if (!request || !request.prefetch || !Array.isArray(request.progressTranslations)) return false;
   const requestStart = Number(request.requestStart);
   if (!Number.isInteger(requestStart)) return false;
   return request.progressTranslations.some((item) => Number(item && item.id) === requestStart);
 }
-
 function deepseekRequestIsStaleForTarget(request, targetGroup) {
   if (!request || request.urgent || deepseekRequestHasProgress(request) ||
       (request.prefetch && deepseekRequestHasBufferedProgress(request))) return false;
@@ -70,7 +62,6 @@ function deepseekRequestIsStaleForTarget(request, targetGroup) {
   return Number.isInteger(target) && Number.isInteger(requestEnd) && target > requestEnd &&
     Number.isFinite(startedAt) && Date.now() - startedAt >= DEEPSEEK_STALE_PREFETCH_GRACE_MS;
 }
-
 function deepseekRequestIsPlaybackLagging(request, state, targetGroup) {
   if (!request || !request.urgent || !state || typeof getVideo !== "function") return false;
   const rate = Number(getVideo() && getVideo().playbackRate);
@@ -93,7 +84,6 @@ function deepseekRequestIsPlaybackLagging(request, state, targetGroup) {
     target - cursor >= lagThreshold && Number.isFinite(referenceAt) &&
     Date.now() - referenceAt >= graceMs;
 }
-
 function deepseekSeekBacktrackItems() {
   const base = Math.max(0, Math.floor(Number(DEEPSEEK_SEEK_BACKTRACK_ITEMS) || 0));
   const video = typeof getVideo === "function" ? getVideo() : null;
@@ -102,7 +92,6 @@ function deepseekSeekBacktrackItems() {
   if (Number.isFinite(rate) && rate >= 1.75) return Math.min(base, 40);
   return base;
 }
-
 function deepseekAcceleratedUrgentRequestItems() {
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
@@ -116,7 +105,6 @@ function deepseekAcceleratedUrgentRequestItems() {
     ? DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS
     : COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS;
 }
-
 function deepseekLeadingUnitReachesRequestEnd(translationsValue, requestStartValue, requestEndValue) {
   const translations = Array.isArray(translationsValue) ? translationsValue : [];
   const requestStart = Number(requestStartValue);
@@ -130,7 +118,6 @@ function deepseekLeadingUnitReachesRequestEnd(translationsValue, requestStartVal
     Number(item && item.id) === requestEnd && String(item && item.unitId || "") === unitId
   );
 }
-
 function deepseekAlignedRecoveryInput(translationsValue, requestStartValue) {
   const translations = Array.isArray(translationsValue) ? translationsValue : [];
   const requestStart = Number(requestStartValue);
@@ -142,13 +129,9 @@ function deepseekAlignedRecoveryInput(translationsValue, requestStartValue) {
   return translations.filter((item) => {
     const id = Number(item && item.id);
     if (id >= requestStart) return true;
-    // Keep the complete outer unit so semanticUnitsFromAlignedChunks can
-    // validate its aligned-chunk coverage; commit planning still filters the
-    // left-side members against requestStart.
     return visibleUnitIds.has(String(item && item.unitId || ""));
   });
 }
-
 function deepseekStreamHandoffReady(request, state, maxRequestItems, normalMaxRequestItems) {
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
@@ -167,7 +150,6 @@ function deepseekStreamHandoffReady(request, state, maxRequestItems, normalMaxRe
     requestEnd - cursor <= DEEPSEEK_STREAM_HANDOFF_MAX_REMAINING_ITEMS &&
     targetThrough - cursor >= minItems;
 }
-
 function handoffDeepseekStream(regionIndex, request, state) {
   const inflightKey = `dsb:${regionIndex}`;
   if (!request || captionSession.deepseekRequestMeta.get(inflightKey) !== request ||
@@ -194,10 +176,6 @@ function handoffDeepseekStream(regionIndex, request, state) {
         captionSession.deepseekFocusGeneration !== request.focusGeneration ||
         state.cursor !== continuationStart || state.cursor > state.targetThrough ||
         state.cursor > state.limitEnd) return;
-    // The continuation is the next visible playback range, not speculative
-    // look-ahead. Keep it urgent so a full prefetch queue cannot turn a safe
-    // streamed prefix back into a playback stall; the continuation remains
-    // bounded by the accelerated request cap and source-character budget.
     deepseekRequestBatch(continuationStart, false, true, { bypassCache: true });
   };
   const sent = sendRuntimeMessage({
@@ -208,17 +186,13 @@ function handoffDeepseekStream(regionIndex, request, state) {
   if (!sent) queueMicrotask(launch);
   return true;
 }
-
 function deepseekBatchRetryKey(start, end, videoId, epoch) {
   return `${videoId}:${epoch}:${start}:${end}`;
 }
-
 function beginDeepseekRequest(inflightKey, kind, start, end, urgent) {
   const existing = captionSession.deepseekRequestMeta.get(inflightKey);
   if (existing) {
     if (!urgent || existing.urgent) return "";
-    // Priority matters while waiting for a local slot, not after Fetch has
-    // started. Reuse live work instead of restarting a slow response.
     existing.urgent = true;
     existing.promotedAt = Date.now();
     emitCaptionStateTransition("semantic-request", "promoted", {
@@ -239,9 +213,6 @@ function beginDeepseekRequest(inflightKey, kind, start, end, urgent) {
     lastProgressAt: 0,
     progressCursor: start,
     progressTranslations: [],
-    // Keep the complete streamed response range for aligned-chunk recovery.
-    // progressTranslations is trimmed after each commit, but a later chunk
-    // may still need the outer unit's earlier anchor to validate coverage.
     progressRecoveryTranslations: []
   });
   captionSession.transInflight.add(inflightKey);
@@ -250,7 +221,6 @@ function beginDeepseekRequest(inflightKey, kind, start, end, urgent) {
   });
   return requestId;
 }
-
 function finishDeepseekRequest(inflightKey, requestId) {
   const current = captionSession.deepseekRequestMeta.get(inflightKey);
   if (!current || current.requestId !== requestId) {
@@ -268,7 +238,6 @@ function finishDeepseekRequest(inflightKey, requestId) {
   });
   return current;
 }
-
 function deepseekPrefetchState(state) {
   if (!state || typeof state !== "object") return null;
   if (!Array.isArray(state.prefetchQueue)) state.prefetchQueue = [];
@@ -276,7 +245,6 @@ function deepseekPrefetchState(state) {
   if (!(state.prefetchResponses instanceof Map)) state.prefetchResponses = new Map();
   return state;
 }
-
 function cancelDeepseekRegionRequests(regionIndex, preserveFromValue) {
   const wanted = Number(regionIndex);
   const preserveFrom = Number.isInteger(Number(preserveFromValue)) ? Number(preserveFromValue) : -1;
@@ -306,12 +274,6 @@ function cancelDeepseekRegionRequests(regionIndex, preserveFromValue) {
     }
   }
 }
-
-// A hard semantic boundary is also a scheduling boundary. Once playback enters
-// a new region, writers for earlier regions cannot help the visible cursor and
-// can hold a provider connection while the new region is trying to build its
-// runway. Future regions are deliberately retained: they are the accelerated
-// playback runway and can be staged until the monotonic cursor reaches them.
 function cancelDeepseekRequestsBeforeRegion(regionIndex) {
   const wanted = Number(regionIndex);
   if (!Number.isInteger(wanted)) return;
@@ -340,11 +302,6 @@ function cancelDeepseekRequestsBeforeRegion(regionIndex) {
     state.prefetchResponses.clear();
   }
 }
-
-// A future range that playback has already passed cannot become the next
-// monotonic writer. Release it before the urgent lane asks for a replacement;
-// otherwise a slow provider response can keep consuming one of the limited
-// prefetch slots while the visible cursor is waiting elsewhere.
 function cancelDeepseekStaleSpeculativeRequests(regionIndex, targetGroup) {
   const wanted = Number(regionIndex);
   const target = Number(targetGroup);
@@ -385,12 +342,10 @@ function cancelDeepseekStaleSpeculativeRequests(regionIndex, targetGroup) {
     pumpDeepseekSpeculativeRequests(wanted, state);
   }
 }
-
 function deepseekActiveSpeculativeRequestCount() {
   return Array.from(captionSession.deepseekRequestMeta.values())
     .filter((request) => request && request.prefetch).length;
 }
-
 function scheduleDeepseekSpeculativeResume() {
   const until = Number(captionSession.deepseekSpeculativeBackoffUntil);
   if (!Number.isFinite(until) || until <= Date.now() ||
@@ -408,7 +363,6 @@ function scheduleDeepseekSpeculativeResume() {
     }
   }, delay);
 }
-
 function deepseekSpeculativeBackoffActive() {
   const until = Number(captionSession.deepseekSpeculativeBackoffUntil);
   if (!Number.isFinite(until) || until <= Date.now()) {
@@ -418,7 +372,6 @@ function deepseekSpeculativeBackoffActive() {
   scheduleDeepseekSpeculativeResume();
   return true;
 }
-
 function noteDeepseekSpeculativeRateLimit(response, runtimeError) {
   const responseLimited = !!(response && response.rateLimited);
   const errorLimited = !!(runtimeError && runtimeError.rateLimited);
@@ -437,14 +390,12 @@ function noteDeepseekSpeculativeRateLimit(response, runtimeError) {
   emitDebug("semantic-speculative-backoff", { delayMs: delay, reason });
   return true;
 }
-
 function deepseekSpeculativeRangeOverlaps(regionIndex, start, end) {
   return Array.from(captionSession.deepseekRequestMeta.values()).some((request) =>
     request && request.regionIndex === regionIndex && request.requestStart <= end &&
     request.requestEnd >= start
   );
 }
-
 function deepseekSpeculativeStartAfterActive(regionIndex, startValue) {
   let start = Math.floor(Number(startValue));
   if (!Number.isInteger(start)) return start;
@@ -460,7 +411,6 @@ function deepseekSpeculativeStartAfterActive(regionIndex, startValue) {
   }
   return start;
 }
-
 function queueDeepseekSpeculativeRequest(regionIndex, startValue) {
   const start = Math.floor(Number(startValue));
   const state = typeof deepseekCommitState === "function"
@@ -472,7 +422,6 @@ function queueDeepseekSpeculativeRequest(regionIndex, startValue) {
   state.prefetchQueue.push(start);
   pumpDeepseekSpeculativeRequests(regionIndex, state);
 }
-
 function pumpDeepseekSpeculativeRequests(regionIndex, stateValue) {
   const state = deepseekPrefetchState(stateValue);
   if (!state || deepseekSpeculativeBackoffActive()) return;
@@ -501,20 +450,68 @@ function takeDeepseekPrefetchedResponse(stateValue) {
   if (!state) return null;
   for (const [start, stored] of Array.from(state.prefetchResponses.entries())
       .sort((a, b) => Number(a[0]) - Number(b[0]))) {
-    if (Number(start) < state.cursor) {
-      state.prefetchResponses.delete(start);
-      continue;
-    }
-    if (Number(start) === state.cursor) {
-      state.prefetchResponses.delete(start);
-      return stored;
-    }
-    break;
+    const value = Number(start);
+    if (value < state.cursor) { state.prefetchResponses.delete(start); continue; }
+    if (value !== state.cursor) break;
+    state.prefetchResponses.delete(start);
+    if (!stored || !stored.request || !stored.response) return null;
+    return { request: { ...stored.request, prefetch: false, urgent: true,
+      promotedFromPrefetch: true, commitFloor: state.cursor }, response: stored.response };
   }
   return null;
 }
+function deepseekTrimPrefetchCandidate(requestValue, responseValue, cursorValue) {
+  const cursor = Math.floor(Number(cursorValue));
+  if (!requestValue || !responseValue || !Number.isInteger(cursor) ||
+      !Array.isArray(responseValue.translations)) return null;
+  const units = new Map();
+  for (const item of responseValue.translations) {
+    const id = Number(item && item.id);
+    if (!Number.isInteger(id)) continue;
+    const unitId = String(item && item.unitId || `semantic-${id}-${id}`);
+    const unit = units.get(unitId) || { first: id, items: [] };
+    unit.first = Math.min(unit.first, id);
+    unit.items.push(item);
+    units.set(unitId, unit);
+  }
+  const kept = Array.from(units.values())
+    .filter((unit) => unit.first >= cursor)
+    .sort((a, b) => a.first - b.first);
+  if (!kept.length) return null;
+  const translations = kept.flatMap((unit) => unit.items.sort((a, b) => Number(a.id) - Number(b.id)));
+  const start = kept[0].first;
+  return {
+    start,
+    request: { ...requestValue, requestStart: start, commitFloor: Math.max(cursor, start) },
+    response: { ...responseValue, translations }
+  };
+}
 
-// Bridge to the next future response without making its exact start stale.
+function reconcileDeepseekPrefetchCandidates(stateValue, cursorValue) {
+  const state = deepseekPrefetchState(stateValue);
+  const cursor = Math.floor(Number(cursorValue));
+  if (!state || !Number.isInteger(cursor)) return;
+  for (const [key, stored] of Array.from(state.prefetchResponses.entries())) {
+    const candidate = deepseekTrimPrefetchCandidate(stored && stored.request, stored && stored.response, cursor);
+    state.prefetchResponses.delete(key);
+    if (!candidate) continue;
+    state.prefetchResponses.set(candidate.start, candidate);
+    if (Number(key) !== candidate.start) emitDebug("semantic-prefetch-candidate-trimmed", {
+      previousStart: Number(key), nextStart: candidate.start, cursor
+    });
+  }
+}
+
+function storeDeepseekPrefetchCandidate(stateValue, request, response) {
+  const state = deepseekPrefetchState(stateValue);
+  if (!state) return null;
+  const candidate = deepseekTrimPrefetchCandidate(request, response, state.cursor);
+  if (!candidate) return null;
+  reconcileDeepseekPrefetchCandidates(state, state.cursor);
+  state.prefetchResponses.set(candidate.start, candidate);
+  return candidate;
+}
+
 function deepseekNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
   const state = deepseekPrefetchState(stateValue);
   const cursor = Math.floor(Number(cursorValue));
@@ -541,12 +538,7 @@ function deepseekBridgeRequestItems(requestStartValue, futureStartValue, maxValu
       futureStart <= requestStart || requestStart > limitEnd) return 0;
   const gap = futureStart - requestStart;
   let count = Math.min(maxItems, limitEnd - requestStart + 1, Math.max(1, gap));
-  // Include the first future item when the cursor is immediately before a
-  // staged range. Without that one-item overlap, a semantic unit that crosses
-  // the join has no way to be resolved by either writer.
-  const minimumJoinItems = Math.min(
-    maxItems, limitEnd - requestStart + 1, Math.max(1, gap + 1)
-  );
+  const minimumJoinItems = Math.min(maxItems, limitEnd - requestStart + 1, Math.max(1, gap + 1));
   while (count < minimumJoinItems) count++;
   while (count < maxItems && count < limitEnd - requestStart + 1 &&
       count - Math.min(DEEPSEEK_COMMIT_GUARD_ITEMS, Math.floor(count / 3)) < gap) {
@@ -567,7 +559,10 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   const state = deepseekCommitState(regionIndex);
   if (!state || !isCaptionSessionCurrent(request.sessionToken)) return;
   deepseekPrefetchState(state);
-  state.prefetchResponses.delete(requestStart);
+  for (const [key, stored] of Array.from(state.prefetchResponses.entries())) {
+    if (stored && stored.request && (stored.request === request ||
+        String(stored.request.requestId || "") === requestId)) state.prefetchResponses.delete(key);
+  }
   const bufferedResponse = deepseekResponseWithBufferedProgress(request, resp, state);
   if (bufferedResponse && bufferedResponse !== resp) {
     resp = bufferedResponse;
@@ -639,13 +634,12 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     }
     return;
   }
-  if (request.prefetch && state.cursor < requestStart) {
-    state.prefetchResponses.set(requestStart, { request, response: resp });
+  if (request.prefetch) {
+    const stored = storeDeepseekPrefetchCandidate(state, request, resp);
     pumpDeepseekSpeculativeRequests(regionIndex, state);
-    return;
-  }
-  if (request.prefetch && state.cursor > requestEnd) {
-    pumpDeepseekSpeculativeRequests(regionIndex, state);
+    if (stored && state.cursor === stored.start) {
+      queueMicrotask(() => pumpDeepseekCommitRegion(regionIndex, true));
+    }
     return;
   }
 
@@ -665,7 +659,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   );
   let nextCursor = commitDeepseekResponsePrefix(
     regionIndex, finalStart, requestEnd, state.commitFloor, request.limitEnd,
-    finalTranslations, request.effectiveGuardItems
+    finalTranslations, request.effectiveGuardItems, DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS
   );
   if (!Number.isInteger(nextCursor)) return;
   const maxRequestItems = Number(request.maxRequestItems) || deepseekMaxRequestItems();
@@ -678,7 +672,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     );
     const recoveredCursor = commitDeepseekResponsePrefix(
       regionIndex, finalStart, requestEnd, state.commitFloor, request.limitEnd,
-      recoveredTranslations, request.effectiveGuardItems
+      recoveredTranslations, request.effectiveGuardItems, DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS
     );
     if (Number.isInteger(recoveredCursor) && recoveredCursor > finalStart) {
       nextCursor = recoveredCursor;
@@ -692,6 +686,10 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     request.progressCursor = nextCursor;
     state.cursor = nextCursor;
     state.commitFloor = nextCursor;
+    reconcileDeepseekPrefetchCandidates(state, nextCursor);
+    if (request.promotedFromPrefetch) {
+      storeDeepseekPrefetchCandidate(state, request, resp);
+    }
     state.windowItems = DEEPSEEK_REQUEST_ITEMS;
     state.recoveryWindowItems = false; state.noProgressRange = "";
   }
@@ -859,7 +857,6 @@ function scheduleDeepSeekBatchRetry(
         Number.isFinite(requestedDelay) && requestedDelay > 0 ? Math.ceil(requestedDelay) : 1500))
     : DEEPSEEK_COLD_RETRY_DELAYS_MS[attempt];
   const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
-  // One lock per semantic region preserves its single-writer commit cursor.
   const inflightKey = `dsb:${regionIndex}`;
   const scheduledFocusGeneration = captionSession.deepseekFocusGeneration;
   const scheduledSessionToken = captureCaptionSession();

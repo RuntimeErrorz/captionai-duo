@@ -66,6 +66,12 @@ function rangeSemanticResponse(start, end) {
   }));
 }
 
+function unitSemanticResponse(start, end, unitId, translation = "unit translation") {
+  return Array.from({ length: Math.max(0, end - start + 1) }, (_value, offset) => ({
+    id: String(start + offset), unitId, translation
+  }));
+}
+
 function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
   const debug = [];
   const timers = [];
@@ -170,6 +176,7 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
     DEEPSEEK_MAX_CURRENT_CHARS: 18000,
     DEEPSEEK_COMMIT_GUARD_ITEMS: 16,
+    DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS: 32,
     DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
     DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
     DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
@@ -491,6 +498,28 @@ test("a future request with a buffered safe prefix is not discarded as stale", (
   const isStale = vm.runInContext("deepseekRequestIsStaleForTarget", context);
 
   assert.equal(isStale(request, 5873), false);
+});
+
+test("an overlapping live prefetch remains the single writer after its start is passed", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 80, targetThrough: 80, urgentTarget: 50, playbackRate: 1
+  });
+  const sessionToken = harness.context.captureCaptionSession();
+  const request = {
+    requestId: "prefetch:0:1:0-100", prefetch: true, regionIndex: 0,
+    requestStart: 0, requestEnd: 100, reqEpoch: 1, reqVid: "video",
+    sessionToken, focusGeneration: 0, progressTranslations: [],
+    progressRecoveryTranslations: []
+  };
+  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:0", request);
+  harness.context.captionSession.transInflight.add("dsp:0:0");
+  harness.state.cursor = 50;
+  const keep = vm.runInContext("deepseekPrefetchAtCursor", harness.context);
+
+  assert.equal(keep(0, 50), true);
+  assert.equal(request.urgent, true);
+  assert.deepEqual(harness.messages, []);
+  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsp:0:0"), true);
 });
 
 test("an urgent target cancels a stale same-region speculative writer", () => {
@@ -821,6 +850,59 @@ test("malformed JSONL falls back to a bounded prefix and exposes the suffix", as
   assert.equal(context.deepseekFallbackPrefixItems(longItems).length, 12);
 });
 
+test("urgent and speculative lanes share one exact in-flight provider request", async () => {
+  let completionResolve;
+  let networkCalls = 0;
+  const context = {
+    AbortController,
+    Array, Date, Map, Math, Number, Object, Promise, Set, String,
+    YTDS_SHARED: loadShared(),
+    MAX_PROMPT_SOURCE_CHARS: 28000,
+    DEEPSEEK_STREAM_COMPLETION_GRACE_MS: 750,
+    AI_PROMPT_CACHE_VERSION: "test",
+    DEEPSEEK_BATCH_INFLIGHT: new Map(),
+    getAiConfig: async () => ({
+      model: "model", baseUrl: "https://api.example.test", endpointKind: "deepseek",
+      extraBody: {}, contextPast: 0, contextFuture: 0
+    }),
+    aiResponseCacheId: () => "same-request",
+    readAiResponseCache: async () => null,
+    writeAiResponseCache: async () => {},
+    appendDebug: () => {},
+    aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
+      networkCalls++;
+      return new Promise((resolve) => {
+        completionResolve = () => {
+          trace.onTextDelta(
+            '{"type":"unit","chunks":[{"ids":["0"],"translation":"译文"}]}\n' +
+            '{"type":"done"}\n', true
+          );
+          resolve({ raw: "", diagnostics: { attempts: [] } });
+        };
+      });
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(translationSource, context, { filename: "background/translation.js" });
+  const translate = vm.runInContext("deepseekTranslateBatch", context);
+  const items = [{
+    id: "0", cueId: "0", startMs: 0, endMs: 500, pauseAfterMs: 0,
+    softAfter: false, hardAfter: false, text: "source"
+  }];
+  const urgent = translate(items, "zh-CN", "en", [], [], false, "same-scope", null, {
+    urgent: true, requestId: "urgent"
+  });
+  const speculative = translate(items, "zh-CN", "en", [], [], false, "same-scope", null, {
+    fastPath: true, requestId: "prefetch"
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(networkCalls, 1);
+  completionResolve();
+  const [urgentResult, speculativeResult] = await Promise.all([urgent, speculative]);
+  assert.equal(urgentResult[0].translation, "译文");
+  assert.equal(speculativeResult[0].translation, "译文");
+});
+
 test("a guard-touching unit expands directly to the maximum recovery window", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 80, targetThrough: 40, urgentTarget: 40
@@ -847,12 +929,12 @@ test("3x urgent playback keeps the visible request short while runway prefetch f
   await new Promise((resolve) => setImmediate(resolve));
 
   // The visible request stays bounded so distinct speculative ranges can run
-  // beside it; inner aligned chunks still release the prefix immediately.
+  // beside it; the active writer still preserves its planned runway.
   assert.deepEqual(harness.messages.map((message) => message.items.length), [97, 160]);
   assert.ok(harness.messages.every((message) => message.items.length <= 160));
 });
 
-test("urgent aligned chunks release a safe prefix before a giant outer unit", async () => {
+test("urgent giant units wait for a full runway before aligned-chunk recovery", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 2, {
     windowItems: 48, targetThrough: 40, urgentTarget: 40, playbackRate: 3
   });
@@ -860,9 +942,9 @@ test("urgent aligned chunks release a safe prefix before a giant outer unit", as
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(harness.messages.map((message) => message.items.length), [57, 48, 160]);
+  assert.deepEqual(harness.messages.map((message) => message.items.length), [57, 160]);
   assert.ok(harness.messages.every((message) => message.urgent));
-  assert.ok(harness.state.cursor >= 80);
+  assert.ok(harness.state.cursor >= 120);
   assert.equal(harness.context.captionSession.transCache.get("video g10"), "分段1");
 });
 
@@ -1171,13 +1253,76 @@ test("3x playback consumes staged future ranges while the current response is sl
   assert.equal(harness.state.prefetchResponses.has(160), true);
 
   await respond(0, 0, 63);
-  assert.ok(harness.messages.some((message) =>
-    message.type === "translateBatch" && message.requestStart === 32 && message.urgent
-  ));
-  await respond(32, 32, 63);
-  assert.ok(harness.state.cursor >= 144);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const continuation = harness.pendingCallbacks.find((entry) =>
+      !entry.responded && entry.message.type === "translateBatch" &&
+      entry.message.urgent && entry.message.requestStart === harness.state.cursor
+    );
+    if (!continuation) break;
+    await respond(
+      continuation.message.requestStart,
+      continuation.message.requestStart,
+      continuation.message.requestEnd
+    );
+  }
+  assert.ok(harness.state.cursor >= 128);
   assert.equal(harness.state.prefetchResponses.has(64), false);
-  assert.equal(harness.state.prefetchResponses.has(160), true);
+  assert.ok(Array.from(harness.state.prefetchResponses.keys()).every((start) =>
+    Number(start) >= harness.state.cursor
+  ));
+});
+
+test("a commit supersedes only the overlapping provisional prefix and reuses the future suffix", async () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 128, targetThrough: 160, urgentTarget: 0, playbackRate: 1,
+    groupCount: 301, limitEnd: 300, deferResponses: true
+  });
+  const sessionToken = harness.context.captureCaptionSession();
+  const prefetchRequest = {
+    requestId: "prefetch:0:1:64-159", prefetch: true, regionIndex: 0,
+    requestStart: 64, requestEnd: 191, commitFloor: 64, limitEnd: 300,
+    effectiveGuardItems: 16, reqEpoch: 1, reqVid: "video", sessionToken,
+    focusGeneration: 0, progressTranslations: [], progressRecoveryTranslations: []
+  };
+  const prefetchResponse = [
+    ...unitSemanticResponse(64, 95, "semantic-64-95"),
+    ...unitSemanticResponse(96, 159, "semantic-96-159"),
+    ...unitSemanticResponse(160, 191, "semantic-160-191")
+  ];
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle(prefetchRequest, {
+    ok: true, translations: prefetchResponse, deferredIds: [],
+    httpDiagnostics: { attempts: [] }
+  }, null);
+  assert.equal(harness.state.prefetchResponses.has(64), true);
+
+  handle({
+    requestId: "commit:0:2:0-127", urgent: true, regionIndex: 0,
+    requestStart: 0, requestEnd: 127, commitFloor: 0, limitEnd: 300,
+    effectiveGuardItems: 16, reqEpoch: 1, reqVid: "video", sessionToken,
+    focusGeneration: 0, itemCount: 128, targetAwareItems: 128,
+    maxRequestItems: 160
+  }, {
+    ok: true,
+    translations: [
+      ...unitSemanticResponse(0, 63, "semantic-0-63"),
+      ...unitSemanticResponse(64, 95, "semantic-64-95", "commit translation"),
+      ...unitSemanticResponse(96, 127, "semantic-96-127", "commit translation")
+    ],
+    deferredIds: [], httpDiagnostics: { attempts: [] }
+  }, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.state.cursor, 160);
+  assert.equal(harness.state.prefetchResponses.has(64), false);
+  assert.equal(harness.context.captionSession.transCache.get("video g96"),
+    "unit translation");
+  assert.equal(harness.messages.some((message) =>
+    message.type === "translateBatch" && message.requestStart === 96
+  ), false);
+  assert.equal(harness.debug.some((entry) =>
+    entry.event === "semantic-prefetch-candidate-trimmed"
+  ), true);
 });
 
 test("3x playback consumes a streamed future prefix before its response settles", () => {
@@ -1342,7 +1487,7 @@ test("entering a new semantic region preserves future runway requests", () => {
   assert.equal(harness.context.captionSession.transInflight.has("dsp:2:160"), true);
 });
 
-test("a future response gets a guard-sized bridge and is reused at the cursor", () => {
+test("a future response bridge keeps only the boundary overlap", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 80, targetThrough: 200, urgentTarget: 64, playbackRate: 3
   });

@@ -172,10 +172,10 @@ function paintCaptionTrackOptions(response) {
   if (!select || !translationSelect || !hint) return;
   const tracks = Array.isArray(response && response.tracks)
     ? response.tracks.map(safeCaptionTrack).filter(Boolean).slice(0, 100) : [];
-  const auto = document.createElement("option");
-  auto.value = "auto";
-  auto.textContent = t("captionTrackAuto", "自动（原始音轨）");
-  const originalOptions = [auto];
+  const wanted = String(response && response.selectedTrackId || "auto");
+  const preferredTrackId = String(response && response.preferredTrackId || "");
+  const displayedTrackId = wanted === "auto" ? preferredTrackId : wanted;
+  const originalOptions = [];
   const ai = document.createElement("option");
   ai.value = "ai";
   ai.textContent = t("translationTrackAi", "AI 翻译");
@@ -193,9 +193,9 @@ function paintCaptionTrackOptions(response) {
   }
   select.replaceChildren(...originalOptions);
   translationSelect.replaceChildren(...translationOptions);
-  const wanted = String(response && response.selectedTrackId || "auto");
   const wantedTranslation = String(response && response.selectedTranslationTrackId || "ai");
-  select.value = originalOptions.some((option) => option.value === wanted) ? wanted : "auto";
+  select.value = originalOptions.some((option) => option.value === displayedTrackId)
+    ? displayedTrackId : "";
   translationSelect.value = translationOptions.some((option) => option.value === wantedTranslation)
     ? wantedTranslation : "ai";
   if (tracks.length) {

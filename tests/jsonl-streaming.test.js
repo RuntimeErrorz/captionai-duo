@@ -248,7 +248,7 @@ test("an invalid JSONL tail publishes its safe leading prefix immediately", () =
   assert.deepEqual(Array.from(observer.result(true), (item) => String(item.id)), ["0", "1"]);
 });
 
-test("aligned chunks stream before a giant outer unit closes", () => {
+test("aligned chunks wait for the giant outer unit to close", () => {
   const items = Array.from({ length: 8 }, (_value, id) => ({
     id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
     hardAfter: false
@@ -261,10 +261,10 @@ test("aligned chunks stream before a giant outer unit closes", () => {
   const progress = [];
   const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
     progress.push(Array.from(translations, (item) => String(item.id)));
-  });
+  }, { requestClass: "prefetch" });
   const openOuterUnit = `{"type":"unit","chunks":${JSON.stringify(chunks.slice(0, 2)).slice(0, -1)}`;
   assert.equal(observer.onTextDelta(openOuterUnit, false).stop, false);
-  assert.deepEqual(progress, [["0", "1"], ["2", "3"]]);
+  assert.deepEqual(progress, []);
 
   const closing = `,${JSON.stringify(chunks[2])}]}\n{"type":"done"}\n`;
   assert.equal(observer.onTextDelta(closing, true).stop, false);
@@ -272,6 +272,31 @@ test("aligned chunks stream before a giant outer unit closes", () => {
   assert.equal(result.length, 8);
   assert.deepEqual(Array.from(result, (item) => String(item.id)),
     items.map((item) => item.id));
+});
+
+test("a non-urgent request never publishes an unclosed outer semantic unit", () => {
+  const items = Array.from({ length: 8 }, (_value, id) => ({
+    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const chunks = [
+    { ids: ["0", "1"], translation: "前半" },
+    { ids: ["2", "3"], translation: "中段" }
+  ];
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  }, { requestClass: "prefetch" });
+
+  const openOuterUnit = `{"type":"unit","chunks":${JSON.stringify(chunks).slice(0, -1)}`;
+  assert.equal(observer.onTextDelta(openOuterUnit, false).stop, false);
+  assert.deepEqual(progress, []);
+
+  const closing = `]}\n{"type":"done"}\n`;
+  assert.equal(observer.onTextDelta(closing, true).stop, false);
+  assert.deepEqual(Array.from(observer.result(false), (item) => String(item.id)), [
+    "0", "1", "2", "3"
+  ]);
 });
 
 test("a repeated-id correction cannot publish the incomplete unit it revises", () => {

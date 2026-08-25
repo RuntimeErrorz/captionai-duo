@@ -508,10 +508,10 @@
 
   // AI semantic boundaries describe meaning, not how long a player will keep a
   // subtitle on screen. A trailing semantic unit can therefore receive only a
-  // few frames when it occupies the end of an overlapping YouTube cue. Group
-  // short units across a continuous, non-hard presentation boundary. Checking
-  // only the two boundary atoms is intentional: the adjacent semantic unit may
-  // continue through later raw cues, which does not make this boundary unsafe.
+  // few frames when it occupies the end of an overlapping YouTube cue.
+  // Adjacent units from one continuous raw caption form a display continuity
+  // island even when neither unit is short; checking the two boundary atoms
+  // still prevents a real timed gap or hard boundary from being bridged.
   // Translation/cache ownership stays unchanged; this is only a display plan.
   function semanticDisplayClusters(unitsValue, groupsValue, minVisibleMsValue) {
     const groups = Array.isArray(groupsValue) ? groupsValue : [];
@@ -569,8 +569,11 @@
         cueIndex: cueIndexFor(unit.members)
       };
       const previous = clusters[clusters.length - 1];
+      const sameRawCue = previous && previous.cueIndex != null && next.cueIndex != null &&
+        previous.cueIndex === next.cueIndex;
       if (previous && canJoin(previous, next) &&
-          (durationFor(previous.members) < minimum || durationFor(next.members) < minimum)) {
+          (sameRawCue || durationFor(previous.members) < minimum ||
+            durationFor(next.members) < minimum)) {
         previous.unitIds.push(...next.unitIds);
         previous.members.push(...next.members);
       } else {

@@ -2,9 +2,34 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const { loadShared } = require("./helpers");
 
 const shared = loadShared();
+const semanticSource = fs.readFileSync(
+  path.resolve(__dirname, "../content/semantic.js"), "utf8"
+);
+
+function buildSemanticGroups(cues) {
+  const context = {
+    YTDS_SHARED: shared,
+    DEEPSEEK_CORE_ITEMS: 32,
+    DEEPSEEK_SOFT_PAUSE_MS: 900,
+    DEEPSEEK_HARD_PAUSE_MS: 4000,
+    captionSession: {
+      sentGroups: [], deepseekBatchWindows: [], deepseekGroupToBatch: [],
+      deepseekCommitRegions: [], deepseekGroupToCommitRegion: [],
+      deepseekCommitStateByRegion: new Map(), cueToGroups: [], cueToGroup: []
+    },
+    resetCaptionSessionState: () => {}
+  };
+  vm.createContext(context);
+  vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
+  vm.runInContext("buildHybridCueGroups", context)(cues);
+  return context.captionSession.sentGroups;
+}
 
 test("YouTube seg offsets become addressable lexical references with real timing", () => {
   const cue = {
@@ -29,6 +54,130 @@ test("YouTube seg offsets become addressable lexical references with real timing
     [324000, 324380, 324720, 325310, 326210, 327370]);
   assert.ok(atoms.every((atom) => atom.timed === true));
   assert.equal(atoms[atoms.length - 1].end, cue.end);
+});
+
+test("a long intra-cue onset gap becomes a soft semantic timing hint", () => {
+  const words = [
+    "we", "can", "use", "the", "device", "after", "the", "break", "and", "continue"
+  ];
+  const offsets = [0, 360, 720, 1080, 1440, 3650, 4010, 4370, 4730, 5090];
+  const atoms = shared.cueReferenceAtoms([{
+    text: words.join(" "), start: 100000, end: 107000, dur: 7000,
+    parts: words.map((word, index) => ({
+      text: `${word}${index + 1 < words.length ? " " : ""}`,
+      offsetMs: offsets[index]
+    }))
+  }]);
+  const device = atoms.findIndex((atom) => atom.text === "device");
+
+  assert.ok(device >= 0);
+  assert.ok(atoms[device].pauseAfterMs >= 900);
+  assert.equal(shared.semanticPauseKind(atoms[device].pauseAfterMs, 900, 4000), "soft");
+});
+
+test("uniformly slow word onsets do not invent an internal pause", () => {
+  const words = ["slow", "speech", "stays", "steady", "through", "the", "whole", "thought"];
+  const atoms = shared.cueReferenceAtoms([{
+    text: words.join(" "), start: 120000, end: 130000, dur: 10000,
+    parts: words.map((word, index) => ({
+      text: `${word}${index + 1 < words.length ? " " : ""}`,
+      offsetMs: index * 1200
+    }))
+  }]);
+
+  assert.ok(atoms.every((atom) => atom.pauseAfterMs === 0));
+});
+
+test("explicit word durations preserve a real pause instead of folding it into the next atom", () => {
+  const atoms = shared.cueReferenceAtoms([{
+    text: "we pause here", start: 200000, end: 204000, dur: 4000,
+    parts: [
+      { text: "we ", offsetMs: 0, durationMs: 300 },
+      { text: "pause ", offsetMs: 1800, durationMs: 400 },
+      { text: "here", offsetMs: 2400, durationMs: 500 }
+    ]
+  }]);
+
+  assert.equal(Math.round(atoms[0].pauseAfterMs), 1500);
+  assert.equal(Math.round(atoms[0].end), 200300);
+  assert.equal(Math.round(atoms[1].start), 201800);
+});
+
+test("the ASR used-to-now onset gap survives lexical timing normalization", () => {
+  const words = ["used", "now", "green", "and", "white", "was", "chosen"];
+  const offsets = [0, 1000, 1240, 1480, 1639, 1839, 1959];
+  const atoms = shared.cueReferenceAtoms([{
+    text: words.join(" "), start: 741000, end: 745760, dur: 4760,
+    parts: words.map((word, index) => ({
+      text: `${index ? " " : ""}${word}`,
+      offsetMs: offsets[index]
+    }))
+  }]);
+  const used = atoms.find((atom) => atom.text === "used");
+
+  assert.ok(used);
+  assert.equal(used.timed, true);
+  assert.ok(used.pauseAfterMs >= 900);
+  assert.equal(shared.semanticPauseKind(used.pauseAfterMs, 900, 4000), "soft");
+
+  const groups = buildSemanticGroups([{
+    text: words.join(" "), start: 741000, end: 745760, dur: 4760,
+    parts: words.map((word, index) => ({
+      text: `${index ? " " : ""}${word}`,
+      offsetMs: offsets[index]
+    }))
+  }]);
+  const groupedUsed = groups.find((group) => group.text === "used");
+  assert.ok(groupedUsed);
+  assert.equal(groupedUsed.pauseAfterMs, used.pauseAfterMs);
+  assert.equal(groupedUsed.softAfter, true);
+  assert.equal(groupedUsed.hardAfter, false);
+});
+
+test("timed onset gaps also survive a rolling cue edge", () => {
+  const firstWords = ["we", "keep", "going"];
+  const secondWords = ["after", "the", "pause", "continues"];
+  const first = {
+    text: firstWords.join(" "), start: 0, end: 1200, dur: 1200,
+    parts: firstWords.map((word, index) => ({
+      text: `${index ? " " : ""}${word}`, offsetMs: index * 300
+    }))
+  };
+  const second = {
+    text: secondWords.join(" "), start: 2500, end: 4500, dur: 2000,
+    parts: secondWords.map((word, index) => ({
+      text: `${index ? " " : ""}${word}`, offsetMs: index * 300
+    }))
+  };
+  const atoms = shared.cueReferenceAtoms([first, second]);
+  const going = atoms.find((atom) => atom.text === "going");
+
+  assert.ok(going);
+  assert.ok(going.pauseAfterMs >= 1800);
+
+  const groups = buildSemanticGroups([first, second]);
+  const groupedGoing = groups.find((group) => group.text === "going");
+  assert.ok(groupedGoing);
+  assert.equal(groupedGoing.pauseAfterMs, going.pauseAfterMs);
+  assert.equal(groupedGoing.softAfter, true);
+});
+
+test("semantic timeline carries an intra-cue pause into the model boundary flags", () => {
+  const words = ["we", "can", "use", "the", "device", "after", "the", "break", "and", "continue"];
+  const offsets = [0, 360, 720, 1080, 1440, 3650, 4010, 4370, 4730, 5090];
+  const groups = buildSemanticGroups([{
+    text: words.join(" "), start: 100000, end: 107000, dur: 7000,
+    parts: words.map((word, index) => ({
+      text: `${word}${index + 1 < words.length ? " " : ""}`,
+      offsetMs: offsets[index]
+    }))
+  }]);
+  const device = groups.find((group) => group.text === "device");
+
+  assert.ok(device);
+  assert.ok(device.pauseAfterMs >= 900);
+  assert.equal(device.softAfter, true);
+  assert.equal(device.hardAfter, false);
 });
 
 test("manual cues get generic lexical coordinates without semantic splitting", () => {

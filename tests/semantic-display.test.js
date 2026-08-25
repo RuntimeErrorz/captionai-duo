@@ -255,6 +255,24 @@ test("a short reply can join a successor semantic unit that continues across lat
   assert.deepEqual(Array.from(clusters[0].unitIds), ["short-reply", "continued-sentence"]);
 });
 
+test("a continuous raw caption does not turn a long semantic boundary into a display break", () => {
+  const clusters = shared.semanticDisplayClusters([
+    { unitId: "first-clause", members: [0, 1] },
+    { unitId: "continued-clause", members: [2, 3] }
+  ], [
+    { startIdx: 147, start: 734440, end: 736000, hardAfter: false },
+    { startIdx: 147, start: 736000, end: 738000, hardAfter: false },
+    { startIdx: 147, start: 738000, end: 739500, hardAfter: false },
+    { startIdx: 147, start: 739500, end: 741000, hardAfter: false }
+  ], 650);
+
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(Array.from(clusters[0].unitIds), [
+    "first-clause", "continued-clause"
+  ]);
+  assert.equal(clusters[0].smoothed, true);
+});
+
 test("display smoothing does not cross a hard boundary or a real cue gap", () => {
   const units = [
     { unitId: "answer", members: [0] },

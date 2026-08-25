@@ -9,7 +9,6 @@
   "secModelConfig": { "message": "Model configuration" },
   "targetLang": { "message": "Target language" },
   "captionTrackLabel": { "message": "Original language" },
-  "captionTrackAuto": { "message": "Auto (match original audio)" },
   "captionTrackLoading": { "message": "Reading this video's caption tracks…" },
   "captionTrackUnavailable": { "message": "No selectable caption tracks for this video." },
   "translationTrackLabel": { "message": "Translation subtitles" },

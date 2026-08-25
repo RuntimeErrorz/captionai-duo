@@ -73,27 +73,51 @@
   function parseJson3(json) {
     const cues = [];
     if (!json || !Array.isArray(json.events)) return cues;
+    const finiteNumber = (value) => {
+      if (value == null || value === "") return NaN;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : NaN;
+    };
     for (const event of json.events) {
       if (!event || !Array.isArray(event.segs)) continue;
       let text = "";
       let offset = 0;
+      let lastPartEnd = 0;
+      let hasPartEnd = false;
+      let contentPartCount = 0;
       const parts = [];
       for (const segment of event.segs) {
         if (!segment || typeof segment.utf8 !== "string") continue;
         text += segment.utf8;
         if (!segment.utf8.trim()) continue;
         const part = { text: segment.utf8 };
-        if (typeof segment.tOffsetMs === "number" && Number.isFinite(segment.tOffsetMs)) {
-          offset = segment.tOffsetMs;
-          part.offsetMs = segment.tOffsetMs;
+        const segmentOffset = finiteNumber(segment.tOffsetMs);
+        if (Number.isFinite(segmentOffset) && segmentOffset >= 0) {
+          offset = segmentOffset;
+          part.offsetMs = segmentOffset;
+        } else if (contentPartCount === 0) {
+          // JSON3 omits tOffsetMs on the first ASR segment. It starts at the
+          // event's tStartMs; leaving it un-timed would discard every later
+          // onset in cueReferenceAtoms when it validates the token sequence.
+          part.offsetMs = 0;
+        }
+        const segmentDuration = finiteNumber(segment.tDurationMs);
+        if (Number.isFinite(segmentDuration) && segmentDuration >= 0) {
+          part.durationMs = segmentDuration;
+          lastPartEnd = Math.max(lastPartEnd, offset + segmentDuration);
+          hasPartEnd = true;
         }
         parts.push(part);
+        contentPartCount++;
       }
       text = text.replace(/\s+/g, " ").trim();
       if (!text) continue;
-      const start = typeof event.tStartMs === "number" ? event.tStartMs : 0;
-      const dur = typeof event.dDurationMs === "number" ? event.dDurationMs : 0;
-      cues.push({ start, dur, text, lastOff: start + offset, parts });
+      const startValue = finiteNumber(event.tStartMs);
+      const durationValue = finiteNumber(event.dDurationMs);
+      const start = Number.isFinite(startValue) ? startValue : 0;
+      const dur = Number.isFinite(durationValue) ? Math.max(0, durationValue) : 0;
+      cues.push({ start, dur, text,
+        lastOff: start + (hasPartEnd ? lastPartEnd : offset), parts });
     }
     return cues;
   }

@@ -292,7 +292,7 @@ assert.match(popup, /id="deepseekPrefetchBatches" type="number" min="0" max="10"
 assert.doesNotMatch(popup, /value="zh-TW"|中文（繁體）/);
 assert.match(popupSource, /normalizeTargetLang\(state\.targetLang\)/);
 assert.match(popup, /id="captionTrackSelect"/);
-assert.match(popup, /<option value="auto"[\s\S]*?captionTrackAuto/);
+assert.doesNotMatch(popup, /<option value="auto"/);
 assert.match(popupSource, /setCaptionTrack/);
 assert.doesNotMatch(popup, /captionTrackMode/);
 assert.doesNotMatch(popupSource, /setKey\("captionTrackMode"/);

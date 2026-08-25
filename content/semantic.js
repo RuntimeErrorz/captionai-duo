@@ -5,11 +5,6 @@ function deepseekPauseAfter(list, index) {
   if (index >= list.length - 1) return Number.POSITIVE_INFINITY;
   return Math.max(0, Number(YTDS_SHARED.cuePauseMs(list[index], list[index + 1])) || 0);
 }
-function deepseekHardBoundaryAfter(list, index) {
-  return index >= list.length - 1 || YTDS_SHARED.semanticPauseKind(
-    deepseekPauseAfter(list, index), DEEPSEEK_SOFT_PAUSE_MS, DEEPSEEK_HARD_PAUSE_MS
-  ) === "hard";
-}
 function resetDeepseekCommitTimeline() {
   captionSession.deepseekCommitRegions = [];
   captionSession.deepseekGroupToCommitRegion = [];
@@ -54,18 +49,24 @@ function buildHybridCueGroups(list) {
     const batch = captionSession.deepseekBatchWindows[batchIndex];
     for (let i = batch.start; i <= batch.end; i++) {
       captionSession.deepseekGroupToBatch[i] = batchIndex;
+      const atom = atoms[i] || {};
       const sourceCueIndex = captionSession.sentGroups[i].startIdx;
       const nextSourceCueIndex = i + 1 < captionSession.sentGroups.length ? captionSession.sentGroups[i + 1].startIdx : -1;
       const crossesCue = sourceCueIndex !== nextSourceCueIndex;
-      const pauseAfterMs = crossesCue ? deepseekPauseAfter(list, sourceCueIndex) : 0;
+      const timingPauseMs = Math.max(0, Number(atom.pauseAfterMs) || 0);
+      // A timed JSON3 atom has a more precise adjacent-onset signal than the
+      // rolling caption window's display duration. Only use the raw cue gap
+      // when lexical timing is unavailable; a cue edge alone is not a break.
+      const pauseAfterMs = atom.timed === true ? timingPauseMs : crossesCue
+        ? deepseekPauseAfter(list, sourceCueIndex) : 0;
       const pauseKind = YTDS_SHARED.semanticPauseKind(
         pauseAfterMs, DEEPSEEK_SOFT_PAUSE_MS, DEEPSEEK_HARD_PAUSE_MS
       );
       captionSession.sentGroups[i].pauseAfterMs = Number.isFinite(pauseAfterMs)
         ? Math.round(pauseAfterMs) : DEEPSEEK_HARD_PAUSE_MS;
-      captionSession.sentGroups[i].softAfter = crossesCue && pauseKind !== "none";
+      captionSession.sentGroups[i].softAfter = pauseKind !== "none";
       captionSession.sentGroups[i].hardAfter = i >= captionSession.sentGroups.length - 1 ||
-        (crossesCue && deepseekHardBoundaryAfter(list, sourceCueIndex));
+        pauseKind === "hard";
     }
   }
   buildDeepseekCommitRegions();
@@ -118,6 +119,11 @@ function cueTrackFingerprint(videoId, trackKind, sourceLang, trackId, cues) {
     add(cue.start);
     add(cue.dur);
     add(cue.text);
+    for (const part of Array.isArray(cue.parts) ? cue.parts : []) {
+      add(part && part.offsetMs);
+      add(part && part.durationMs);
+      add(part && part.text);
+    }
   }
   return `${cues.length}:${hash >>> 0}`;
 }
@@ -183,6 +189,16 @@ function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
         });
       if (!pending.length) {
         if (consumed || Number(request.requestStart) >= state.cursor) break;
+        if (Number(request.requestEnd) >= state.cursor) {
+          if (!request.urgent) {
+            request.urgent = true;
+            request.promotedAt = Date.now();
+            emitDebug("deepseek-prefetch-promoted", {
+              requestId: request.requestId, regionIndex, cursor: state.cursor
+            });
+          }
+          return true;
+        }
         const owner = Array.from(captionSession.deepseekRequestMeta.entries()).find(([, value]) => value === request);
         if (request.requestId) sendRuntimeMessage({ type: "cancelDeepSeekRequest", videoId: captionSession.cueVideoId, requestId: request.requestId });
         if (owner) { captionSession.deepseekRequestMeta.delete(owner[0]); captionSession.transInflight.delete(owner[0]); }
@@ -265,10 +281,6 @@ function deepseekResponseWithBufferedProgress(request, response, state) {
   const byId = new Map();
   for (const item of responseTranslations) {
     const id = Number(item && item.id);
-    // Preserve the complete validated response, including left anchors and
-    // aligned-chunk members beyond requestEnd. The monotonic commit planner
-    // still filters ownership, while aligned recovery needs the outer unit's
-    // full chunk coverage to prove a safe prefix.
     if (Number.isInteger(id)) byId.set(id, item);
   }
   for (const item of buffered) {
@@ -349,14 +361,16 @@ function canContinueDeepseekInflight(regionIndex, state, targetGroup) {
 }
 
 function commitDeepseekResponsePrefix(
-  regionIndex, requestStart, requestEnd, commitFloor, limitEnd, translations, guardItems
+  regionIndex, requestStart, requestEnd, commitFloor, limitEnd, translations, guardItems,
+  minimumRunwayItems
 ) {
   const region = captionSession.deepseekCommitRegions[regionIndex];
   const state = deepseekCommitState(regionIndex);
   if (!region || !state || state.cursor !== requestStart) return null;
   const plan = YTDS_SHARED.monotonicSemanticCommitPlan(
     translations, requestStart, requestEnd, limitEnd,
-    guardItems, commitFloor
+    guardItems, commitFloor,
+    minimumRunwayItems == null ? 0 : minimumRunwayItems
   );
   if (!plan.units.length) return requestStart;
 
@@ -483,7 +497,8 @@ function handleDeepseekTranslationProgress(msg) {
   const previousCursor = state.cursor;
   let nextCursor = commitDeepseekResponsePrefix(
     request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
-    request.limitEnd, pending, request.effectiveGuardItems
+    request.limitEnd, pending, request.effectiveGuardItems,
+    DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS
   );
   if ((!Number.isInteger(nextCursor) || nextCursor <= previousCursor) && request.urgent) {
     const recoveredTranslations = YTDS_SHARED.semanticUnitsFromAlignedChunks(
@@ -491,7 +506,8 @@ function handleDeepseekTranslationProgress(msg) {
     );
     const recoveredCursor = commitDeepseekResponsePrefix(
       request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
-      request.limitEnd, recoveredTranslations, request.effectiveGuardItems
+      request.limitEnd, recoveredTranslations, request.effectiveGuardItems,
+      DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS
     );
     if (Number.isInteger(recoveredCursor) && recoveredCursor > previousCursor) {
       nextCursor = recoveredCursor;
@@ -513,6 +529,7 @@ function handleDeepseekTranslationProgress(msg) {
   request.progressCursor = nextCursor;
   state.cursor = nextCursor;
   state.commitFloor = nextCursor;
+  reconcileDeepseekPrefetchCandidates(state, nextCursor);
   state.windowItems = DEEPSEEK_REQUEST_ITEMS;
   state.recoveryWindowItems = false; state.noProgressRange = "";
   captionSession.deepseekExhaustedRegions.delete(request.regionIndex);
@@ -637,8 +654,6 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
       });
     }
   }
-  // The range is deliberately absent: targetThrough can expand while this
-  // request is in flight, but the region must still have only one writer.
   const items = [];
   let currentChars = 0;
   for (let id = requestStart; id <= requestEnd; id++) {
@@ -712,8 +727,6 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   });
 }
 
-// Extend one hard-boundary-delimited stream's desired prefix. Transport
-// batches only define how far to preload; they never own semantic output.
 function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, requestOptions) {
   if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) || captionSession.deepseekSeekSettling) return;
   if (!captionSession.sentGroups || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;

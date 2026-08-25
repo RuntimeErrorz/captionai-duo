@@ -9,7 +9,6 @@
   "secModelConfig": { "message": "模型配置" },
   "targetLang": { "message": "目标语言" },
   "captionTrackLabel": { "message": "原文语言" },
-  "captionTrackAuto": { "message": "自动（原始音轨）" },
   "captionTrackLoading": { "message": "正在读取当前视频字幕轨…" },
   "captionTrackUnavailable": { "message": "当前视频没有可选择的字幕轨。" },
   "translationTrackLabel": { "message": "译文字幕" },
