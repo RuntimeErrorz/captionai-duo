@@ -109,6 +109,7 @@ loadSettings().then(() => {
     readyState: document.readyState
   });
   applyStateToDom(true);
+  initializePlayerToggle();
   syncCaptions("boot");      // auto-enable YouTube CC so subtitles show on load
   scheduleCueRecovery(INITIAL_CUE_RECOVERY_MS);
 });

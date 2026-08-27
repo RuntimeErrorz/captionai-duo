@@ -25,7 +25,7 @@ function abortableNeverFetch(_url, options) {
   });
 }
 
-function loadHttp(fetchImpl) {
+function loadHttpContext(fetchImpl, overrides = {}) {
   const context = {
     AbortController,
     TextDecoder,
@@ -36,8 +36,14 @@ function loadHttp(fetchImpl) {
     YTDS_SHARED: loadShared(),
     DEEPSEEK_STREAM_COMPLETION_GRACE_MS: 750
   };
+  Object.assign(context, overrides);
   vm.createContext(context);
   vm.runInContext(httpSource, context, { filename: "background/http.js" });
+  return context;
+}
+
+function loadHttp(fetchImpl) {
+  const context = loadHttpContext(fetchImpl);
   return vm.runInContext("fetchAiStreamWithTimeout", context);
 }
 
@@ -194,6 +200,10 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     cacheDeepseekDisplayNeighborhood: () => {},
     semanticDisplayWidth: () => 1000,
     repaintActiveDeepseekTranslation: () => {},
+    deepseekTranslationErrorText: (value) => {
+      const details = loadShared().aiErrorDescriptor(value);
+      return `Translation failed [${[details.code, details.providerCode].filter(Boolean).join(" / ")}]`;
+    },
     clearPendingTimer: () => {},
     sourceForDisplayedCue: () => "source",
     manualTranslationSelected: () => false,
@@ -286,6 +296,70 @@ test("an external cancellation is not mislabeled as a connect timeout", async ()
     ),
     (error) => error.name === "AbortError" && error.phase === "connect" &&
       error.connectTimedOut === false && error.timedOut === false
+  );
+});
+
+test("AI response protocol failures expose a stable diagnostic code", async () => {
+  const response = {
+    ok: true,
+    headers: { get: () => "application/json" },
+    text: async () => "not json"
+  };
+  const fetchWithTimeout = loadHttp(async () => response);
+  await assert.rejects(
+    fetchWithTimeout("https://api.deepseek.com/chat/completions", {}, 500, 200),
+    (error) => error.errorCode === "AI_RESPONSE_INVALID_JSON"
+  );
+});
+
+test("HTTP failures retain provider codes without exposing the provider body", async () => {
+  const context = loadHttpContext(async () => ({
+    ok: false,
+    status: 400,
+    headers: { get: () => "application/json" },
+    text: async () => JSON.stringify({
+      error: { code: "invalid_request_error", message: "secret provider detail" }
+    })
+  }), {
+    chrome: { storage: { local: { get: async () => ({ aiApiKeys: {} }) } } },
+    AI_NETWORK_TRACE_HEADER: "X-Test-Trace",
+    DEEPSEEK_MAX_ATTEMPTS: 3,
+    DEEPSEEK_TIMEOUT_FAST_MS: 500,
+    DEEPSEEK_TIMEOUT_THINKING_MS: 500,
+    DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS: 200,
+    DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS: 200,
+    aiNetworkAttemptTraceId: (_requestId, attempt) => `trace-${attempt}`
+  });
+  const aiRawCompletion = vm.runInContext("aiRawCompletion", context);
+  await assert.rejects(
+    aiRawCompletion({
+      endpoint: "https://provider.example/v1/chat/completions",
+      baseUrl: "https://provider.example/v1",
+      endpointKind: "compatible",
+      model: "test-model",
+      extraBody: {}
+    }, [], null, 256, 0),
+    (error) => {
+      assert.equal(error.errorCode, "HTTP_400");
+      assert.equal(error.httpStatus, 400);
+      assert.equal(error.providerCode, "invalid_request_error");
+      assert.doesNotMatch(error.message, /secret provider detail/);
+      return true;
+    }
+  );
+});
+
+test("subtitle-safe AI error descriptors retain HTTP/provider codes", () => {
+  const shared = loadShared();
+  const descriptor = shared.aiErrorDescriptor({
+    errorCode: "HTTP_400",
+    providerCode: "invalid_request_error"
+  });
+  assert.equal(descriptor.code, "HTTP_400");
+  assert.equal(descriptor.providerCode, "invalid_request_error");
+  assert.equal(
+    shared.aiErrorDescriptor({ netError: "net::ERR_NAME_NOT_RESOLVED" }).code,
+    "net::ERR_NAME_NOT_RESOLVED"
   );
 });
 
@@ -1150,7 +1224,7 @@ test("accelerated prefetch skips the live writer and uses the fast transport pat
   assert.equal(harness.messages[2].requestStart, 272);
 });
 
-test("3x DeepSeek playback dispatches the visible writer and eleven future ranges before any response", () => {
+test("3x DeepSeek playback keeps a cost-bounded future runway before any response", () => {
   const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
     batchSize: 64, groupCount: 1201, limitEnd: 1200,
@@ -1158,9 +1232,9 @@ test("3x DeepSeek playback dispatches the visible writer and eleven future range
   });
 
   assert.deepEqual(requests.map((message) => message.requestStart), [
-    0, 64, 160, 256, 352, 448, 544, 640, 736, 832, 928, 1024
+    0, 64, 160, 256, 352
   ]);
-  assert.equal(harness.pendingCallbacks.length, 12);
+  assert.equal(harness.pendingCallbacks.length, 5);
   assert.ok(requests.slice(1).every((message) =>
     message.urgent === false && message.fastPath === true
   ));
@@ -1207,9 +1281,9 @@ test("2x DeepSeek playback also fills an accelerated runway", () => {
   });
 
   assert.deepEqual(requests.map((message) => message.requestStart), [
-    0, 64, 160, 256, 352, 448, 544, 640
+    0, 64, 160, 256
   ]);
-  assert.equal(harness.pendingCallbacks.length, 8);
+  assert.equal(harness.pendingCallbacks.length, 4);
   assert.ok(requests.every((message) => message.endpointKind === "deepseek"));
 });
 
@@ -1782,11 +1856,30 @@ test("an unrecoverable no-progress response keeps a bounded budget and bypasses 
 
   const schedule = vm.runInContext("scheduleDeepSeekBatchRetry", harness.context);
   schedule(0, 0, 159, "video", 1, "no immutable semantic prefix", {
-    urgent: true, bypassCache: true
+    urgent: true, bypassCache: true,
+    errorCode: "HTTP_400", providerCode: "invalid_request_error"
   });
   assert.equal(harness.debug.at(-1).event, "batch-retry-exhausted");
   assert.equal(harness.context.captionSession.deepseekExhaustedRegions.has(0), true);
-  assert.equal(harness.painted.at(-1), "Translation temporarily unavailable");
+  assert.equal(harness.painted.at(-1), "Translation failed [HTTP_400 / invalid_request_error]");
+});
+
+test("a non-retryable provider response is painted at the active subtitle", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle({
+    regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
+    requestId: "commit:0:1:0-159", urgent: true,
+    sessionToken: harness.context.captureCaptionSession()
+  }, {
+    ok: false,
+    error: "AI HTTP 400",
+    errorCode: "HTTP_400",
+    providerCode: "invalid_request_error"
+  }, null);
+
+  assert.equal(harness.painted.at(-1), "Translation failed [HTTP_400 / invalid_request_error]");
+  assert.equal(harness.context.captionSession.deepseekExhaustedRegions.get(0).errorCode, "HTTP_400");
 });
 
 test("an invalidated semantic retry timer cannot resurrect its request", () => {

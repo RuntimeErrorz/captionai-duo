@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadShared } = require("./helpers");
 
 const messagesSource = fs.readFileSync(
   path.resolve(__dirname, "../background/messages.js"), "utf8"
@@ -25,7 +26,7 @@ function loadRateLimitHarness(errorValue, urgent = false) {
     cleanTargetLang: () => "zh-CN",
     cleanSourceLang: () => "en",
     cleanContext: () => [],
-    YTDS_SHARED: { videoIdMatchesPageUrls: () => true },
+    YTDS_SHARED: { ...loadShared(), videoIdMatchesPageUrls: () => true },
     acquireDeepSeekSlot: () => { throw errorValue; },
     persistAiStatus: (...args) => statuses.push(args),
     sendResponse: () => {}

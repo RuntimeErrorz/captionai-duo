@@ -36,7 +36,11 @@ async function fetchAiStreamWithTimeout(
       const payloadText = await response.text();
       let payload;
       try { payload = JSON.parse(payloadText); }
-      catch (_e) { throw new Error("AI service returned invalid completion JSON"); }
+      catch (_e) {
+        const error = new Error("AI service returned invalid completion JSON");
+        error.errorCode = "AI_RESPONSE_INVALID_JSON";
+        throw error;
+      }
       const text = YTDS_SHARED.aiCompletionText(payload);
       if (typeof onTextDelta === "function") {
         onTextDelta(text, true);
@@ -52,7 +56,9 @@ async function fetchAiStreamWithTimeout(
       };
     }
     if (!response.body || typeof response.body.getReader !== "function") {
-      throw new Error("AI streaming response has no readable body");
+      const error = new Error("AI streaming response has no readable body");
+      error.errorCode = "AI_STREAM_BODY_UNREADABLE";
+      throw error;
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -112,7 +118,11 @@ async function fetchAiStreamWithTimeout(
         }
         let chunk;
         try { chunk = JSON.parse(event); }
-        catch (_e) { throw new Error("AI service returned invalid SSE JSON"); }
+        catch (_e) {
+          const error = new Error("AI service returned invalid SSE JSON");
+          error.errorCode = "AI_SSE_INVALID_JSON";
+          throw error;
+        }
         const chunkUsage = chunk && (chunk.usage || chunk.usageMetadata ||
           chunk.usage_metadata || chunk.interaction && chunk.interaction.usage);
         if (chunkUsage) usage = chunkUsage;
@@ -131,7 +141,11 @@ async function fetchAiStreamWithTimeout(
       if (part.done) break;
     }
     // Some compatible servers close a valid SSE body without a final [DONE].
-    if (!done && !content) throw new Error("AI SSE stream ended without content");
+    if (!done && !content) {
+      const error = new Error("AI SSE stream ended without content");
+      error.errorCode = "AI_SSE_EMPTY";
+      throw error;
+    }
     if (!earlyStopped && typeof onTextDelta === "function") onTextDelta("", true);
     return {
       response,
@@ -150,6 +164,7 @@ async function fetchAiStreamWithTimeout(
     err.elapsedMs = Date.now() - started;
     err.timedOut = timedOut;
     err.connectTimedOut = connectTimedOut;
+    err.errorCode = String(cause && cause.errorCode || "");
     throw err;
   } finally {
     clearTimeout(timer);
@@ -206,6 +221,36 @@ function cancelDeepSeekForSender(sender, videoId, beforeFocusGeneration) {
   }
 }
 
+function aiProviderErrorCode(responseText) {
+  let payload;
+  try { payload = JSON.parse(String(responseText || "")); }
+  catch (_e) { return ""; }
+  const nested = payload && payload.error;
+  const candidates = [
+    nested && typeof nested === "object" ? nested.code : "",
+    nested && typeof nested === "object" ? nested.type : "",
+    typeof nested === "string" ? nested : "",
+    payload && payload.code,
+    payload && payload.type
+  ];
+  for (const value of candidates) {
+    const code = String(value == null ? "" : value).trim();
+    if (code.length <= 64 && /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(code)) return code;
+  }
+  return "";
+}
+
+function annotateAiHttpError(errorValue, response, responseText) {
+  const error = errorValue instanceof Error ? errorValue : new Error(String(errorValue || "AI HTTP request failed"));
+  const status = Number(response && response.status);
+  error.httpStatus = Number.isInteger(status) ? status : 0;
+  error.errorCode = Number.isInteger(status) && status >= 100 && status <= 599
+    ? `HTTP_${status}` : "AI_HTTP_UNKNOWN";
+  const providerCode = aiProviderErrorCode(responseText);
+  if (providerCode) error.providerCode = providerCode;
+  return error;
+}
+
 function sendTranslationBatchProgress(sender, payload) {
   const tabId = sender && sender.tab && sender.tab.id;
   if (!Number.isInteger(tabId)) return;
@@ -251,6 +296,7 @@ async function aiRawCompletion(
   if (!config.endpoint || !config.model) {
     const err = new Error("AI API Base URL or model is not configured");
     err.needsConfig = true;
+    err.errorCode = "AI_CONFIG_MISSING";
     throw err;
   }
   const stored = await chrome.storage.local.get({
@@ -263,6 +309,7 @@ async function aiRawCompletion(
   if (config.endpointKind === "deepseek" && !apiKey) {
     const err = new Error("AI API key is not configured");
     err.needsKey = true;
+    err.errorCode = "AI_KEY_MISSING";
     throw err;
   }
 
@@ -330,6 +377,10 @@ async function aiRawCompletion(
       attemptInfo.responseChars = responseText.length;
       attemptInfo.earlyStopped = !!result.earlyStopped;
       attemptInfo.earlyStopReason = String(result.earlyStopReason || "");
+      if (!res.ok) {
+        const providerCode = aiProviderErrorCode(responseText);
+        if (providerCode) attemptInfo.providerCode = providerCode;
+      }
       if (trace.debug) appendDebug("background", "deepseek-http-body-complete", {
         requestId: trace.requestId || "",
         requestClass: trace.requestClass || "",
@@ -386,11 +437,16 @@ async function aiRawCompletion(
       err.cancelled = !!(externalSignal && externalSignal.aborted);
       err.timeout = !!(cause && (cause.name === "AbortError" || cause.timedOut) && !err.cancelled);
       err.connectTimeout = !!(cause && cause.connectTimedOut && !err.cancelled);
+      err.errorCode = err.cancelled ? "AI_CANCELLED" :
+        String(cause && cause.errorCode || "") ||
+        (attemptInfo.netError || (err.connectTimeout ? "AI_CONNECT_TIMEOUT" :
+          err.timeout ? "AI_TIMEOUT" : "AI_NETWORK_ERROR"));
+      if (attemptInfo.netError) err.netError = attemptInfo.netError;
       err.httpDiagnostics = { attempts };
       throw err;
     }
     if (res.status === 401 || res.status === 403) {
-      const err = new Error("AI API key was rejected");
+      const err = annotateAiHttpError(new Error("AI API key was rejected"), res, responseText);
       err.needsKey = true;
       err.httpDiagnostics = { attempts };
       throw err;
@@ -413,7 +469,9 @@ async function aiRawCompletion(
     break;
   }
   if (!res || !res.ok) {
-    const err = new Error(`AI HTTP ${res ? res.status : "unknown"}`);
+    const err = annotateAiHttpError(
+      new Error(`AI HTTP ${res ? res.status : "unknown"}`), res, responseText
+    );
     err.rateLimited = !!(res && res.status === 429);
     err.httpDiagnostics = { attempts };
     throw err;
@@ -426,6 +484,7 @@ async function aiRawCompletion(
   const raw = responseText;
   if (!raw) {
     const err = new Error("AI service returned an empty translation");
+    err.errorCode = "AI_RESPONSE_EMPTY";
     err.httpDiagnostics = { attempts };
     throw err;
   }

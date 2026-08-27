@@ -6,7 +6,32 @@
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
 
   function normalizeTranslatedText(value) {
-    return String(value || "").replace(/。/g, "").trim();
+    return String(value || "").replace(/>>/g, "").replace(/。/g, "").trim();
+  }
+
+  function isSpeakerSwitchMarker(value) {
+    return String(value == null ? "" : value).trim() === ">>";
+  }
+
+  // `>>` is a source-side speaker-turn marker. Return the separators that
+  // belong before each aligned translation chunk, without changing the
+  // normal compact CJK joining rule for ordinary linguistic chunks.
+  function speakerSwitchSeparators(chunksValue, itemsValue) {
+    const chunks = Array.isArray(chunksValue) ? chunksValue : [];
+    const items = Array.isArray(itemsValue) ? itemsValue : [];
+    const separators = [];
+    let offset = 0;
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index] || {};
+      const ids = Array.isArray(chunk.ids) ? chunk.ids : [];
+      const boundary = index > 0 && (
+        isSpeakerSwitchMarker(items[offset] && items[offset].text) ||
+        isSpeakerSwitchMarker(items[offset - 1] && items[offset - 1].text)
+      );
+      separators.push(boundary);
+      offset += ids.length;
+    }
+    return separators;
   }
 
   function jsonObjectFromText(value) {
@@ -278,8 +303,11 @@
         ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
       return reject(`oversized JSONL unit ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
     }
+    const speakerSwitches = speakerSwitchSeparators(
+      alignedChunks, state.items.slice(state.cursor, state.cursor + ids.length)
+    );
     const translation = joinTranslatedParts(
-      alignedChunks.map((chunk) => chunk.translation), state.targetLang
+      alignedChunks.map((chunk) => chunk.translation), state.targetLang, speakerSwitches
     );
     const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
     const translations = ids.map((id, index) => index === 0
@@ -372,18 +400,23 @@
     return out;
   }
 
-  function joinTranslatedParts(values, targetLang) {
+  function joinTranslatedParts(values, targetLang, speakerSwitchesValue) {
+    const speakerSwitches = Array.isArray(speakerSwitchesValue) ? speakerSwitchesValue : [];
     const parts = (Array.isArray(values) ? values : [])
-      .map(normalizeTranslatedText)
-      .filter(Boolean);
+      .map((value, index) => ({
+        text: normalizeTranslatedText(value),
+        speakerSwitchBefore: !!speakerSwitches[index]
+      }))
+      .filter((part) => part.text);
     if (!parts.length) return "";
     const compact = /^(?:zh|ja|ko)(?:-|$)/i.test(String(targetLang || ""));
-    let out = parts[0];
+    let out = parts[0].text;
     for (let i = 1; i < parts.length; i++) {
-      const part = parts[i];
+      const part = parts[i].text;
       const nextIsPunctuation = /^[,.;:!?。，；：！？、)）\]】}」』]/.test(part);
       const asciiBoundary = /[A-Za-z0-9]$/.test(out) && /^[A-Za-z0-9]/.test(part);
-      const separator = nextIsPunctuation ? "" : compact ? (asciiBoundary ? " " : "") : " ";
+      const separator = parts[i].speakerSwitchBefore ? " "
+        : nextIsPunctuation ? "" : compact ? (asciiBoundary ? " " : "") : " ";
       out += separator + part;
     }
     return out.trim();
@@ -573,8 +606,11 @@
         return reject(`missing aligned chunk coverage after segment offset ${chunkCursor}`);
       }
 
+      const speakerSwitches = speakerSwitchSeparators(
+        alignedChunks, items.slice(cursor, cursor + ids.length)
+      );
       const translation = joinTranslatedParts(
-        alignedChunks.map((chunk) => chunk.translation), targetLang
+        alignedChunks.map((chunk) => chunk.translation), targetLang, speakerSwitches
       );
       const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
       for (let i = 0; i < ids.length; i++) {
@@ -594,5 +630,5 @@
     return translations;
   }
 
-  Object.assign(internal, { normalizeTranslatedText, segmentedTranslationsFromJsonText, aiJsonlObjects, aiJsonlRecordFromLine, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+Object.assign(internal, { normalizeTranslatedText, speakerSwitchSeparators, segmentedTranslationsFromJsonText, aiJsonlObjects, aiJsonlRecordFromLine, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();

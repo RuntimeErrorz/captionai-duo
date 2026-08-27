@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg && msg.type === "cancelDeepSeek") {
     if (!isYoutubeSender(sender)) {
-      sendResponse({ ok: false, error: "untrusted sender" });
+      sendResponse({ ok: false, error: "untrusted sender", errorCode: "AI_UNTRUSTED_SENDER" });
       return;
     }
     cancelDeepSeekForSender(sender, msg.videoId, msg.beforeFocusGeneration);
@@ -75,7 +75,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!items || !targetLang || contextBefore == null || contextAfter == null ||
         !/^[A-Za-z0-9:_-]{1,128}$/.test(requestId) ||
         !YTDS_SHARED.videoIdMatchesPageUrls(msg.videoId, senderPageUrls(sender))) {
-      sendResponse({ ok: false, error: "invalid translation batch" });
+      sendResponse({ ok: false, error: "invalid translation batch", errorCode: "AI_INVALID_BATCH" });
       return;
     }
     const endpointKind = msg.endpointKind === "deepseek" ? "deepseek" : "compatible";
@@ -86,10 +86,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         err.limitReason === "local-concurrency");
       const backgroundRateLimit = !msg.urgent && !!(err && err.rateLimited) &&
         !localBackpressure;
-      if (!localBackpressure && !backgroundRateLimit) persistAiStatus("limited", err.message);
+      const errorInfo = YTDS_SHARED.aiErrorDescriptor(err);
+      if (!localBackpressure && !backgroundRateLimit) {
+        persistAiStatus("limited", err.message, errorInfo.code);
+      }
       sendResponse({
         ok: false,
         error: String(err),
+        errorCode: errorInfo.code,
+        providerCode: errorInfo.providerCode,
         rateLimited: true,
         retryAfterMs: Number(err && err.retryAfterMs) || 1500,
         limitReason: String(err && err.limitReason || "")
@@ -145,6 +150,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const failures = translations.failures || [];
         const deferredIds = translations.deferredIds || [];
         const streamPartial = !!translations.streamPartial;
+        const streamError = String(translations.error || translations.streamError || "");
+        const errorInfo = streamError
+          ? YTDS_SHARED.aiErrorDescriptor({
+              errorCode: translations.errorCode || "AI_JSONL_INVALID",
+              providerCode: translations.providerCode
+            })
+          : { code: "", providerCode: "" };
         const httpDiagnostics = translations.httpDiagnostics || { attempts: [] };
         if (msg.debug) appendDebug("background", "batch-complete", {
           durationMs: Date.now() - batchStarted,
@@ -155,10 +167,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           streamPartial,
           failures: failures.map(String)
         });
-        persistAiStatus(failures.length ? "partial" : "", failures[0]);
+        persistAiStatus(
+          failures.length || streamError ? "partial" : "",
+          streamError || failures[0], errorInfo.code
+        );
         sendResponse({
           ok: true,
           translations,
+          ...(streamError ? { error: streamError, errorCode: errorInfo.code,
+            providerCode: errorInfo.providerCode } : {}),
           deferredIds,
           httpDiagnostics,
           partial: failures.length > 0 || streamPartial,
@@ -174,9 +191,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           err.limitReason === "local-concurrency");
         const backgroundRateLimit = !msg.urgent && !!(err && err.rateLimited) &&
           !localBackpressure;
+        const errorInfo = YTDS_SHARED.aiErrorDescriptor(err);
         if (!(err && err.cancelled) && !localBackpressure && !backgroundRateLimit) {
           persistAiStatus(err && err.needsKey ? "key" :
-            err && err.timeout ? "timeout" : err && err.rateLimited ? "limited" : "error", err);
+            err && err.timeout ? "timeout" : err && err.rateLimited ? "limited" : "error",
+            err, errorInfo.code);
         }
         if (msg.debug) appendDebug("background", "batch-error", {
           durationMs: Date.now() - batchStarted,
@@ -186,6 +205,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({
           ok: false,
           error: String(err),
+          errorCode: errorInfo.code,
+          providerCode: errorInfo.providerCode,
           netfail: !!(err && err.netfail),
           needsKey: !!(err && err.needsKey),
           timeout: !!(err && err.timeout),

@@ -100,8 +100,8 @@ const DEEPSEEK_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urg
 const DEEPSEEK_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
 const DEEPSEEK_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
 const DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-const DEEPSEEK_FAST_PREFETCH_BATCHES = 6; // maintain a deeper queue at >=1.75x
-const DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 12; // maintain a deeper queue at >=2.5x
+const DEEPSEEK_FAST_PREFETCH_BATCHES = 3; // keep a bounded runway at >=1.75x
+const DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 4; // keep a bounded runway at >=2.5x
 const DEEPSEEK_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
 const DEEPSEEK_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
 const DEEPSEEK_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross
@@ -131,6 +131,7 @@ function stopForInvalidatedExtensionContext() {
   clearPendingTimer();
   captionSession.transInflight.clear();
   document.documentElement.classList.remove("ytds-active");
+  stopPlayerToggle();
   removeOverlay();
 }
 
@@ -223,6 +224,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   const enabledChanged = Object.prototype.hasOwnProperty.call(changes, "enabled");
   applyStateToDom(false);
+  syncPlayerToggle();
   if (overlay) styleOverlay();   // position/fonts/colors/bg/stroke/sizes apply live
   if (needDisplayReflow) scheduleDeepseekDisplayReflow(true);
   if (enabledChanged) syncCaptions();   // master switch flipped from popup
@@ -565,10 +567,11 @@ function setOriginal(text) {
   updateEmptyState();
 }
 
-function setTranslation(text, forSource) {
+function setTranslation(text, forSource, displayState) {
   if (!ensureOverlay()) return;
   const previous = transEl.textContent;
   transEl.textContent = text || "";
+  transEl.classList.toggle("ytds-translation-error", displayState === "error");
   updateEmptyState();
   if (previous !== transEl.textContent) {
     emitDebug("translation-painted", {

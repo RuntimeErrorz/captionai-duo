@@ -9,6 +9,7 @@ const { loadShared } = require("./helpers");
 
 const shared = loadShared();
 const root = path.resolve(__dirname, "..");
+const stateSource = fs.readFileSync(path.join(root, "background/state.js"), "utf8");
 
 test("extra request profiles are scoped by normalized Base URL and model", () => {
   assert.equal(
@@ -121,4 +122,50 @@ test("the popup persists local profiles and cache identity includes their canoni
   assert.match(popupJs, /setKey\("aiExtraBodyRevision"/);
   assert.match(cacheSource, /extraBody: config\.extraBodyCanonical/);
   assert.match(contentSource, /"aiExtraBodyRevision"/);
+});
+
+test("response cache identity follows the model-visible prompt, not transport metadata", () => {
+  const storage = { get: async () => ({}), set: async () => {} };
+  const context = {
+    YTDS_SHARED: shared,
+    chrome: {
+      runtime: { getManifest: () => ({ version: "test" }) },
+      storage: {
+        session: storage,
+        local: storage,
+        onChanged: { addListener: () => {} }
+      }
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(stateSource, context, { filename: "background/state.js" });
+  const cacheId = vm.runInContext("aiResponseCacheId", context);
+  const config = {
+    endpoint: "https://api.deepseek.com/chat/completions",
+    model: "deepseek-v4-flash",
+    extraBodyCanonical: "{}",
+    contextPast: 1,
+    contextFuture: 1
+  };
+  const items = [{
+    id: "0", cueId: "cue-a", text: "Hello", startMs: 0, endMs: 500,
+    pauseAfterMs: 0, softAfter: false, hardAfter: false
+  }];
+  const contextBefore = [{ id: "c0", text: "Prior", temporal: "past" }];
+  const contextAfter = [{ id: "c1", text: "Next", temporal: "future" }];
+  const samePromptItems = [{
+    ...items[0], cueId: "cue-b", startMs: 120, endMs: 800
+  }];
+  const samePromptContext = [
+    { id: "c0", text: "  Prior  ", temporal: "future" }
+  ];
+
+  assert.equal(
+    cacheId(config, items, "zh-CN", "en", contextBefore, contextAfter),
+    cacheId(config, samePromptItems, "zh-CN", "en", samePromptContext, contextAfter)
+  );
+  assert.notEqual(
+    cacheId(config, items, "zh-CN", "en", contextBefore, contextAfter),
+    cacheId(config, [{ ...items[0], text: "Goodbye" }], "zh-CN", "en", contextBefore, contextAfter)
+  );
 });

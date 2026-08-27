@@ -231,6 +231,55 @@
       part && typeof part.text === "string" ? part.text : "").join("");
   }
 
+  // Error details cross the background/content boundary and may originate in
+  // an untrusted provider response. Keep only short, code-shaped identifiers;
+  // subtitles never receive a raw provider error body.
+  function normalizedAiErrorCode(value) {
+    const code = String(value == null ? "" : value).trim();
+    return code.length <= 64 && /^[A-Za-z][A-Za-z0-9_.:-]*$/.test(code) ? code : "";
+  }
+
+  function aiErrorDescriptor(value) {
+    const root = value && typeof value === "object" ? value : { message: value };
+    const explicit = normalizedAiErrorCode(root.errorCode || root.error_code || root.code);
+    const providerCode = normalizedAiErrorCode(root.providerCode || root.provider_code);
+    let code = explicit;
+    const status = Number(root.httpStatus != null ? root.httpStatus : root.status);
+    if (!code && Number.isInteger(status) && status >= 100 && status <= 599) {
+      code = `HTTP_${status}`;
+    }
+    if (!code) {
+      const netText = String(root.netError || root.networkError || "");
+      const match = netText.match(/\b(?:net::)?ERR_[A-Z0-9_]+\b/i);
+      if (match) code = match[0].startsWith("net::") ? match[0] : `net::${match[0]}`;
+    }
+    if (!code && root.connectTimeout) code = "AI_CONNECT_TIMEOUT";
+    if (!code && root.timeout) code = "AI_TIMEOUT";
+    if (!code && root.cancelled) code = "AI_CANCELLED";
+    if (!code && root.needsKey) code = "AI_KEY_MISSING";
+    if (!code && root.rateLimited) code = "AI_RATE_LIMITED";
+    if (!code && root.netfail) code = "AI_NETWORK_ERROR";
+    if (!code && root.segmentInvalid) code = "AI_SEMANTIC_INVALID";
+    if (!code && root.streamError) code = "AI_JSONL_INVALID";
+    const message = String(root.message || root.error || "").toLowerCase();
+    if (!code) {
+      const httpMatch = message.match(/\b(?:ai\s+)?http(?:\s+status)?\s*[:#]?\s*(\d{3})\b/);
+      if (httpMatch) code = `HTTP_${httpMatch[1]}`;
+    }
+    if (!code && /no immutable semantic prefix/.test(message)) code = "AI_NO_PROGRESS";
+    if (!code && /api key.*(?:not configured|missing)/.test(message)) code = "AI_KEY_MISSING";
+    if (!code && /api key.*rejected|invalid api key/.test(message)) code = "AI_AUTH_REJECTED";
+    if (!code && /timed out|timeout/.test(message)) code = "AI_TIMEOUT";
+    if (!code && /invalid (?:completion |sse |jsonl? |semantic )?(?:json|response|stream)/.test(message)) {
+      code = "AI_RESPONSE_INVALID";
+    }
+    if (!code && providerCode) code = providerCode;
+    return Object.freeze({
+      code: code || "AI_REQUEST_FAILED",
+      providerCode: providerCode && providerCode !== code ? providerCode : ""
+    });
+  }
+
   function nonNegativeTokenCount(value) {
     const count = Number(value);
     return Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
@@ -299,14 +348,18 @@
 
   // Prompt-only compact rows. Full timing metadata remains local for
   // validation, rendering and SRT export; the model only needs lexical ids,
-  // text, the following pause and whether that edge is soft or hard.
+  // text, the following pause and whether that edge is soft or hard. Omit
+  // trailing default fields because a zero pause and empty boundary carry no
+  // additional information for the model.
   function compactAiPromptCueRows(itemsValue) {
-    return (Array.isArray(itemsValue) ? itemsValue : []).filter(Boolean).map((item) => [
-      String(item.id),
-      String(item.text || ""),
-      Math.max(0, Math.round(Number(item.pauseAfterMs) || 0)),
-      item.hardAfter ? "h" : item.softAfter ? "s" : ""
-    ]);
+    return (Array.isArray(itemsValue) ? itemsValue : []).filter(Boolean).map((item) => {
+      const pauseAfterMs = Math.max(0, Math.round(Number(item.pauseAfterMs) || 0));
+      const boundary = item.hardAfter ? "h" : item.softAfter ? "s" : "";
+      const row = [String(item.id), String(item.text || "")];
+      if (pauseAfterMs || boundary) row.push(pauseAfterMs);
+      if (boundary) row.push(boundary);
+      return row;
+    });
   }
 
   function compactAiPromptContextRows(entriesValue) {
@@ -465,7 +518,7 @@
     normalizeTargetLang,
     isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
     aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,
-    parseAiExtraBody, aiCompletionText,
+    parseAiExtraBody, aiCompletionText, aiErrorDescriptor,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
     aiExtraBodyUsesThinking,
     aiChatCompletionBody, normalizeDeepseekPrefetchBatches, normalizeAiContextCount,

@@ -10,8 +10,11 @@ const DEEPSEEK_STREAM_HANDOFF_MIN_ITEMS = 64;
 const DEEPSEEK_HIGH_SPEED_STREAM_HANDOFF_MIN_ITEMS = 16;
 const DEEPSEEK_STREAM_HANDOFF_MAX_REMAINING_ITEMS = 48;
 const DEEPSEEK_MAX_SPECULATIVE_REQUESTS = 2;
-const DEEPSEEK_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 7;
-const DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 11;
+// Speculative output is billed even when playback never reaches it. Keep the
+// accelerated runway useful but bounded; the scheduler will refill it as the
+// committed cursor advances instead of paying for a whole distant transcript.
+const DEEPSEEK_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 3;
+const DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 4;
 const COMPATIBLE_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 2;
 const COMPATIBLE_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 3;
 const DEEPSEEK_SPECULATIVE_REQUEST_ITEMS = 96;
@@ -589,7 +592,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     } else {
       scheduleDeepSeekBatchRetry(
         requestStart, requestStart, requestEnd, reqVid, reqEpoch,
-        runtimeError.message || "runtime unavailable", { urgent: effectiveUrgent }
+        runtimeError.message || "runtime unavailable", { urgent: effectiveUrgent, error: runtimeError }
       );
     }
     return;
@@ -624,12 +627,11 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
           regionIndex, deepseekKeepAcceleratedUrgentLane(effectiveUrgent, state)
         ));
       }
-    } else if (!resp || resp.netfail || resp.timeout || resp.rateLimited ||
-        error === "invalid translation batch" || error === "untrusted sender") {
+    } else if (!(resp && resp.cancelled)) {
       scheduleDeepSeekBatchRetry(requestStart, requestStart, requestEnd, reqVid, reqEpoch, error, {
         rateLimited: !!(resp && resp.rateLimited),
         retryAfterMs: Number(resp && resp.retryAfterMs) || 0,
-        urgent: effectiveUrgent
+        urgent: effectiveUrgent, error: resp
       });
     }
     return;
@@ -720,7 +722,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   } else if (!request.prefetch) {
     scheduleDeepSeekBatchRetry(
       requestStart, requestStart, requestEnd, reqVid, reqEpoch,
-      "no immutable semantic prefix", { urgent: effectiveUrgent, bypassCache: true }
+      "no immutable semantic prefix", { urgent: effectiveUrgent, bypassCache: true, errorCode: resp && resp.errorCode || "AI_NO_PROGRESS", providerCode: resp && resp.providerCode }
     );
     repaintActiveDeepseekTranslation();
     return;
@@ -827,19 +829,20 @@ function scheduleDeepSeekBatchRetry(
   const key = deepseekBatchRetryKey(start, end, videoId, epoch);
   const attempt = captionSession.deepseekRetryCounts.get(key) || 0;
   const rateLimited = !!(retryOptions && retryOptions.rateLimited);
-  const maxAttempts = rateLimited
-    ? DEEPSEEK_RATE_RETRY_LIMIT : DEEPSEEK_COLD_RETRY_DELAYS_MS.length;
+  const errorInfo = YTDS_SHARED.aiErrorDescriptor(retryOptions && retryOptions.error || retryOptions || { message: reason });
+  const maxAttempts = rateLimited ? DEEPSEEK_RATE_RETRY_LIMIT
+    : /^(?:HTTP_\d+|AI_CONFIG_MISSING|AI_KEY_MISSING)$/.test(errorInfo.code) ? 0 : DEEPSEEK_COLD_RETRY_DELAYS_MS.length;
   if (attempt >= maxAttempts) {
     const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
     if (Number.isInteger(regionIndex)) {
       captionSession.deepseekExhaustedRegions.set(regionIndex, {
-        start, end, videoId, epoch, reason: String(reason || "")
+        start, end, videoId, epoch, reason: String(reason || ""), errorCode: errorInfo.code, providerCode: errorInfo.providerCode
       });
     }
     emitCaptionStateTransition("semantic-retry", "exhausted", {
       start, end, attempts: attempt, reason: String(reason || "")
     });
-    emitDebug("batch-retry-exhausted", { start, end, reason: String(reason || "") });
+    emitDebug("batch-retry-exhausted", { start, end, reason: String(reason || ""), errorCode: errorInfo.code });
     if (captionSession.activeGroupIdx >= 0 &&
         captionSession.deepseekGroupToCommitRegion[captionSession.activeGroupIdx] === regionIndex &&
         captionSession.activeCueIdx >= 0 && captionSession.cueList) {
@@ -847,7 +850,7 @@ function scheduleDeepSeekBatchRetry(
       const source = sourceForDisplayedCue(
         captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]
       );
-      setTranslation(t("translationUnavailable", "Translation temporarily unavailable"), source);
+      setTranslation(deepseekTranslationErrorText(captionSession.deepseekExhaustedRegions.get(regionIndex)), source, "error");
     }
     return;
   }

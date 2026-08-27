@@ -435,11 +435,13 @@ async function refreshEngineStatus() {
         const messages = {
           timeout: t("aiStatusTimeout", "AI 请求超时，扩展已自动重试。"),
           limited: t("aiStatusLimited", "AI 请求过多，已暂时放慢。"),
-          partial: t("aiStatusPartial", "部分字幕翻译失败，播放到该处时会自动重试。"),
+          partial: t("aiStatusPartial", "部分字幕翻译失败，请查看译文中的错误码。"),
           key: t("aiStatusKey", "API Key 无效，请重新填写。"),
-          error: t("aiStatusError", "AI 服务暂时不可用，播放时会自动重试。")
+          error: t("aiStatusError", "AI 请求失败，请查看译文中的错误码。")
         };
-        el.textContent = messages[status.kind] || messages.error;
+        const summary = messages[status.kind] || messages.error;
+        const code = status.errorCode ? YTDS_SHARED.aiErrorDescriptor(status).code : "";
+        el.textContent = code ? `${summary} [${code}]` : summary;
         el.classList.add("warn");
         el.hidden = false;
       }

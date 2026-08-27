@@ -80,12 +80,13 @@ test("compact prompt rows retain the semantic boundary contract with much less J
     text: index % 2 ? "translation" : "subtitle",
     startMs: index * 400,
     endMs: index * 400 + 380,
-    pauseAfterMs: index === 79 ? 4000 : index % 8 === 7 ? 950 : 0,
+    pauseAfterMs: index === 79 ? 4000 : index === 3 ? 120 : index % 8 === 7 ? 950 : 0,
     softAfter: index % 8 === 7,
     hardAfter: index === 79
   }));
   const rows = shared.compactAiPromptCueRows(items);
-  assert.deepEqual(Array.from(rows[0]), ["0", "subtitle", 0, ""]);
+  assert.deepEqual(Array.from(rows[0]), ["0", "subtitle"]);
+  assert.deepEqual(Array.from(rows[3]), ["3", "translation", 120]);
   assert.deepEqual(Array.from(rows[7]), ["7", "translation", 950, "s"]);
   assert.deepEqual(Array.from(rows[79]), ["79", "translation", 4000, "h"]);
   assert.ok(JSON.stringify(rows).length < JSON.stringify(items).length * 0.4);

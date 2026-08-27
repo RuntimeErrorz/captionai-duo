@@ -28,7 +28,7 @@ const MAX_TRANSLATE_CHARS = 4000;
 // remain independent safety limits.
 const MAX_BATCH_ITEMS = 320;
 const MAX_PROMPT_SOURCE_CHARS = 28000;
-const AI_PROMPT_CACHE_VERSION = "prompt-v27-jsonl-cursor-done-fast-urgent-chunked";
+const AI_PROMPT_CACHE_VERSION = "prompt-v29-deepseek-stable-prefix-compact-rows-punctuation";
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";
 const AI_RESPONSE_CACHE_MAX_ENTRIES = 96;
 const AI_RESPONSE_CACHE_MAX_CHARS = 2000000;
@@ -255,18 +255,22 @@ function hashCacheText(value, seed) {
 }
 
 function aiResponseCacheId(config, items, targetLang, sourceLang, contextBefore, contextAfter) {
+  const currentItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  const preparedContext = YTDS_SHARED.preparePromptContexts(
+    contextBefore, contextAfter, config.contextPast, config.contextFuture,
+    currentItems, MAX_PROMPT_SOURCE_CHARS
+  );
   const canonical = JSON.stringify({
     version: AI_PROMPT_CACHE_VERSION,
-    endpoint: config.endpoint,
-    model: config.model,
+    endpoint: String(config.endpoint || ""),
+    endpointKind: String(config.endpointKind || ""),
+    model: String(config.model || ""),
     extraBody: config.extraBodyCanonical || "{}",
-    contextPast: config.contextPast,
-    contextFuture: config.contextFuture,
-    targetLang,
-    sourceLang,
-    items,
-    contextBefore,
-    contextAfter
+    targetLang: String(targetLang || ""),
+    sourceLang: String(sourceLang || ""),
+    current: YTDS_SHARED.compactAiPromptCueRows(currentItems),
+    past: YTDS_SHARED.compactAiPromptContextRows(preparedContext.past),
+    future: YTDS_SHARED.compactAiPromptContextRows(preparedContext.future)
   });
   return `${canonical.length}:${hashCacheText(canonical, 2166136261).toString(36)}:` +
     hashCacheText(canonical, 3339675911).toString(36);
@@ -485,10 +489,17 @@ function acquireDeepSeekSlot(sender, urgent, endpointKind) {
   };
 }
 
-function persistAiStatus(kind, message) {
+function persistAiStatus(kind, _message, errorCode) {
   if (!sessionStore) return;
   sessionStore.set({
-    ytdsAiStatus: kind ? { kind, message: String(message || ""), ts: Date.now() } : null
+    ytdsAiStatus: kind ? {
+      kind,
+      // The popup only needs the normalized code. Do not persist provider
+      // error text, which may echo prompt data or credentials.
+      message: "",
+      errorCode: String(errorCode || "").slice(0, 64),
+      ts: Date.now()
+    } : null
   }).catch(() => {});
 }
 

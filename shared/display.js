@@ -4,7 +4,7 @@
   if (globalThis.YTDS_SHARED) return;
   const internal = globalThis["__captionAiDuoSharedModulesV1__"];
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
-  const { mergeTimedCueTexts, joinTranslatedParts } = internal;
+  const { mergeTimedCueTexts, joinTranslatedParts, speakerSwitchSeparators } = internal;
   const SEMANTIC_DISPLAY_CONTIGUITY_TOLERANCE_MS = 80;
 
   function resolveFullscreenState(nativeApiAvailable, fullscreenElement, playerClassFullscreen) {
@@ -36,8 +36,9 @@
       const source = cues.length
         ? mergeTimedCueTexts(cues)
         : pageChunks.map((chunk) => chunk.source).filter(Boolean).join(" ").trim();
+      const speakerSwitches = speakerSwitchSeparators(pageChunks, cues);
       const translation = joinTranslatedParts(
-        pageChunks.map((chunk) => chunk.translation), targetLang
+        pageChunks.map((chunk) => chunk.translation), targetLang, speakerSwitches
       );
       return { source, translation };
     };

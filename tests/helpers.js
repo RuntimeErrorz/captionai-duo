@@ -16,6 +16,7 @@ const SHARED_FILES = Object.freeze([
 
 const CONTENT_FILES = Object.freeze([
   "content/state-ui.js",
+  "content/player-toggle.js",
   "content/diagnostics.js",
   "content/session.js",
   "content/cue-playback.js",

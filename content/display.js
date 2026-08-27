@@ -66,9 +66,14 @@ function cacheSemanticDisplayCluster(unitsValue, logPages) {
   const parts = members.map((id) => captionSession.sentGroups[id]).filter(Boolean);
   if (!parts.length) return;
   const source = mergeCueTexts(parts);
+  const unitTranslations = units.map((unit) =>
+    captionSession.transCache.get(groupKey(unit.members[0])) || ""
+  );
+  const unitSpeakerSwitches = YTDS_SHARED.speakerSwitchSeparators(
+    units.map((unit) => ({ ids: unit.members })), parts
+  );
   const translation = YTDS_SHARED.joinTranslatedParts(
-    units.map((unit) => captionSession.transCache.get(groupKey(unit.members[0])) || ""),
-    settings.targetLang
+    unitTranslations, settings.targetLang, unitSpeakerSwitches
   );
   if (!source || !translation) return;
   const unitIds = units.map((unit) => unit.unitId).filter(Boolean);
@@ -188,6 +193,12 @@ function deepseekSemanticDisplayClusters() {
   );
 }
 
+function deepseekTranslationErrorText(value) {
+  const details = YTDS_SHARED.aiErrorDescriptor(value);
+  const code = [details.code, details.providerCode].filter(Boolean).join(" / ");
+  return String(t("translationError", "Translation failed [$1]")).replace(/\$1/g, code);
+}
+
 function cacheDeepseekDisplayNeighborhood(changedMembers, logPages) {
   const changed = new Set((Array.isArray(changedMembers) ? changedMembers : []).map(Number));
   const cueIndexes = new Set(Array.from(changed).map((id) =>
@@ -215,7 +226,10 @@ function repaintActiveDeepseekTranslation() {
       if (captionSession.deepseekExhaustedRegions.has(regionIndex)) {
         clearPendingTimer();
         const source = sourceForDisplayedCue(captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]);
-        setTranslation(t("translationUnavailable", "Translation temporarily unavailable"), source);
+        setTranslation(
+          deepseekTranslationErrorText(captionSession.deepseekExhaustedRegions.get(regionIndex)),
+          source, "error"
+        );
         return;
       }
       armPendingTranslationIndicator(captionSession.activeGroupIdx);

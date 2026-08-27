@@ -110,6 +110,44 @@ test("JSONL translations remove every Chinese full stop before caching", () => {
   assert.equal(accepted.translations[0].alignedChunks[0].translation, "第一句第二句真的吗？");
 });
 
+test("JSONL translations remove protocol speaker markers before caching", () => {
+  const items = [
+    { id: "0", text: ">>", startMs: 0, endMs: 100, hardAfter: false },
+    { id: "1", text: "Yeah.", startMs: 100, endMs: 500, hardAfter: false }
+  ];
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [{ ids: ["0", "1"], translation: ">> 是的" }]
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.translations[0].translation, "是的");
+});
+
+test("JSONL separates aligned Chinese chunks at an explicit speaker turn", () => {
+  const items = [
+    { id: "0", text: ">>", startMs: 0, endMs: 100, hardAfter: false },
+    { id: "1", text: "Are", startMs: 100, endMs: 400, hardAfter: false },
+    { id: "2", text: "you?", startMs: 400, endMs: 700, hardAfter: false },
+    { id: "3", text: ">>", startMs: 700, endMs: 800, hardAfter: false },
+    { id: "4", text: "Yeah.", startMs: 800, endMs: 1100, hardAfter: false },
+    { id: "5", text: "Okay.", startMs: 1100, endMs: 1400, hardAfter: false }
+  ];
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [
+      { ids: ["0", "1", "2"], translation: "是吗？" },
+      { ids: ["3", "4", "5"], translation: "对，对的。" }
+    ]
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.translations[0].translation, "是吗？ 对，对的");
+  assert.equal(accepted.translations[0].alignedChunks[1].translation, "对，对的");
+});
+
 test("JSONL keeps oversized units when multiple aligned chunks provide recovery boundaries", () => {
   const items = Array.from({ length: 160 }, (_value, id) => ({
     id: String(id),

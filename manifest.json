@@ -52,6 +52,7 @@
         "shared/stream.js",
         "shared.js",
         "content/state-ui.js",
+        "content/player-toggle.js",
         "content/diagnostics.js",
         "content/session.js",
         "content/cue-playback.js",

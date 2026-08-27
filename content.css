@@ -55,6 +55,8 @@ html.ytds-active .caption-window {
   word-break: break-word;
 }
 
+.ytds-trans.ytds-translation-error { font-style: italic; }
+
 /* Both rows share one grid track, whose width is determined by the longer
    subtitle. Only the four OUTER corners stay rounded; the joined inner edges
    are square, so the two backgrounds read as one clean panel. */
@@ -147,3 +149,66 @@ html.ytds-active .caption-window {
 }
 .ytds-handle:hover::before,
 .ytds-handle.ytds-dragging::before { background: rgba(20, 20, 20, 0.9); }
+
+/* CaptionAI follows YouTube's right-side native control group while keeping
+   its AI identity distinct from the native CC icon. */
+#ytds-player-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 48px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: #fff;
+  opacity: .88;
+  vertical-align: top;
+  transition: background-color .14s ease, opacity .14s ease;
+}
+#ytds-player-toggle .ytds-toggle-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 20px;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+  background: transparent;
+  color: currentColor;
+  transition: background-color .14s ease, border-color .14s ease, color .14s ease;
+}
+#ytds-player-toggle .ytds-toggle-text {
+  font: 700 11px/1 Arial, sans-serif;
+  letter-spacing: -.06em;
+  text-align: center;
+}
+#ytds-player-toggle.ytds-toggle-off {
+  opacity: .78;
+}
+#ytds-player-toggle.ytds-toggle-on {
+  opacity: 1;
+}
+#ytds-player-toggle.ytds-toggle-on .ytds-toggle-mark {
+  border-color: #fff;
+  background: #fff;
+  color: #111;
+}
+#ytds-player-toggle:hover {
+  background: rgba(255, 255, 255, .12);
+  opacity: 1;
+}
+#ytds-player-toggle:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  #ytds-player-toggle,
+  #ytds-player-toggle .ytds-toggle-mark {
+    transition: none;
+  }
+}

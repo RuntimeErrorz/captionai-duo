@@ -364,7 +364,10 @@ function renderTranslationForCue(idx, cue, displayedSource, immediatePending) {
     const regionIndex = captionSession.deepseekGroupToCommitRegion[captionSession.activeGroupIdx];
     if (captionSession.deepseekExhaustedRegions.has(regionIndex)) {
       clearPendingTimer();
-      setTranslation(t("translationUnavailable", "Translation temporarily unavailable"), origText);
+      setTranslation(
+        deepseekTranslationErrorText(captionSession.deepseekExhaustedRegions.get(regionIndex)),
+        origText, "error"
+      );
       return;
     }
     armPendingTranslationIndicator(captionSession.activeGroupIdx, immediatePending);

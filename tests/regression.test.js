@@ -250,6 +250,7 @@ assert.deepEqual(manifest.host_permissions, [
 assert.equal("optional_host_permissions" in manifest, false);
 
 const content = readSourceFiles(CONTENT_FILES);
+const contentCss = fs.readFileSync(path.join(root, "content.css"), "utf8");
 const background = readSourceFiles(BACKGROUND_FILES);
 const sharedSource = readSourceFiles(SHARED_FILES);
 const mainSource = readSourceFiles(MAIN_FILES);
@@ -257,7 +258,9 @@ const popup = fs.readFileSync(path.join(root, "popup.html"), "utf8");
 const popupSource = readSourceFiles(POPUP_FILES);
 assert.doesNotMatch(content, /settings\.engine|gtxRequest|tlang/);
 assert.doesNotMatch(background, /translate\.googleapis|function gtxFetch|ytdsGtxGate/);
-assert.doesNotMatch(content, /ytds-toggle|ensureToggleButton|controlsObserver/);
+assert.match(content, /function initializePlayerToggle/);
+assert.match(content, /PLAYER_TOGGLE_ID/);
+assert.match(contentCss, /#ytds-player-toggle/);
 assert.doesNotMatch(content, /postMessage\([\s\S]{0,240}["']\*["']/);
 assert.match(background, /contextFuture/);
 assert.match(background, /FUTURE_CONTEXT/);

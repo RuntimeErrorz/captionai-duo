@@ -169,8 +169,9 @@ test("urgent segmentation uses the compact prompt without changing the JSONL con
   const deepseekConfig = { ...config, endpointKind: "deepseek" };
   await fetch(items, "zh-CN", "en", [], [], deepseekConfig, null, { requestClass: "urgent" });
   await fetch(items, "zh-CN", "en", [], [], deepseekConfig, null, { requestClass: "prefetch-fast" });
+  await fetch(items, "zh-CN", "en", [], [], deepseekConfig, null, { requestClass: "prefetch" });
 
-  assert.equal(prompts.length, 5);
+  assert.equal(prompts.length, 6);
   assert.equal(prompts[0].requestClass, "urgent");
   assert.equal(prompts[1].requestClass, "prefetch");
   assert.equal(prompts[2].requestClass, "prefetch-fast");
@@ -179,9 +180,18 @@ test("urgent segmentation uses the compact prompt without changing the JSONL con
   assert.equal(prompts[2].maxTokens, 2048);
   assert.equal(prompts[3].maxTokens, 4096);
   assert.equal(prompts[4].maxTokens, 4096);
+  assert.equal(prompts[5].maxTokens, 4096);
   assert.ok(prompts[0].content.length < prompts[1].content.length);
   assert.equal(prompts[0].content, prompts[2].content);
+  assert.equal(prompts[3].content, prompts[4].content);
+  assert.equal(prompts[4].content, prompts[5].content);
+  assert.ok(prompts[3].content.length > prompts[0].content.length);
   assert.match(prompts[0].content, /JSONL/);
   assert.match(prompts[0].content, /strict ordered prefix/);
   assert.match(prompts[0].content, /\{"type":"done"\}/);
+  assert.match(prompts[0].content, /Punctuation carries meaning/);
+  assert.match(prompts[0].content, /never silently concatenate two completed source sentences/);
+  assert.match(prompts[0].content, /must not force a new display page/);
+  assert.match(prompts[3].content, /Punctuation carries meaning/);
+  assert.match(prompts[5].content, /never translate it as a period/);
 });
