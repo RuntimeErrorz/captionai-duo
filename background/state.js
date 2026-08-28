@@ -28,7 +28,7 @@ const MAX_TRANSLATE_CHARS = 4000;
 // remain independent safety limits.
 const MAX_BATCH_ITEMS = 320;
 const MAX_PROMPT_SOURCE_CHARS = 28000;
-const AI_PROMPT_CACHE_VERSION = "prompt-v31-deepseek-local-alignment-coordinates";
+const AI_PROMPT_CACHE_VERSION = "prompt-v32-deepseek-local-alignment-tuples";
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";
 const AI_RESPONSE_CACHE_MAX_ENTRIES = 96;
 const AI_RESPONSE_CACHE_MAX_CHARS = 2000000;

@@ -30,7 +30,7 @@ function sampleItems() {
 }
 
 function rangeChunk(start, end, translation) {
-  return { start: Number(start), end: Number(end), translation };
+  return [Number(start), Number(end), translation];
 }
 
 test("accelerated JSONL publishes a complete unit before the next unit arrives", () => {
@@ -54,8 +54,8 @@ test("compact JSONL ranges expand into the same ordered alignment coverage", () 
   const accepted = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
     chunks: [
-      { start: 0, end: 1, translation: "我遇到了美国士兵。" },
-      { start: 2, end: 2, translation: "他们帮助了我们。" }
+      rangeChunk(0, 1, "我遇到了美国士兵。"),
+      rangeChunk(2, 2, "他们帮助了我们。")
     ]
   });
 
@@ -77,8 +77,8 @@ test("local JSONL positions expand to the request's non-local internal IDs", () 
   const accepted = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
     chunks: [
-      { start: 0, end: 1, translation: "我遇到了美国士兵。" },
-      { start: 2, end: 2, translation: "他们帮助了我们。" }
+      rangeChunk(0, 1, "我遇到了美国士兵。"),
+      rangeChunk(2, 2, "他们帮助了我们。")
     ]
   });
 
@@ -93,31 +93,42 @@ test("local JSONL positions expand to the request's non-local internal IDs", () 
 test("compact JSONL ranges keep gap and hard-boundary validation strict", () => {
   const gap = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(gap, {
-    type: "unit", chunks: [{ start: 1, end: 1, translation: "跳过" }]
+    type: "unit", chunks: [rangeChunk(1, 1, "跳过")]
   }).error, /unexpected JSONL position 1 at offset 0/);
 
   const hardItems = sampleItems();
   hardItems[0] = { ...hardItems[0], hardAfter: true };
   const crossed = shared.createAiJsonlTranslationState(hardItems, "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(crossed, {
-    type: "unit", chunks: [{ start: 0, end: 1, translation: "越界" }]
+    type: "unit", chunks: [rangeChunk(0, 1, "越界")]
   }).error, /hard boundary/);
 
   const incomplete = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(incomplete, {
-    type: "unit", chunks: [{ start: 0, translation: "缺少终点" }]
-  }).error, /invalid JSONL range/);
+    type: "unit", chunks: [[0, "缺少终点"]]
+  }).error, /invalid JSONL chunk/);
 });
 
-test("JSONL rejects the legacy ids-array chunk format after the range cutover", () => {
+test("JSONL accepts tuple chunks and rejects keyed or legacy chunk formats", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
-  const rejected = shared.pushAiJsonlTranslationRecord(state, {
+  const keyed = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: ["0"], translation: "旧格式" }]
+    chunks: [{ start: 0, end: 0, translation: "键值格式" }]
   });
 
-  assert.equal(rejected.ok, false);
-  assert.match(rejected.error, /invalid JSONL range/);
+  assert.equal(keyed.ok, false);
+  assert.match(keyed.error, /invalid JSONL chunk/);
+  assert.equal(state.cursor, 0);
+
+  const legacy = shared.pushAiJsonlTranslationRecord(
+    shared.createAiJsonlTranslationState(sampleItems(), "zh-CN"),
+    {
+      type: "unit",
+      chunks: [{ ids: ["0"], translation: "旧格式" }]
+    }
+  );
+  assert.equal(legacy.ok, false);
+  assert.match(legacy.error, /invalid JSONL chunk/);
   assert.equal(state.cursor, 0);
 
   const deferredField = shared.pushAiJsonlTranslationRecord(
@@ -133,11 +144,11 @@ test("JSONL rejects the legacy ids-array chunk format after the range cutover", 
 
 test("JSONL object framing survives pretty printing and arbitrary object splits", () => {
   const first = shared.aiJsonlObjects(
-    '```jsonl\n{\n  "type": "unit",\n  "chunks": [{"start":0,"end":0,', false
+    '```jsonl\n{\n  "type": "unit",\n  "chunks": [[0,0,', false
   );
   assert.equal(first.objects.length, 0);
   const second = shared.aiJsonlObjects(
-    first.rest + '\n  "translation": "complete"}]\n}\n{"type":"done"}\n```', true
+    first.rest + '\n  "complete"]]\n}\n{"type":"done"}\n```', true
   );
   assert.equal(second.rest, "");
   assert.equal(second.objects.length, 2);
@@ -151,15 +162,16 @@ test("JSONL object framing survives pretty printing and arbitrary object splits"
 
 test("JSONL framing recovers a complete unit when only its outer wrapper is truncated", () => {
   const recovered = shared.aiJsonlObjects(
-    '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"complete"}\n{"type":"done"}',
+    '{"type":"unit","chunks":[[0,0,"complete"]\n{"type":"done"}',
     true
   );
   assert.equal(recovered.rest, "");
   assert.equal(recovered.objects.length, 1);
   const decoded = shared.aiJsonlRecordFromLine(recovered.objects[0]);
   assert.equal(decoded.record.type, "unit");
-  assert.equal(decoded.record.chunks[0].start, 0);
-  assert.equal(decoded.record.chunks[0].end, 0);
+  assert.equal(decoded.record.chunks[0][0], 0);
+  assert.equal(decoded.record.chunks[0][1], 0);
+  assert.equal(decoded.record.chunks[0][2], "complete");
 });
 
 test("JSONL state derives the deferred suffix from its coverage cursor", () => {
@@ -362,8 +374,8 @@ test("a compact range stream recovers its safe prefix before a gapped range", ()
   const status = observer.onTextDelta(JSON.stringify({
     type: "unit",
     chunks: [
-      { start: 0, end: 1, translation: "safe prefix" },
-      { start: 3, end: 5, translation: "missing token" }
+      rangeChunk(0, 1, "safe prefix"),
+      rangeChunk(3, 5, "missing token")
     ]
   }), true);
 
@@ -484,7 +496,7 @@ test("the stream observer accepts multiline JSON objects without a fallback erro
   const payload = [
     "{",
     '  "type": "unit",',
-    '  "chunks": [{"start":0,"end":1,"translation":"complete"}]',
+    '  "chunks": [[0,1,"complete"]]',
     "}",
     '{"type":"done"}'
   ].join("\n");
@@ -501,7 +513,7 @@ test("the stream observer ignores a truncated done tail after complete coverage"
   const items = sampleItems().slice(0, 2);
   const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
   const payload = [
-    '{"type":"unit","chunks":[{"start":0,"end":1,"translation":"complete"}]}',
+    '{"type":"unit","chunks":[[0,1,"complete"]]}',
     '{"type":"done"'
   ].join("\n");
   const result = observer.onTextDelta(payload, true);

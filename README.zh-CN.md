@@ -95,7 +95,7 @@ AI 需要先把连续坐标组合成自然句子或分句，再在每个语义�
 
 ### 4. 流式传输与模型输出
 
-请求采用兼容 Chat Completions 的 JSON，固定带 `stream: true` 和 `stream_options.include_usage: true`。主翻译协议要求模型输出 JSONL：每个已经确定的完整语义单元占一个物理行，最后只输出一行 `{"type":"done"}`。所有主翻译线路的对齐块都使用 `{"start":0,"end":1,"translation":"..."}` 这种闭区间，不再逐个枚举 `ids`；`start/end` 是当前请求内从 0 开始的本地序号，程序将其展开回内部绝对 cue ID 后继续做严格连续性校验。JSONL 和完整 JSON 校验器都拒绝旧的 `ids` 数组传输形态，不再静默兼容第二套协议。程序根据已验证单元的覆盖游标自行推导未完成后缀，进一步避免数字续写浪费输出 Token。DeepSeek 还会收到思考开关；JSONL 主请求不会设置只能生成单个 JSON 对象的 `response_format`。自定义兼容接口还会合并当前地址与模型对应的额外请求参数，并返回 OpenAI 风格的 `choices`。
+请求采用兼容 Chat Completions 的 JSON，固定带 `stream: true` 和 `stream_options.include_usage: true`。主翻译协议要求模型输出 JSONL：每个已经确定的完整语义单元占一个物理行，最后只输出一行 `{"type":"done"}`。所有主翻译线路的对齐块都使用紧凑的闭区间数组，例如 `{"type":"unit","chunks":[[0,1,"..."]]}`；每个数组按 `[start,end,translation]` 排列，不再使用带字段名的对象，也不再逐个枚举 `ids`。`start/end` 是当前请求内从 0 开始的本地序号，程序将其展开回内部绝对 cue ID 后继续做严格连续性校验。JSONL 和完整 JSON 校验器都拒绝带字段名或旧的 `ids` 数组传输形态，不再静默兼容第二套协议。程序根据已验证单元的覆盖游标自行推导未完成后缀，进一步避免数字续写浪费输出 Token。DeepSeek 还会收到思考开关；JSONL 主请求不会设置只能生成单个 JSON 对象的 `response_format`。自定义兼容接口还会合并当前地址与模型对应的额外请求参数，并返回 OpenAI 风格的 `choices`。
 
 SSE 网络块和模型 token 都可能在任意字节位置断开，因此扩展分两层缓冲：先缓冲到空行分隔的完整 SSE 事件，再把内容缓冲到完整 JSONL 换行。只有某一整行可以独立解析、坐标连续且结构完整时，该语义单元才会写入不可变缓存并立即通知页面显示；半个 JSON 字符串、半句话或任意 token 块不会直接绘制。usage-only 事件单独累计。全部当前坐标已覆盖或 `done` 已到达后，扩展只再等待最多 750ms 收取 usage 与 `[DONE]`，异常长尾会被主动终止。服务器即使忽略流式传输、直接返回普通 JSON，只要使用同一套范围结构，也可以解析其内容和顶层 `usage`。
 

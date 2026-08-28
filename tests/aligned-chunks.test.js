@@ -6,12 +6,7 @@ const { loadShared } = require("./helpers");
 
 const shared = loadShared();
 const lengthMeasure = (text) => String(text).length;
-const responseChunk = (start, end, translation, extra = {}) => ({
-  ...extra,
-  start: Number(start),
-  end: Number(end),
-  translation
-});
+const responseChunk = (start, end, translation) => [Number(start), Number(end), translation];
 
 const successorItems = [
   { id: "221", text: "The Shah is letting this happen,", startMs: 569850, endMs: 571650, hardAfter: false },
@@ -84,13 +79,15 @@ test("compact aligned response derives segment coverage from ranges", () => {
   assert.equal(output[0].alignedChunks.length, 2);
 });
 
-test("flat alignment schema groups chunks by monotonic segment number", () => {
-  const flat = JSON.stringify({ chunks: [
-    responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了，", { segment: 1 }),
-    responseChunk(2, 2, "他的儿子讨厌议会，", { segment: 1 }),
-    responseChunk(3, 3, "不喜欢议会限制他的权力。", { segment: 2 })
+test("compact alignment schema keeps semantic segments around tuple chunks", () => {
+  const compact = JSON.stringify({ segments: [
+    [
+      responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了，"),
+      responseChunk(2, 2, "他的儿子讨厌议会，")
+    ],
+    [responseChunk(3, 3, "不喜欢议会限制他的权力。")]
   ] });
-  const output = shared.alignedTranslationsFromJsonText(flat, successorItems, "zh-CN");
+  const output = shared.alignedTranslationsFromJsonText(compact, successorItems, "zh-CN");
   assert.ok(output);
   assert.equal(output[0].unitId, "semantic-221-223");
   assert.equal(output[0].alignedChunks.length, 2);
@@ -99,10 +96,7 @@ test("flat alignment schema groups chunks by monotonic segment number", () => {
 
 test("rolling alignment accepts only a contiguous model-deferred suffix", () => {
   const partial = JSON.stringify({
-    chunks: [{
-      segment: 1,
-      ...responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了。")
-    }],
+    chunks: [responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了。")],
     deferred_start: 2
   });
   const diagnostics = {};
@@ -127,11 +121,11 @@ test("rolling alignment accepts only a contiguous model-deferred suffix", () => 
 test("rolling alignment rejects a deferred hole or duplicated completed token", () => {
   for (const response of [
     {
-      chunks: [responseChunk(0, 1, "前半句", { segment: 1 })],
+      chunks: [responseChunk(0, 1, "前半句")],
       deferred_start: 3
     },
     {
-      chunks: [responseChunk(0, 3, "整句", { segment: 1 })],
+      chunks: [responseChunk(0, 3, "整句")],
       deferred_start: 3
     }
   ]) {
@@ -195,6 +189,20 @@ test("aligned response rejects legacy ids arrays", () => {
   );
   assert.equal(output, null);
   assert.match(diagnostics.reason, /legacy ids arrays are not supported/);
+});
+
+test("aligned response rejects keyed chunk objects after the tuple cutover", () => {
+  const diagnostics = {};
+  const output = shared.alignedTranslationsFromJsonText(
+    JSON.stringify({ segments: [{
+      chunks: [{ start: 0, end: 0, translation: "带字段名" }]
+    }] }),
+    successorItems.slice(0, 1),
+    "zh-CN",
+    diagnostics
+  );
+  assert.equal(output, null);
+  assert.match(diagnostics.reason, /invalid aligned chunk/);
 });
 
 test("browser packing keeps the next-guy appositive paired with its translation", () => {

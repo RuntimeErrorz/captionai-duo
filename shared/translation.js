@@ -82,7 +82,9 @@
     const translations = [];
     let cursor = 0;
     for (const segment of segments) {
-      const range = aiJsonlChunkIds({ expected }, segment, cursor);
+      const range = aiJsonlRangeIds(
+        { expected }, segment && segment.start, segment && segment.end, cursor
+      );
       const ids = range.ids;
       const translation = normalizeTranslatedText(segment && segment.translation);
       if (range.error || !ids.length || !translation || cursor + ids.length > expected.length) {
@@ -208,7 +210,7 @@
       } else if (char === "}" || char === "]") {
         const opening = char === "}" ? "{" : "[";
         if (brackets[brackets.length - 1] !== opening) return "";
-        if (opening === "{" && brackets.length === 3 &&
+        if ((opening === "{" || opening === "[") && brackets.length === 3 &&
             brackets[0] === "{" && brackets[1] === "[") {
           lastChunkEnd = index + 1;
         }
@@ -264,29 +266,14 @@
     return Number.isSafeInteger(parsed) ? parsed : null;
   }
 
-  // The model uses zero-based positions within the current request. Expand a
-  // validated local range against the caller's expected sequence so a skipped,
-  // duplicated or invented position is rejected while internal absolute IDs
-  // remain available to playback, caching and rendering.
-  function aiJsonlChunkIds(stateValue, chunkValue, offsetValue) {
+  function aiJsonlRangeIds(stateValue, startValue, endValue, offsetValue) {
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
-    const chunk = chunkValue && typeof chunkValue === "object" ? chunkValue : null;
     const offset = Math.max(0, Math.floor(Number(offsetValue) || 0));
-    if (!state || !Array.isArray(state.expected) || !chunk) {
-      return { ids: [], error: `invalid JSONL chunk at offset ${offset}` };
-    }
-    const hasChunkOwn = (key) => hasOwn(chunk, key);
-    const hasStart = hasChunkOwn("start");
-    const hasEnd = hasChunkOwn("end");
-    if (hasChunkOwn("ids")) return { ids: [], error: `invalid JSONL range at offset ${offset}` };
-    if (!hasStart && !hasEnd) {
-      return { ids: [], error: `invalid JSONL chunk at offset ${offset}` };
-    }
-    if (!hasStart || !hasEnd) {
+    if (!state || !Array.isArray(state.expected)) {
       return { ids: [], error: `invalid JSONL range at offset ${offset}` };
     }
-    const start = compactJsonlCoordinate(chunk.start);
-    const end = compactJsonlCoordinate(chunk.end);
+    const start = compactJsonlCoordinate(startValue);
+    const end = compactJsonlCoordinate(endValue);
     if (start == null || end == null || end < start) {
       return { ids: [], error: `invalid JSONL range at offset ${offset}` };
     }
@@ -305,10 +292,29 @@
     return { ids: state.expected.slice(offset, offset + count), error: "" };
   }
 
+  function aiJsonlChunkTranslation(chunkValue) {
+    return Array.isArray(chunkValue)
+      ? normalizeTranslatedText(chunkValue[2])
+      : "";
+  }
+
+  // The model uses zero-based positions within the current request. Expand a
+  // validated local range against the caller's expected sequence so a skipped,
+  // duplicated or invented position is rejected while internal absolute IDs
+  // remain available to playback, caching and rendering.
+  function aiJsonlChunkIds(stateValue, chunkValue, offsetValue) {
+    const chunk = Array.isArray(chunkValue) ? chunkValue : null;
+    const offset = Math.max(0, Math.floor(Number(offsetValue) || 0));
+    if (!chunk || chunk.length !== 3) {
+      return { ids: [], error: `invalid JSONL chunk at offset ${offset}` };
+    }
+    return aiJsonlRangeIds(stateValue, chunk[0], chunk[1], offset);
+  }
+
   function aiJsonlChunkStartOffset(chunkValue) {
-    const chunk = chunkValue && typeof chunkValue === "object" ? chunkValue : null;
-    if (!chunk) return -1;
-    const start = compactJsonlCoordinate(chunk.start);
+    const chunk = Array.isArray(chunkValue) ? chunkValue : null;
+    if (!chunk || chunk.length !== 3) return -1;
+    const start = compactJsonlCoordinate(chunk[0]);
     return start == null ? -1 : start;
   }
 
@@ -345,7 +351,7 @@
     for (const chunk of chunks) {
       const chunkResult = aiJsonlChunkIds(state, chunk, state.cursor + ids.length);
       const chunkIds = chunkResult.ids;
-      const translation = normalizeTranslatedText(chunk && chunk.translation);
+      const translation = aiJsonlChunkTranslation(chunk);
       if (chunkResult.error || !chunkIds.length || !translation) {
         return reject(chunkResult.error || `invalid JSONL chunk at offset ${state.cursor + ids.length}`);
       }
@@ -409,7 +415,7 @@
     for (const chunk of record.chunks) {
       const chunkResult = aiJsonlChunkIds(state, chunk, offset);
       const ids = chunkResult.ids;
-      const translation = normalizeTranslatedText(chunk && chunk.translation);
+      const translation = aiJsonlChunkTranslation(chunk);
       if (chunkResult.error || !ids.length || !translation) break;
       let valid = true;
       for (let index = 0; index < ids.length; index++) {
@@ -427,11 +433,7 @@
       }
       if (!valid) break;
       const chunkStart = offset;
-      chunks.push({
-        start: chunkStart,
-        end: chunkStart + ids.length - 1,
-        translation
-      });
+      chunks.push([chunkStart, chunkStart + ids.length - 1, translation]);
       offset += ids.length;
     }
     if (!chunks.length || chunks.length >= record.chunks.length) return null;
@@ -576,31 +578,18 @@
       deferredIds.push(...expected.slice(deferredIndex));
     }
     let segments = [];
+    const isChunkTuple = (value) => Array.isArray(value) && value.length === 3;
     if (Array.isArray(parsed.chunks) && parsed.chunks.length) {
-      // Current schema: one flat array plus a small monotonic segment number.
-      // This removes the only recursive shape from model output.
-      let marker = 0;
-      let current = null;
-      for (const chunk of parsed.chunks) {
-        const nextMarker = Number(chunk && chunk.segment);
-        if (!Number.isInteger(nextMarker) || nextMarker < 1 ||
-            (marker && nextMarker !== marker && nextMarker !== marker + 1)) {
-          return reject(`invalid flat segment marker ${String(chunk && chunk.segment)}`);
-        }
-        if (!current || nextMarker !== marker) {
-          current = { chunks: [] };
-          segments.push(current);
-          marker = nextMarker;
-        }
-        current.chunks.push(chunk);
-      }
+      // A complete response may contain one unit directly. The streaming
+      // protocol carries the same tuple leaves inside a `type: unit` record.
+      segments = [{ chunks: parsed.chunks }];
     } else if (Array.isArray(parsed.segments) && parsed.segments.length) {
-      // Structural recovery: some model responses accidentally put the next
-      // {chunks:[...]} container inside the current chunks array. Lift
-      // container-only entries into following segments while leaving every
-      // range/translation leaf untouched for strict validation.
+      // Complete aligned responses may group tuple leaves under `segments`.
+      // Keep the outer grouping for semantic-unit boundaries while rejecting
+      // keyed chunk objects at the leaf parser below.
       const liftContainers = (container) => {
-        const children = Array.isArray(container && container.chunks) ? container.chunks : [];
+        const children = Array.isArray(container) ? container :
+          Array.isArray(container && container.chunks) ? container.chunks : [];
         const out = [];
         let leaves = [];
         const flush = () => {
@@ -609,8 +598,9 @@
           leaves = [];
         };
         for (const child of children) {
-          if (child && !hasOwn(child, "start") && !hasOwn(child, "end") &&
-              Array.isArray(child.chunks)) {
+          if (child && !Array.isArray(child) &&
+              !hasOwn(child, "start") && !hasOwn(child, "end") &&
+              !hasOwn(child, "translation") && Array.isArray(child.chunks)) {
             flush();
             out.push(...liftContainers(child));
           } else {
@@ -620,7 +610,13 @@
         flush();
         return out;
       };
-      segments = parsed.segments.flatMap(liftContainers);
+      if (parsed.segments.every(isChunkTuple)) {
+        segments = [{ chunks: parsed.segments }];
+      } else {
+        segments = parsed.segments.flatMap((segment) =>
+          Array.isArray(segment) ? [{ chunks: segment }] : liftContainers(segment)
+        );
+      }
     }
     if (!segments.length && !deferredIds.length) {
       return reject("missing aligned segments or current cue items");
@@ -638,7 +634,7 @@
       for (const chunk of chunks) {
         const range = aiJsonlChunkIds({ expected }, chunk, cursor + ids.length);
         const chunkIds = range.ids;
-        const translation = normalizeTranslatedText(chunk && chunk.translation);
+        const translation = aiJsonlChunkTranslation(chunk);
         if (range.error || !chunkIds.length || !translation) {
           return reject(range.error
             ? range.error.replace(/JSONL/g, "aligned")

@@ -147,7 +147,7 @@ test("all segmentation lanes use compact alignment ranges", async () => {
         requestClass: trace.requestClass,
         maxTokens
       });
-      const unit = '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"译文"}]}\n';
+      const unit = '{"type":"unit","chunks":[[0,0,"译文"]]}\n';
       trace.onTextDelta(
         unit +
         '{"type":"done"}\n', true
@@ -194,16 +194,16 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   assert.match(prompts[0].content, /Punctuation carries meaning/);
   assert.match(prompts[0].content, /never silently concatenate two completed source sentences/);
   assert.match(prompts[0].content, /must not force a new display page/);
-  assert.match(prompts[0].content, /\{"start":0,"end":1,"translation":"\.\.\."\}/);
+  assert.match(prompts[0].content, /\[\[0,1,"\.\.\."\]\]/);
   assert.match(prompts[0].content, /zero-based and local to this request/);
   assert.match(prompts[0].content, /\[position,text\]/);
   assert.match(prompts[0].request, /CURRENT_CUES:\n\[\[0,"source"\]\]/);
   assert.doesNotMatch(prompts[0].request, /CURRENT_CUES:\n\[\[500/);
-  assert.match(prompts[2].content, /never enumerate an ids array/);
+  assert.match(prompts[2].content, /never enumerate an ids array/i);
   assert.match(prompts[3].content, /Punctuation carries meaning/);
-  assert.match(prompts[3].content, /\{"start":0,"end":1,"translation":"\.\.\."\}/);
+  assert.match(prompts[3].content, /\[\[0,1,"\.\.\."\]/);
   assert.match(prompts[3].content, /zero-based and local to this request/);
-  assert.match(prompts[3].content, /never enumerate an ids array/);
+  assert.match(prompts[3].content, /never enumerate an ids array/i);
   assert.match(prompts[5].content, /never translate it as a period/);
 });
 
@@ -223,7 +223,7 @@ test("a cancelled partial JSONL stream remains a cancellation, not a partial res
     appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       trace.onTextDelta(
-        '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"已完成"}]}\n',
+        '{"type":"unit","chunks":[[0,0,"已完成"]]}\n',
         false
       );
       const error = new Error("AI request cancelled");
@@ -264,8 +264,8 @@ test("a transport failure after malformed JSONL keeps the JSONL diagnostic code"
     appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       trace.onTextDelta(
-        '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"已完成"}]}\n' +
-        '{"type":"unit","chunks":[{"start":2,"end":2,"translation":"跳号"}]}\n',
+        '{"type":"unit","chunks":[[0,0,"已完成"]]}\n' +
+        '{"type":"unit","chunks":[[2,2,"跳号"]]}\n',
         false
       );
       const error = new Error("AI request failed");
