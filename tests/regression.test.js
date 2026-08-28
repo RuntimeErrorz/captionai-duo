@@ -160,17 +160,17 @@ const segmentItems = [
   { id: "2", text: "and its government.", startMs: 2200, endMs: 3500, hardAfter: true }
 ];
 const segmented = shared.segmentedTranslationsFromJsonText(JSON.stringify({ segments: [
-  { ids: ["0", "1", "2"], translation: "它拥有自己的警察、市长和政府。" }
+  { start: 0, end: 2, translation: "它拥有自己的警察、市长和政府。" }
 ] }), segmentItems);
 assert.equal(segmented.length, 3);
 assert.equal(segmented[0].translation, segmented[2].translation);
 assert.equal(segmented[0].unitId, "semantic-0-2");
 assert.equal(shared.segmentedTranslationsFromJsonText(JSON.stringify({ segments: [
-  { ids: ["0", "2"], translation: "invalid" }
+  { start: 0, end: 0, translation: "invalid" }
 ] }), segmentItems), null);
 assert.equal(shared.segmentedTranslationsFromJsonText(JSON.stringify({ segments: [
-  { ids: ["0", "1"], translation: "invalid hard-boundary merge" },
-  { ids: ["2"], translation: "ok" }
+  { start: 0, end: 1, translation: "invalid hard-boundary merge" },
+  { start: 2, end: 2, translation: "ok" }
 ] }), [{ ...segmentItems[0], hardAfter: true }, segmentItems[1], segmentItems[2]]), null);
 
 // Rolling YouTube cues can make one valid semantic sentence span more than
@@ -181,14 +181,14 @@ const rollingItems = [
   { id: "44", text: "that awesome flow.", startMs: 203760, endMs: 211760, hardAfter: false }
 ];
 const rollingSegment = shared.segmentedTranslationsFromJsonText(JSON.stringify({ segments: [
-  { ids: ["42", "43", "44"], translation: "你可以在周五晚上把这里弄得一团糟，也不用担心，而且动线也很棒。" }
+  { start: 0, end: 2, translation: "你可以在周五晚上把这里弄得一团糟，也不用担心，而且动线也很棒。" }
 ] }), rollingItems);
 assert.equal(rollingSegment.length, 3);
 assert.equal(rollingSegment[0].unitId, "semantic-42-44");
 
 const diagnostics = {};
 assert.equal(shared.segmentedTranslationsFromJsonText(JSON.stringify({ segments: [
-  { ids: ["42", "43", "44"], translation: "too long" }
+  { start: 0, end: 2, translation: "too long" }
 ] }), rollingItems.map((item, index) => index === 2 ? { ...item, endMs: 240201 } : item), diagnostics), null);
 assert.match(diagnostics.reason, /oversized segment/);
 

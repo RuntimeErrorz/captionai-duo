@@ -420,7 +420,7 @@ function queueDeepseekSpeculativeRequest(regionIndex, startValue) {
     ? deepseekCommitState(regionIndex) : null;
   if (!state || !Number.isInteger(start) || start <= state.cursor || start > state.limitEnd) return;
   deepseekPrefetchState(state);
-  if (state.prefetchQueued.has(start) || state.prefetchResponses.has(start)) return;
+  if (state.prefetchQueued.has(start) || state.prefetchResponses.has(start) || Array.from(captionSession.deepseekRequestMeta.values()).some((request) => request && request.regionIndex === regionIndex && Number(request.requestStart) === start)) return;
   state.prefetchQueued.add(start);
   state.prefetchQueue.push(start);
   pumpDeepseekSpeculativeRequests(regionIndex, state);
@@ -447,7 +447,6 @@ function pumpDeepseekSpeculativeRequests(regionIndex, stateValue) {
     if (!launchDeepseekSpeculativeRequest(regionIndex, state, start, end)) continue;
   }
 }
-
 function takeDeepseekPrefetchedResponse(stateValue) {
   const state = deepseekPrefetchState(stateValue);
   if (!state) return null;
@@ -486,10 +485,9 @@ function deepseekTrimPrefetchCandidate(requestValue, responseValue, cursorValue)
   return {
     start,
     request: { ...requestValue, requestStart: start, commitFloor: Math.max(cursor, start) },
-    response: { ...responseValue, translations }
+    response: { ...responseValue, translations, ...(responseValue.error !== undefined ? { error: responseValue.error } : {}), ...(responseValue.errorCode !== undefined ? { errorCode: responseValue.errorCode } : {}), ...(responseValue.providerCode !== undefined ? { providerCode: responseValue.providerCode } : {}), ...(responseValue.streamError !== undefined ? { streamError: responseValue.streamError } : {}) }
   };
 }
-
 function reconcileDeepseekPrefetchCandidates(stateValue, cursorValue) {
   const state = deepseekPrefetchState(stateValue);
   const cursor = Math.floor(Number(cursorValue));
@@ -504,7 +502,6 @@ function reconcileDeepseekPrefetchCandidates(stateValue, cursorValue) {
     });
   }
 }
-
 function storeDeepseekPrefetchCandidate(stateValue, request, response) {
   const state = deepseekPrefetchState(stateValue);
   if (!state) return null;
@@ -514,7 +511,6 @@ function storeDeepseekPrefetchCandidate(stateValue, request, response) {
   state.prefetchResponses.set(candidate.start, candidate);
   return candidate;
 }
-
 function deepseekNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
   const state = deepseekPrefetchState(stateValue);
   const cursor = Math.floor(Number(cursorValue));
@@ -531,7 +527,6 @@ function deepseekNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
   }
   return Number.isFinite(next) ? next : -1;
 }
-
 function deepseekBridgeRequestItems(requestStartValue, futureStartValue, maxValue, limitEndValue) {
   const requestStart = Math.floor(Number(requestStartValue));
   const futureStart = Math.floor(Number(futureStartValue));
@@ -566,12 +561,20 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     if (stored && stored.request && (stored.request === request ||
         String(stored.request.requestId || "") === requestId)) state.prefetchResponses.delete(key);
   }
-  const bufferedResponse = deepseekResponseWithBufferedProgress(request, resp, state);
-  if (bufferedResponse && bufferedResponse !== resp) {
-    resp = bufferedResponse;
-    runtimeError = null;
+  const originalRuntimeError = runtimeError; const bufferedResponse = deepseekResponseWithBufferedProgress(request, resp, state);
+  if (bufferedResponse && bufferedResponse !== resp) { resp = bufferedResponse; runtimeError = null; }
+  const cancelled = (typeof deepseekUpdateDisplayError === "function" && deepseekUpdateDisplayError(regionIndex, request, originalRuntimeError, resp), !!(runtimeError && (runtimeError.cancelled || YTDS_SHARED.aiErrorDescriptor(runtimeError).code === "AI_CANCELLED")) || !!(resp && resp.cancelled) || YTDS_SHARED.aiErrorDescriptor(resp).code === "AI_CANCELLED");
+  if (cancelled) {
+    emitCaptionStateTransition("semantic-response", "cancelled", { requestId, requestStart, requestEnd });
+    if (request.prefetch) pumpDeepseekSpeculativeRequests(regionIndex, state);
+    else { clearPendingTimer(); repaintActiveDeepseekTranslation(); }
+    if (state.cursor <= state.targetThrough && state.cursor <= state.limitEnd &&
+        (!request.prefetch || state.cursor === requestStart)) {
+      queueMicrotask(() => pumpDeepseekCommitRegion(regionIndex,
+        request.prefetch ? true : deepseekKeepAcceleratedUrgentLane(effectiveUrgent, state)));
+    }
+    return;
   }
-
   if (runtimeError) {
     if (request.prefetch) {
       const rateLimited = noteDeepseekSpeculativeRateLimit(null, runtimeError);
@@ -593,7 +596,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
       scheduleDeepSeekBatchRetry(
         requestStart, requestStart, requestEnd, reqVid, reqEpoch,
         runtimeError.message || "runtime unavailable", { urgent: effectiveUrgent, error: runtimeError }
-      );
+      ); repaintActiveDeepseekTranslation();
     }
     return;
   }
@@ -610,7 +613,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     }
     const error = resp && resp.error || "empty background response";
     emitDebug("batch-rejected", {
-      regionIndex, requestStart, requestEnd, error,
+      regionIndex, requestStart, requestEnd, error, errorCode: resp && resp.errorCode || "", providerCode: resp && resp.providerCode || "",
       needsKey: !!(resp && resp.needsKey), timeout: !!(resp && resp.timeout),
       rateLimited: !!(resp && resp.rateLimited),
       retryAfterMs: Number(resp && resp.retryAfterMs) || 0,
@@ -632,7 +635,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
         rateLimited: !!(resp && resp.rateLimited),
         retryAfterMs: Number(resp && resp.retryAfterMs) || 0,
         urgent: effectiveUrgent, error: resp
-      });
+      }); repaintActiveDeepseekTranslation();
     }
     return;
   }
@@ -644,12 +647,11 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     }
     return;
   }
-
   emitDebug("deepseek-batch-response", {
     regionIndex, requestStart, requestEnd,
     itemCount: Number(request.itemCount) || 0,
     urgent: effectiveUrgent,
-    modelDeferredIds: Array.isArray(resp.deferredIds) ? resp.deferredIds : [],
+    modelDeferredIds: Array.isArray(resp.deferredIds) ? resp.deferredIds : [], errorCode: resp.errorCode || "", providerCode: resp.providerCode || "",
     httpDiagnostics: resp.httpDiagnostics || { attempts: [] }
   });
   emitCaptionStateTransition("semantic-response", "accepted", {
@@ -722,7 +724,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   } else if (!request.prefetch) {
     scheduleDeepSeekBatchRetry(
       requestStart, requestStart, requestEnd, reqVid, reqEpoch,
-      "no immutable semantic prefix", { urgent: effectiveUrgent, bypassCache: true, errorCode: resp && resp.errorCode || "AI_NO_PROGRESS", providerCode: resp && resp.providerCode }
+      "no immutable semantic prefix", { urgent: effectiveUrgent, bypassCache: true, error: resp && resp.error || "", errorCode: resp && resp.errorCode || "AI_NO_PROGRESS", providerCode: resp && resp.providerCode }
     );
     repaintActiveDeepseekTranslation();
     return;
@@ -735,7 +737,6 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     ));
   }
 }
-
 function launchDeepseekSpeculativeRequest(regionIndex, state, startValue, endValue) {
   const start = Math.floor(Number(startValue));
   let requestEnd = Math.min(state.limitEnd, Math.floor(Number(endValue)));
@@ -790,7 +791,6 @@ function launchDeepseekSpeculativeRequest(regionIndex, state, startValue, endVal
   });
   return true;
 }
-
 function deepseekRequestById(requestId) {
   const wanted = String(requestId || "");
   if (!wanted) return null;
@@ -799,7 +799,6 @@ function deepseekRequestById(requestId) {
   }
   return null;
 }
-
 function cancelDeepseekPrefetchRequests() {
   for (const [inflightKey, request] of Array.from(captionSession.deepseekRequestMeta.entries())) {
     if (!request || request.urgent) continue;
@@ -822,7 +821,6 @@ function cancelDeepseekPrefetchRequests() {
     state.prefetchResponses.clear();
   }
 }
-
 function scheduleDeepSeekBatchRetry(
   gIdx, start, end, videoId, epoch, reason, retryOptions
 ) {
@@ -830,13 +828,15 @@ function scheduleDeepSeekBatchRetry(
   const attempt = captionSession.deepseekRetryCounts.get(key) || 0;
   const rateLimited = !!(retryOptions && retryOptions.rateLimited);
   const errorInfo = YTDS_SHARED.aiErrorDescriptor(retryOptions && retryOptions.error || retryOptions || { message: reason });
+  const errorMessage = YTDS_SHARED.aiErrorMessage(retryOptions && retryOptions.error != null ? retryOptions.error : retryOptions, reason);
   const maxAttempts = rateLimited ? DEEPSEEK_RATE_RETRY_LIMIT
     : /^(?:HTTP_\d+|AI_CONFIG_MISSING|AI_KEY_MISSING)$/.test(errorInfo.code) ? 0 : DEEPSEEK_COLD_RETRY_DELAYS_MS.length;
   if (attempt >= maxAttempts) {
     const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
     if (Number.isInteger(regionIndex)) {
       captionSession.deepseekExhaustedRegions.set(regionIndex, {
-        start, end, videoId, epoch, reason: String(reason || ""), errorCode: errorInfo.code, providerCode: errorInfo.providerCode
+        start, end, videoId, epoch, reason: String(reason || ""), errorMessage,
+        errorCode: errorInfo.code, providerCode: errorInfo.providerCode
       });
     }
     emitCaptionStateTransition("semantic-retry", "exhausted", {

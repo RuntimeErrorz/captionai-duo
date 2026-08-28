@@ -28,7 +28,7 @@ const MAX_TRANSLATE_CHARS = 4000;
 // remain independent safety limits.
 const MAX_BATCH_ITEMS = 320;
 const MAX_PROMPT_SOURCE_CHARS = 28000;
-const AI_PROMPT_CACHE_VERSION = "prompt-v29-deepseek-stable-prefix-compact-rows-punctuation";
+const AI_PROMPT_CACHE_VERSION = "prompt-v31-deepseek-local-alignment-coordinates";
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";
 const AI_RESPONSE_CACHE_MAX_ENTRIES = 96;
 const AI_RESPONSE_CACHE_MAX_CHARS = 2000000;
@@ -269,6 +269,10 @@ function aiResponseCacheId(config, items, targetLang, sourceLang, contextBefore,
     targetLang: String(targetLang || ""),
     sourceLang: String(sourceLang || ""),
     current: YTDS_SHARED.compactAiPromptCueRows(currentItems),
+    // The model sees request-local positions, but cached translations still
+    // contain the caller's absolute IDs. Keep those coordinates in the cache
+    // identity so equal text at different timeline locations cannot collide.
+    absoluteIds: currentItems.map((item) => String(item && item.id || "")),
     past: YTDS_SHARED.compactAiPromptContextRows(preparedContext.past),
     future: YTDS_SHARED.compactAiPromptContextRows(preparedContext.future)
   });

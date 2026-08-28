@@ -151,12 +151,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const deferredIds = translations.deferredIds || [];
         const streamPartial = !!translations.streamPartial;
         const streamError = String(translations.error || translations.streamError || "");
-        const errorInfo = streamError
+        const errorInfo = streamError || translations.errorCode
           ? YTDS_SHARED.aiErrorDescriptor({
               errorCode: translations.errorCode || "AI_JSONL_INVALID",
               providerCode: translations.providerCode
             })
           : { code: "", providerCode: "" };
+        const cancelled = !!translations.cancelled || errorInfo.code === "AI_CANCELLED";
         const httpDiagnostics = translations.httpDiagnostics || { attempts: [] };
         if (msg.debug) appendDebug("background", "batch-complete", {
           durationMs: Date.now() - batchStarted,
@@ -165,21 +166,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           deferredCount: deferredIds.length,
           attemptCount: Array.isArray(httpDiagnostics.attempts) ? httpDiagnostics.attempts.length : 0,
           streamPartial,
+          errorCode: errorInfo.code,
+          providerCode: errorInfo.providerCode,
           failures: failures.map(String)
         });
-        persistAiStatus(
-          failures.length || streamError ? "partial" : "",
-          streamError || failures[0], errorInfo.code
-        );
+        if (!cancelled && msg.fastPath !== true) {
+          persistAiStatus(
+            failures.length || streamError || translations.errorCode ? "partial" : "",
+            streamError || failures[0], errorInfo.code
+          );
+        }
         sendResponse({
-          ok: true,
+          ok: !cancelled,
           translations,
-          ...(streamError ? { error: streamError, errorCode: errorInfo.code,
+          ...(streamError || translations.errorCode || cancelled ? { error: streamError, errorCode: errorInfo.code,
             providerCode: errorInfo.providerCode } : {}),
           deferredIds,
           httpDiagnostics,
-          partial: failures.length > 0 || streamPartial,
-          streamPartial
+          partial: !cancelled && (failures.length > 0 || streamPartial),
+          streamPartial,
+          cancelled
         });
       })
       .catch((err) => {
@@ -192,7 +198,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const backgroundRateLimit = !msg.urgent && !!(err && err.rateLimited) &&
           !localBackpressure;
         const errorInfo = YTDS_SHARED.aiErrorDescriptor(err);
-        if (!(err && err.cancelled) && !localBackpressure && !backgroundRateLimit) {
+        if (!(err && err.cancelled) && msg.fastPath !== true &&
+            !localBackpressure && !backgroundRateLimit) {
           persistAiStatus(err && err.needsKey ? "key" :
             err && err.timeout ? "timeout" : err && err.rateLimited ? "limited" : "error",
             err, errorInfo.code);
@@ -200,6 +207,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (msg.debug) appendDebug("background", "batch-error", {
           durationMs: Date.now() - batchStarted,
           error: String(err),
+          errorCode: errorInfo.code,
+          providerCode: errorInfo.providerCode,
           httpDiagnostics: err && err.httpDiagnostics || { attempts: [] }
         });
         sendResponse({

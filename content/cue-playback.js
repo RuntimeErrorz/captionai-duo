@@ -157,6 +157,7 @@ function focusDeepseekAfterSeek(timeMs) {
   }
   captionSession.deepseekRetryCounts.clear();
   captionSession.deepseekExhaustedRegions.clear();
+  if (captionSession.deepseekVisibleErrors) captionSession.deepseekVisibleErrors.clear();
   emitDebug("deepseek-focus-changed", {
     previousBatchIndex,
     batchIndex,
@@ -362,12 +363,11 @@ function renderTranslationForCue(idx, cue, displayedSource, immediatePending) {
       return;
     }
     const regionIndex = captionSession.deepseekGroupToCommitRegion[captionSession.activeGroupIdx];
-    if (captionSession.deepseekExhaustedRegions.has(regionIndex)) {
+    const displayError = captionSession.deepseekExhaustedRegions.get(regionIndex) ||
+      captionSession.deepseekVisibleErrors && captionSession.deepseekVisibleErrors.get(regionIndex);
+    if (displayError) {
       clearPendingTimer();
-      setTranslation(
-        deepseekTranslationErrorText(captionSession.deepseekExhaustedRegions.get(regionIndex)),
-        origText, "error"
-      );
+      setTranslation(deepseekTranslationErrorText(displayError), origText, "error");
       return;
     }
     armPendingTranslationIndicator(captionSession.activeGroupIdx, immediatePending);

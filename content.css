@@ -55,7 +55,16 @@ html.ytds-active .caption-window {
   word-break: break-word;
 }
 
-.ytds-trans.ytds-translation-error { font-style: italic; }
+.ytds-trans.ytds-translation-error {
+  /* Errors are deliberately distinct from normal translated subtitles. The
+     important code/message remains readable even when the user's translation
+     font is decorative or unusually large. */
+  font-family: "Cascadia Mono", "SFMono-Regular", "Roboto Mono", Consolas,
+    "Liberation Mono", "Courier New", ui-monospace, monospace !important;
+  font-size: 0.78em !important;
+  font-style: normal;
+  letter-spacing: 0.01em;
+}
 
 /* Both rows share one grid track, whose width is determined by the longer
    subtitle. Only the four OUTER corners stay rounded; the joined inner edges

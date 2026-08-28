@@ -374,7 +374,12 @@ test("DeepSeek can align worse and worse across original cue boundaries", () => 
     { ids: items.slice(0, secondWorse + 1).map((item) => item.id), translation: "随着全球经济变得越来越糟，" },
     { ids: items.slice(secondWorse + 1).map((item) => item.id), translation: "权力将更加依赖中国。" }
   ];
-  const response = JSON.stringify({ segments: [{ ids: items.map((item) => item.id), chunks }] });
+  const responseChunks = chunks.map((chunk) => ({
+    start: Number(chunk.ids[0]),
+    end: Number(chunk.ids.at(-1)),
+    translation: chunk.translation
+  }));
+  const response = JSON.stringify({ segments: [{ chunks: responseChunks }] });
   const parsed = shared.alignedTranslationsFromJsonText(response, items, "zh-CN");
 
   assert.ok(parsed);

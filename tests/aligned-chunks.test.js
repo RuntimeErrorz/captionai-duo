@@ -6,6 +6,12 @@ const { loadShared } = require("./helpers");
 
 const shared = loadShared();
 const lengthMeasure = (text) => String(text).length;
+const responseChunk = (start, end, translation, extra = {}) => ({
+  ...extra,
+  start: Number(start),
+  end: Number(end),
+  translation
+});
 
 const successorItems = [
   { id: "221", text: "The Shah is letting this happen,", startMs: 569850, endMs: 571650, hardAfter: false },
@@ -15,10 +21,9 @@ const successorItems = [
 ];
 
 const successorResponse = JSON.stringify({ segments: [{
-  ids: ["221", "222", "223", "224"],
   chunks: [
-    { ids: ["221", "222"], translation: "国王允许这种情况发生，但不久后他去世了，" },
-    { ids: ["223", "224"], translation: "他的儿子讨厌议会，不喜欢议会限制他的权力。" }
+    responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了，"),
+    responseChunk(2, 3, "他的儿子讨厌议会，不喜欢议会限制他的权力。")
   ]
 }] });
 
@@ -44,10 +49,9 @@ test("speaker-turn markers create a visible space in aligned CJK display text", 
     { id: "5", text: "Okay.", startMs: 1100, endMs: 1400, hardAfter: false }
   ];
   const response = JSON.stringify({ segments: [{
-    ids: items.map((item) => item.id),
     chunks: [
-      { ids: ["0", "1", "2"], translation: "是吗？" },
-      { ids: ["3", "4", "5"], translation: "对，对的。" }
+      responseChunk(0, 2, "是吗？"),
+      responseChunk(3, 5, "对，对的。")
     ]
   }] });
   const output = shared.alignedTranslationsFromJsonText(response, items, "zh-CN");
@@ -66,10 +70,10 @@ test("speaker-turn markers create a visible space in aligned CJK display text", 
   assert.equal(plan.pages[0].translation, "是吗？ 对，对的");
 });
 
-test("compact aligned response derives segment coverage from chunk ids", () => {
+test("compact aligned response derives segment coverage from ranges", () => {
   const compact = JSON.stringify({ segments: [{ chunks: [
-    { ids: ["221", "222"], translation: "国王允许这种情况发生，但不久后他去世了，" },
-    { ids: ["223", "224"], translation: "他的儿子讨厌议会，不喜欢议会限制他的权力。" }
+    responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了，"),
+    responseChunk(2, 3, "他的儿子讨厌议会，不喜欢议会限制他的权力。")
   ] }] });
   const output = shared.alignedTranslationsFromJsonText(
     compact, successorItems, "zh-CN"
@@ -82,9 +86,9 @@ test("compact aligned response derives segment coverage from chunk ids", () => {
 
 test("flat alignment schema groups chunks by monotonic segment number", () => {
   const flat = JSON.stringify({ chunks: [
-    { segment: 1, ids: ["221", "222"], translation: "国王允许这种情况发生，但不久后他去世了，" },
-    { segment: 1, ids: ["223"], translation: "他的儿子讨厌议会，" },
-    { segment: 2, ids: ["224"], translation: "不喜欢议会限制他的权力。" }
+    responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了，", { segment: 1 }),
+    responseChunk(2, 2, "他的儿子讨厌议会，", { segment: 1 }),
+    responseChunk(3, 3, "不喜欢议会限制他的权力。", { segment: 2 })
   ] });
   const output = shared.alignedTranslationsFromJsonText(flat, successorItems, "zh-CN");
   assert.ok(output);
@@ -97,10 +101,9 @@ test("rolling alignment accepts only a contiguous model-deferred suffix", () => 
   const partial = JSON.stringify({
     chunks: [{
       segment: 1,
-      ids: ["221", "222"],
-      translation: "国王允许这种情况发生，但不久后他去世了。"
+      ...responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了。")
     }],
-    deferred_ids: ["223", "224"]
+    deferred_start: 2
   });
   const diagnostics = {};
   const output = shared.alignedTranslationsFromJsonText(
@@ -112,7 +115,7 @@ test("rolling alignment accepts only a contiguous model-deferred suffix", () => 
   assert.equal(diagnostics.deferredStart, "223");
 
   const allDeferred = shared.alignedTranslationsFromJsonText(
-    JSON.stringify({ chunks: [], deferred_ids: ["221", "222", "223", "224"] }),
+    JSON.stringify({ chunks: [], deferred_start: 0 }),
     successorItems,
     "zh-CN"
   );
@@ -124,12 +127,12 @@ test("rolling alignment accepts only a contiguous model-deferred suffix", () => 
 test("rolling alignment rejects a deferred hole or duplicated completed token", () => {
   for (const response of [
     {
-      chunks: [{ segment: 1, ids: ["221", "222"], translation: "前半句" }],
-      deferred_ids: ["224"]
+      chunks: [responseChunk(0, 1, "前半句", { segment: 1 })],
+      deferred_start: 3
     },
     {
-      chunks: [{ segment: 1, ids: ["221", "222", "223", "224"], translation: "整句" }],
-      deferred_ids: ["224"]
+      chunks: [responseChunk(0, 3, "整句", { segment: 1 })],
+      deferred_start: 3
     }
   ]) {
     const diagnostics = {};
@@ -140,11 +143,11 @@ test("rolling alignment rejects a deferred hole or duplicated completed token", 
   }
 });
 
-test("misnested legacy chunk containers are lifted without changing leaf coverage", () => {
+test("misnested chunk containers are lifted without changing leaf coverage", () => {
   const misnested = JSON.stringify({ segments: [{ chunks: [
-    { ids: ["221", "222"], translation: "国王允许这种情况发生，但不久后他去世了。" },
+    responseChunk(0, 1, "国王允许这种情况发生，但不久后他去世了。"),
     { chunks: [
-      { ids: ["223", "224"], translation: "他的儿子讨厌议会，不喜欢议会限制他的权力。" }
+      responseChunk(2, 3, "他的儿子讨厌议会，不喜欢议会限制他的权力。")
     ] }
   ] }] });
   const output = shared.alignedTranslationsFromJsonText(
@@ -156,19 +159,19 @@ test("misnested legacy chunk containers are lifted without changing leaf coverag
   assert.deepEqual(Array.from(output[2].alignedChunks[0].ids), ["223", "224"]);
 });
 
-test("aligned response rejects omitted, reordered and cross-boundary chunk ids", () => {
+test("aligned response rejects omitted, reordered and cross-boundary ranges", () => {
   for (const [response, currentItems, expectedReason] of [
-    [{ segments: [{ ids: ["221", "222", "223", "224"], chunks: [
-      { ids: ["221", "222"], translation: "前" },
-      { ids: ["224"], translation: "漏项" }
-    ] }] }, successorItems, /unexpected aligned chunk id/],
-    [{ segments: [{ ids: ["221", "222", "223", "224"], chunks: [
-      { ids: ["221", "223"], translation: "乱序" },
-      { ids: ["222", "224"], translation: "乱序" }
-    ] }] }, successorItems, /unexpected aligned chunk id/],
-    [{ segments: [{ ids: ["221", "222", "223", "224"], chunks: [
-      { ids: ["221", "222"], translation: "越界" },
-      { ids: ["223", "224"], translation: "后" }
+    [{ segments: [{ chunks: [
+      responseChunk(0, 1, "前"),
+      responseChunk(3, 3, "漏项")
+    ] }] }, successorItems, /unexpected aligned position/],
+    [{ segments: [{ chunks: [
+      responseChunk(0, 0, "乱序"),
+      responseChunk(2, 3, "乱序")
+    ] }] }, successorItems, /unexpected aligned position/],
+    [{ segments: [{ chunks: [
+      responseChunk(0, 1, "越界"),
+      responseChunk(2, 3, "后")
     ] }] }, [{ ...successorItems[0], hardAfter: true }, ...successorItems.slice(1)], /hard boundary/]
   ]) {
     const diagnostics = {};
@@ -177,6 +180,21 @@ test("aligned response rejects omitted, reordered and cross-boundary chunk ids",
     ), null);
     assert.match(diagnostics.reason, expectedReason);
   }
+});
+
+test("aligned response rejects legacy ids arrays", () => {
+  const diagnostics = {};
+  const output = shared.alignedTranslationsFromJsonText(
+    JSON.stringify({ segments: [{
+      ids: ["221"],
+      chunks: [{ ids: ["221"], translation: "旧格式" }]
+    }] }),
+    successorItems.slice(0, 1),
+    "zh-CN",
+    diagnostics
+  );
+  assert.equal(output, null);
+  assert.match(diagnostics.reason, /legacy ids arrays are not supported/);
 });
 
 test("browser packing keeps the next-guy appositive paired with its translation", () => {
@@ -238,8 +256,7 @@ test("coarse model alignment stays valid and only its oversized chunk is paginat
   const ids = items.map((item) => item.id);
   const diagnostics = {};
   const coarse = JSON.stringify({ segments: [{
-    ids,
-    chunks: [{ ids, translation: "整段不可拆的粗粒度译文。" }]
+    chunks: [responseChunk(0, items.length - 1, "整段不可拆的粗粒度译文。")]
   }] });
 
   const coarseResult = shared.alignedTranslationsFromJsonText(
@@ -259,13 +276,13 @@ test("coarse model alignment stays valid and only its oversized chunk is paginat
   assert.ok(coarsePlan.memberPages[ids[0]] < coarsePlan.memberPages[ids.at(-1)]);
 
   const ranges = [[0, 15], [15, 32], [32, items.length]];
-  const chunks = ranges.map(([from, to], index) => ({
-    ids: ids.slice(from, to),
-    translation: [`小费和加班费不征税，`, `老年人的社会保障不征税，并允许扣除购车贷款利息，`,
+  const chunks = ranges.map(([from, to], index) => responseChunk(
+    from, to - 1,
+    [`小费和加班费不征税，`, `老年人的社会保障不征税，并允许扣除购车贷款利息，`,
       `但汽车必须在美国制造，并允许企业百分之百费用化。`][index]
-  }));
+  ));
   const repaired = shared.alignedTranslationsFromJsonText(
-    JSON.stringify({ segments: [{ ids, chunks }] }), items, "zh-CN"
+    JSON.stringify({ segments: [{ chunks }] }), items, "zh-CN"
   );
   assert.ok(repaired);
   assert.equal(repaired[0].alignedChunks.length, 3);

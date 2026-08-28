@@ -325,10 +325,11 @@
   }
 
   // Select the immutable prefix that a rolling semantic request may commit.
-  // The caller deliberately distrusts model-provided deferred_ids: every
-  // complete unit touching the trailing guard is carried to the next request
-  // as a whole. Only a contiguous prefix beginning at cursor can be returned,
-  // so no response can create a hole or overwrite an earlier decision.
+  // The caller deliberately derives any deferred suffix from validated
+  // coverage: every complete unit touching the trailing guard is carried to
+  // the next request as a whole. Only a contiguous prefix beginning at cursor
+  // can be returned, so no response can create a hole or overwrite an earlier
+  // decision.
   function monotonicSemanticCommitPlan(
     translations, cursorValue, requestEndValue, regionEndValue, guardItemsValue,
     commitFloorValue, minimumRunwayItemsValue

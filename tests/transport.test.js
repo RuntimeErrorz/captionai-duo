@@ -11,6 +11,7 @@ const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
 const semanticSource = ["content/semantic-requests.js", "content/semantic.js"].map((file) =>
   fs.readFileSync(path.join(root, file), "utf8")).join("\n");
+const displaySource = fs.readFileSync(path.join(root, "content/display.js"), "utf8");
 const playbackSource = fs.readFileSync(path.join(root, "content/cue-playback.js"), "utf8");
 const networkSource = fs.readFileSync(path.join(root, "background/network.js"), "utf8");
 const translationSource = fs.readFileSync(path.join(root, "background/translation.js"), "utf8");
@@ -151,6 +152,7 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       transInflight: new Set(),
       deepseekRetryCounts: new Map([[retryKey, retryAttempt]]),
       deepseekExhaustedRegions: new Map(),
+      deepseekVisibleErrors: new Map(),
       transCache: new Map(),
       deepseekUnitCache: new Map(),
       deepseekSourceCache: new Map(),
@@ -896,7 +898,7 @@ test("malformed JSONL falls back to a bounded prefix and exposes the suffix", as
       return {
         raw: JSON.stringify({
           segments: Array.from({ length: 96 }, (_value, id) => ({
-            ids: [String(id)], translation: "译文"
+            start: id, end: id, translation: "译文"
           }))
         }),
         diagnostics: { attempts: [] }
@@ -948,7 +950,7 @@ test("urgent and speculative lanes share one exact in-flight provider request", 
       return new Promise((resolve) => {
         completionResolve = () => {
           trace.onTextDelta(
-            '{"type":"unit","chunks":[{"ids":["0"],"translation":"译文"}]}\n' +
+            '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"译文"}]}\n' +
             '{"type":"done"}\n', true
           );
           resolve({ raw: "", diagnostics: { attempts: [] } });
@@ -1193,6 +1195,203 @@ test("same semantic region prefetches distinct future ranges concurrently", () =
 
   callbacks[0]({ ok: false, error: "temporary prefetch failure", netfail: true });
   assert.equal(harness.messages[2].requestStart, 256);
+});
+
+test("an active speculative range cannot be queued again while the runway is full", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    playbackRate: 3, deferResponses: true
+  });
+  const queue = vm.runInContext("queueDeepseekSpeculativeRequest", harness.context);
+  queue(0, 64);
+
+  // Fill the remaining speculative slots. The duplicate enqueue below must
+  // be rejected while the original 64-range is still the single writer.
+  for (const start of [160, 256, 352]) {
+    harness.context.captionSession.deepseekRequestMeta.set(`dsp:0:${start}`, {
+      requestId: `prefetch:${start}`, prefetch: true, urgent: false,
+      regionIndex: 0, requestStart: start, requestEnd: start + 95
+    });
+  }
+  queue(0, 64);
+  assert.equal(harness.state.prefetchQueue.length, 0);
+
+  // Simulate all four requests settling, then pump the scheduler as their
+  // callbacks do. The old implementation launches the same 64-range again.
+  harness.context.captionSession.deepseekRequestMeta.clear();
+  harness.context.captionSession.transInflight.clear();
+  vm.runInContext("pumpDeepseekSpeculativeRequests(0, captionSession.deepseekCommitStateByRegion.get(0))", harness.context);
+  assert.deepEqual(
+    harness.messages.map((message) => message.requestStart),
+    [64]
+  );
+});
+
+test("a malformed prefetch keeps its diagnostic when promoted to the visible writer", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
+  const sessionToken = harness.context.captureCaptionSession();
+  const request = {
+    requestId: "prefetch:0:1:64-159", prefetch: true, regionIndex: 0,
+    requestStart: 64, requestEnd: 159, commitFloor: 64, limitEnd: 500,
+    effectiveGuardItems: 16, reqEpoch: 1, reqVid: "video", sessionToken,
+    focusGeneration: 0, progressTranslations: [], progressRecoveryTranslations: []
+  };
+  const translations = rangeSemanticResponse(64, 95);
+  const response = { ok: true, translations, partial: true, streamPartial: true };
+  Object.defineProperties(response, {
+    error: { value: "invalid JSONL line" },
+    errorCode: { value: "AI_JSONL_INVALID" }
+  });
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle(request, response, null);
+  harness.state.cursor = 64;
+
+  const take = vm.runInContext("takeDeepseekPrefetchedResponse", harness.context);
+  const promoted = take(harness.state);
+  assert.equal(promoted.request.prefetch, false);
+  assert.equal(promoted.response.errorCode, "AI_JSONL_INVALID");
+  assert.equal(promoted.response.error, "invalid JSONL line");
+});
+
+test("terminal translation errors retain their code and original safe message", () => {
+  const context = {
+    String,
+    YTDS_SHARED: loadShared(),
+    t: (_key, fallback) => fallback
+  };
+  vm.createContext(context);
+  vm.runInContext(displaySource, context, { filename: "content/display.js" });
+  const format = vm.runInContext("deepseekTranslationErrorText", context);
+
+  assert.equal(
+    format({
+      errorCode: "HTTP_400", providerCode: "invalid_request_error",
+      errorMessage: "AI HTTP 400"
+    }),
+    "Translation failed [HTTP_400 / invalid_request_error] — AI HTTP 400"
+  );
+  assert.equal(
+    format({ errorMessage: "provider connection closed before a response" }),
+    "Translation failed [AI_REQUEST_FAILED] — provider connection closed before a response"
+  );
+  assert.match(
+    format({ errorMessage: "Bearer secret-value" }),
+    /Bearer \[REDACTED\]/
+  );
+});
+
+test("a live JSONL error replaces the pending ellipsis with its diagnostic", () => {
+  const painted = [];
+  const context = {
+    Map,
+    Number,
+    String,
+    YTDS_SHARED: loadShared(),
+    captionSession: {
+      activeGroupIdx: 0,
+      activeCueIdx: 0,
+      cueList: [{ text: "source", start: 0, end: 1000 }],
+      deepseekGroupToCommitRegion: [0],
+      deepseekExhaustedRegions: new Map(),
+      deepseekVisibleErrors: new Map([[0, {
+        errorCode: "AI_JSONL_INVALID",
+        errorMessage: "invalid JSONL line"
+      }]]),
+      transCache: new Map(),
+      deepseekDisplayCache: new Map()
+    },
+    groupKey: (id) => `video g${id}`,
+    manualTranslationSelected: () => false,
+    sourceForDisplayedCue: () => "source",
+    clearPendingTimer: () => {},
+    armPendingTranslationIndicator: () => {},
+    setTranslation: (text, _source, kind) => painted.push({ text, kind }),
+    t: (_key, fallback) => fallback
+  };
+  vm.createContext(context);
+  vm.runInContext(displaySource, context, { filename: "content/display.js" });
+  vm.runInContext("repaintActiveDeepseekTranslation()", context);
+
+  assert.deepEqual(painted.at(-1), {
+    text: "Translation failed [AI_JSONL_INVALID] — invalid JSONL line",
+    kind: "error"
+  });
+});
+
+test("a partial JSONL error is retained while the commit range is retried", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
+  vm.runInContext(displaySource, harness.context, { filename: "content/display.js" });
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle({
+    regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
+    requestId: "commit:0:1:0-159", urgent: true, itemCount: 160,
+    maxRequestItems: 160, sessionToken: harness.context.captureCaptionSession()
+  }, {
+    ok: true, translations: [], partial: true, streamPartial: true,
+    error: "invalid JSONL line", errorCode: "AI_JSONL_INVALID"
+  }, null);
+
+  const visibleError = harness.context.captionSession.deepseekVisibleErrors.get(0);
+  assert.equal(visibleError.errorCode, "AI_JSONL_INVALID");
+  assert.equal(visibleError.providerCode, "");
+  assert.equal(visibleError.errorMessage, "invalid JSONL line");
+  assert.equal(harness.debug.some((entry) => entry.event === "batch-retry"), true);
+  assert.equal(harness.timers.length, 1);
+  assert.match(harness.painted.at(-1), /AI_JSONL_INVALID/);
+});
+
+test("a rate-limit code is painted instead of being replaced by no-progress", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
+  vm.runInContext(displaySource, harness.context, { filename: "content/display.js" });
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle({
+    regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
+    requestId: "commit:0:1:0-159", urgent: true, sessionToken: harness.context.captureCaptionSession()
+  }, {
+    ok: false, error: "AI HTTP 429", errorCode: "HTTP_429",
+    providerCode: "rate_limit_exceeded", rateLimited: true, retryAfterMs: 7000
+  }, null);
+
+  assert.match(harness.painted.at(-1), /HTTP_429/);
+  assert.match(harness.painted.at(-1), /rate_limit_exceeded/);
+  assert.doesNotMatch(harness.painted.at(-1), /AI_NO_PROGRESS/);
+});
+
+test("a cancelled commit response re-establishes a live writer", async () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    deferResponses: true
+  });
+  const request = {
+    regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
+    requestId: "commit:0:1:0-159", urgent: true,
+    sessionToken: harness.context.captureCaptionSession()
+  };
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle(request, {
+    ok: false,
+    error: "AI request cancelled",
+    errorCode: "AI_CANCELLED",
+    cancelled: true
+  }, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const retried = harness.messages.filter((message) => message.type === "translateBatch");
+  assert.equal(retried.length, 1);
+  assert.equal(retried[0].requestStart, 0);
+  assert.equal(retried[0].urgent, true);
+});
+
+test("retry exhaustion forwards the original error text to the subtitle state", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 3);
+  const schedule = vm.runInContext("scheduleDeepSeekBatchRetry", harness.context);
+  schedule(0, 0, 159, "video", 1, "provider connection closed", {
+    urgent: true,
+    error: { error: "provider connection closed" }
+  });
+
+  assert.equal(
+    harness.context.captionSession.deepseekExhaustedRegions.get(0).errorMessage,
+    "provider connection closed"
+  );
 });
 
 test("accelerated prefetch skips the live writer and uses the fast transport path", () => {
@@ -1498,6 +1697,11 @@ test("a speculative provider 429 backs off and requeues the same range", () => {
   };
   harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", request);
   harness.context.captionSession.transInflight.add("dsp:0:80");
+  // The production callback finishes ownership before handing the response
+  // to the result handler; mirror that ordering so the retry is not mistaken
+  // for a duplicate live writer.
+  harness.context.captionSession.deepseekRequestMeta.delete("dsp:0:80");
+  harness.context.captionSession.transInflight.delete("dsp:0:80");
 
   const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
   handle(request, {

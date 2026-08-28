@@ -29,6 +29,7 @@ function createCaptionSessionState(initialVideoId) {
     transInflight: new Set(),
     deepseekRetryCounts: new Map(),
     deepseekExhaustedRegions: new Map(),
+    deepseekVisibleErrors: new Map(),
     deepseekSpeculativeBackoffUntil: 0,
     deepseekSpeculativeResumeTimer: null,
     deepseekFocusGeneration: 0,
@@ -156,6 +157,7 @@ function resetCaptionSessionState(reason, options) {
   captionSession.transInflight.clear();
   captionSession.deepseekRetryCounts.clear();
   captionSession.deepseekExhaustedRegions.clear();
+  captionSession.deepseekVisibleErrors.clear();
   if (captionSession.deepseekSpeculativeResumeTimer) {
     clearTimeout(captionSession.deepseekSpeculativeResumeTimer);
     captionSession.deepseekSpeculativeResumeTimer = null;

@@ -108,5 +108,6 @@ assert.equal(typeof shared.semanticDisplayPlan, "function");
 assert.equal(typeof shared.deepSeekSseEvents, "function");
 assert.equal(typeof shared.sanitizeDiagnosticValue, "function");
 assert.equal(typeof shared.aiErrorDescriptor, "function");
+assert.equal(typeof shared.aiErrorMessage, "function");
 
 console.log(`Architecture checks passed: ${runtimeFiles.length} files, max ${MAX_RUNTIME_LINES} lines.`);

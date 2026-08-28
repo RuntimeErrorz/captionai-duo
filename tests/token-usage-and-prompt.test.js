@@ -75,7 +75,7 @@ test("Gemini usage metadata and Interactions token fields are normalized", () =>
 
 test("compact prompt rows retain the semantic boundary contract with much less JSON", () => {
   const items = Array.from({ length: 80 }, (_, index) => ({
-    id: String(index),
+    id: String(500 + index),
     cueId: String(Math.floor(index / 8)),
     text: index % 2 ? "translation" : "subtitle",
     startMs: index * 400,
@@ -85,10 +85,11 @@ test("compact prompt rows retain the semantic boundary contract with much less J
     hardAfter: index === 79
   }));
   const rows = shared.compactAiPromptCueRows(items);
-  assert.deepEqual(Array.from(rows[0]), ["0", "subtitle"]);
-  assert.deepEqual(Array.from(rows[3]), ["3", "translation", 120]);
-  assert.deepEqual(Array.from(rows[7]), ["7", "translation", 950, "s"]);
-  assert.deepEqual(Array.from(rows[79]), ["79", "translation", 4000, "h"]);
+  assert.deepEqual(Array.from(rows[0]), [0, "subtitle"]);
+  assert.deepEqual(Array.from(rows[3]), [3, "translation", 120]);
+  assert.deepEqual(Array.from(rows[7]), [7, "translation", 950, "s"]);
+  assert.deepEqual(Array.from(rows[79]), [79, "translation", 4000, "h"]);
+  assert.equal(rows.some((row) => row[0] === 500), false);
   assert.ok(JSON.stringify(rows).length < JSON.stringify(items).length * 0.4);
 
   const contextRows = shared.compactAiPromptContextRows([

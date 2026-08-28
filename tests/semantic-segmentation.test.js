@@ -14,18 +14,32 @@ const items = [
 
 test("semantic response accepts exact ordered coverage and fenced JSON", () => {
   const output = shared.segmentedTranslationsFromJsonText(
-    '```json\n{"segments":[{"ids":["42","43","44"],"translation":"周五晚上弄乱也不用担心。"}]}\n```',
+    '```json\n{"segments":[{"start":0,"end":2,"translation":"周五晚上弄乱也不用担心。"}]}\n```',
     items
   );
   assert.equal(output.length, 3);
   assert.equal(output[0].unitId, "semantic-42-44");
 });
 
+test("semantic fallback rejects legacy ids fields anywhere in the response", () => {
+  const diagnostics = {};
+  const output = shared.segmentedTranslationsFromJsonText(
+    JSON.stringify({
+      segments: [{ start: 0, end: 2, translation: "旧协议" }],
+      deferred_ids: []
+    }),
+    items,
+    diagnostics
+  );
+  assert.equal(output, null);
+  assert.match(diagnostics.reason, /legacy ids arrays are not supported/);
+});
+
 test("semantic response rejects omissions, reordering and hard-boundary crossings with diagnostics", () => {
   for (const [response, currentItems, reason] of [
-    [{ segments: [{ ids: ["42", "44"], translation: "漏项" }] }, items, /unexpected cue id/],
-    [{ segments: [{ ids: ["43", "42", "44"], translation: "乱序" }] }, items, /unexpected cue id/],
-    [{ segments: [{ ids: ["42", "43"], translation: "越界" }, { ids: ["44"], translation: "尾部" }] },
+    [{ segments: [{ start: 0, end: 0, translation: "漏项" }] }, items, /missing cue coverage/],
+    [{ segments: [{ start: 1, end: 2, translation: "乱序" }] }, items, /unexpected (?:JSONL )?position/],
+    [{ segments: [{ start: 0, end: 1, translation: "越界" }, { start: 2, end: 2, translation: "尾部" }] },
       [{ ...items[0], hardAfter: true }, items[1], items[2]], /hard boundary/]
   ]) {
     const diagnostics = {};
@@ -38,7 +52,7 @@ test("semantic response rejects omissions, reordering and hard-boundary crossing
 
 test("semantic response enforces duration and source-size safety ceilings", () => {
   const response = JSON.stringify({ segments: [
-    { ids: ["42", "43", "44"], translation: "译文" }
+    { start: 0, end: 2, translation: "译文" }
   ] });
   const durationDiagnostics = {};
   assert.equal(shared.segmentedTranslationsFromJsonText(
@@ -64,7 +78,8 @@ test("semantic parser normalizes natural model translations without content heur
   ];
   const output = shared.segmentedTranslationsFromJsonText(
     JSON.stringify({ segments: [{
-      ids: ["295", "296"],
+      start: 0,
+      end: 1,
       translation: "这差不多是10分满分。"
     }] }),
     current

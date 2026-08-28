@@ -49,7 +49,8 @@ test("one session reset revokes every old callback and clears semantic owners", 
     session.deepseekDisplayCache,
     session.deepseekRequestMeta,
     session.deepseekRetryCounts,
-    session.deepseekExhaustedRegions
+    session.deepseekExhaustedRegions,
+    session.deepseekVisibleErrors
   ]) cache.set("old", true);
   session.transInflight.add("dsb:0");
   const capture = vm.runInContext("captureCaptionSession", context);
@@ -74,7 +75,8 @@ test("one session reset revokes every old callback and clears semantic owners", 
     session.deepseekRequestMeta,
     session.transInflight,
     session.deepseekRetryCounts,
-    session.deepseekExhaustedRegions
+    session.deepseekExhaustedRegions,
+    session.deepseekVisibleErrors
   ]) assert.equal(cache.size, 0);
   assert.equal(session.deepseekFocusedBatchIndex, -1);
   assert.equal(session.semanticLayoutWidth, 0);

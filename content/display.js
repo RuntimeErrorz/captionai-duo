@@ -196,7 +196,32 @@ function deepseekSemanticDisplayClusters() {
 function deepseekTranslationErrorText(value) {
   const details = YTDS_SHARED.aiErrorDescriptor(value);
   const code = [details.code, details.providerCode].filter(Boolean).join(" / ");
-  return String(t("translationError", "Translation failed [$1]")).replace(/\$1/g, code);
+  const base = String(t("translationError", "Translation failed [$1]")).replace(/\$1/g, code);
+  const message = YTDS_SHARED.aiErrorMessage(value, "");
+  return message && message !== code ? `${base} — ${message}` : base;
+}
+
+function deepseekUpdateDisplayError(regionIndex, request, runtimeError, response) {
+  const runtimeInfo = runtimeError && YTDS_SHARED.aiErrorDescriptor(runtimeError);
+  const responseHasError = response && (response.ok === false || response.errorCode ||
+    response.error || response.streamError);
+  const responseInfo = responseHasError && YTDS_SHARED.aiErrorDescriptor(response);
+  const cancelled = !!(runtimeInfo && runtimeInfo.code === "AI_CANCELLED") ||
+    !!(responseInfo && responseInfo.code === "AI_CANCELLED");
+  if (request && request.prefetch) return;
+  const errors = captionSession.deepseekVisibleErrors;
+  if (!errors || !Number.isInteger(regionIndex)) return;
+  const value = runtimeError || (responseHasError ? response : null);
+  if (!value || cancelled) {
+    errors.delete(regionIndex);
+    return;
+  }
+  const details = YTDS_SHARED.aiErrorDescriptor(value);
+  errors.set(regionIndex, {
+    errorCode: details.code,
+    providerCode: details.providerCode,
+    errorMessage: YTDS_SHARED.aiErrorMessage(value, "")
+  });
 }
 
 function cacheDeepseekDisplayNeighborhood(changedMembers, logPages) {
@@ -223,13 +248,12 @@ function repaintActiveDeepseekTranslation() {
   if (!activeTranslation || captionSession.activeCueIdx < 0 || !captionSession.cueList) {
     if (captionSession.activeGroupIdx >= 0 && captionSession.activeCueIdx >= 0 && captionSession.cueList) {
       const regionIndex = captionSession.deepseekGroupToCommitRegion[captionSession.activeGroupIdx];
-      if (captionSession.deepseekExhaustedRegions.has(regionIndex)) {
+      const displayError = captionSession.deepseekExhaustedRegions.get(regionIndex) ||
+        captionSession.deepseekVisibleErrors && captionSession.deepseekVisibleErrors.get(regionIndex);
+      if (displayError) {
         clearPendingTimer();
         const source = sourceForDisplayedCue(captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]);
-        setTranslation(
-          deepseekTranslationErrorText(captionSession.deepseekExhaustedRegions.get(regionIndex)),
-          source, "error"
-        );
+        setTranslation(deepseekTranslationErrorText(displayError), source, "error");
         return;
       }
       armPendingTranslationIndicator(captionSession.activeGroupIdx);

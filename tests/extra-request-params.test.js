@@ -166,6 +166,10 @@ test("response cache identity follows the model-visible prompt, not transport me
   );
   assert.notEqual(
     cacheId(config, items, "zh-CN", "en", contextBefore, contextAfter),
+    cacheId(config, [{ ...items[0], id: "1" }], "zh-CN", "en", contextBefore, contextAfter)
+  );
+  assert.notEqual(
+    cacheId(config, items, "zh-CN", "en", contextBefore, contextAfter),
     cacheId(config, [{ ...items[0], text: "Goodbye" }], "zh-CN", "en", contextBefore, contextAfter)
   );
 });

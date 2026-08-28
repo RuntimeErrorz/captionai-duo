@@ -29,6 +29,10 @@ function sampleItems() {
   ];
 }
 
+function rangeChunk(start, end, translation) {
+  return { start: Number(start), end: Number(end), translation };
+}
+
 test("accelerated JSONL publishes a complete unit before the next unit arrives", () => {
   const progress = [];
   const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
@@ -36,7 +40,7 @@ test("accelerated JSONL publishes a complete unit before the next unit arrives",
   }, { requestClass: "urgent" });
 
   const status = observer.onTextDelta(
-    '{"type":"unit","chunks":[{"ids":["0","1"],"translation":"已完成"}]}\\n',
+    JSON.stringify({ type: "unit", chunks: [rangeChunk(0, 1, "已完成")] }) + "\n",
     false
   );
 
@@ -45,9 +49,91 @@ test("accelerated JSONL publishes a complete unit before the next unit arrives",
   assert.equal(observer.result(true).length, 2);
 });
 
+test("compact JSONL ranges expand into the same ordered alignment coverage", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [
+      { start: 0, end: 1, translation: "我遇到了美国士兵。" },
+      { start: 2, end: 2, translation: "他们帮助了我们。" }
+    ]
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.deepEqual(Array.from(accepted.ids), ["0", "1", "2"]);
+  assert.deepEqual(Array.from(accepted.translations[0].alignedChunks, (chunk) =>
+    Array.from(chunk.ids)), [
+    ["0", "1"], ["2"]
+  ]);
+  assert.equal(state.cursor, 3);
+});
+
+test("local JSONL positions expand to the request's non-local internal IDs", () => {
+  const items = sampleItems().map((item, index) => ({
+    ...item,
+    id: String(221 + index)
+  }));
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [
+      { start: 0, end: 1, translation: "我遇到了美国士兵。" },
+      { start: 2, end: 2, translation: "他们帮助了我们。" }
+    ]
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.deepEqual(Array.from(accepted.ids), ["221", "222", "223"]);
+  assert.deepEqual(Array.from(accepted.translations, (item) => String(item.id)), [
+    "221", "222", "223"
+  ]);
+  assert.equal(state.cursor, 3);
+});
+
+test("compact JSONL ranges keep gap and hard-boundary validation strict", () => {
+  const gap = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  assert.match(shared.pushAiJsonlTranslationRecord(gap, {
+    type: "unit", chunks: [{ start: 1, end: 1, translation: "跳过" }]
+  }).error, /unexpected JSONL position 1 at offset 0/);
+
+  const hardItems = sampleItems();
+  hardItems[0] = { ...hardItems[0], hardAfter: true };
+  const crossed = shared.createAiJsonlTranslationState(hardItems, "zh-CN");
+  assert.match(shared.pushAiJsonlTranslationRecord(crossed, {
+    type: "unit", chunks: [{ start: 0, end: 1, translation: "越界" }]
+  }).error, /hard boundary/);
+
+  const incomplete = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  assert.match(shared.pushAiJsonlTranslationRecord(incomplete, {
+    type: "unit", chunks: [{ start: 0, translation: "缺少终点" }]
+  }).error, /invalid JSONL range/);
+});
+
+test("JSONL rejects the legacy ids-array chunk format after the range cutover", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  const rejected = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [{ ids: ["0"], translation: "旧格式" }]
+  });
+
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /invalid JSONL range/);
+  assert.equal(state.cursor, 0);
+
+  const deferredField = shared.pushAiJsonlTranslationRecord(
+    shared.createAiJsonlTranslationState(sampleItems(), "zh-CN"),
+    {
+      type: "done",
+      deferred_ids: ["0"]
+    }
+  );
+  assert.equal(deferredField.ok, false);
+  assert.match(deferredField.error, /legacy ids fields are not supported/);
+});
+
 test("JSONL object framing survives pretty printing and arbitrary object splits", () => {
   const first = shared.aiJsonlObjects(
-    '```jsonl\n{\n  "type": "unit",\n  "chunks": [{"ids":["0"],', false
+    '```jsonl\n{\n  "type": "unit",\n  "chunks": [{"start":0,"end":0,', false
   );
   assert.equal(first.objects.length, 0);
   const second = shared.aiJsonlObjects(
@@ -65,21 +151,22 @@ test("JSONL object framing survives pretty printing and arbitrary object splits"
 
 test("JSONL framing recovers a complete unit when only its outer wrapper is truncated", () => {
   const recovered = shared.aiJsonlObjects(
-    '{"type":"unit","chunks":[{"ids":["0"],"translation":"complete"}\n{"type":"done"}',
+    '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"complete"}\n{"type":"done"}',
     true
   );
   assert.equal(recovered.rest, "");
   assert.equal(recovered.objects.length, 1);
   const decoded = shared.aiJsonlRecordFromLine(recovered.objects[0]);
   assert.equal(decoded.record.type, "unit");
-  assert.deepEqual(Array.from(decoded.record.chunks[0].ids), ["0"]);
+  assert.equal(decoded.record.chunks[0].start, 0);
+  assert.equal(decoded.record.chunks[0].end, 0);
 });
 
 test("JSONL state derives the deferred suffix from its coverage cursor", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   const first = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: ["0", "1"], translation: "我遇到了美国士兵。" }]
+    chunks: [rangeChunk(0, 1, "我遇到了美国士兵。")]
   });
   assert.equal(first.ok, true);
   assert.equal(first.unitId, "semantic-0-1");
@@ -87,7 +174,7 @@ test("JSONL state derives the deferred suffix from its coverage cursor", () => {
 
   const second = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: ["2"], translation: "他们帮助了我们。" }]
+    chunks: [rangeChunk(2, 2, "他们帮助了我们。")]
   });
   assert.equal(second.ok, true);
   assert.equal(shared.pushAiJsonlTranslationRecord(state, { type: "done" }).ok, true);
@@ -102,7 +189,7 @@ test("JSONL translations remove every Chinese full stop before caching", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   const accepted = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: ["0", "1"], translation: "第一句。第二句。。真的吗？" }]
+    chunks: [rangeChunk(0, 1, "第一句。第二句。。真的吗？")]
   });
 
   assert.equal(accepted.ok, true);
@@ -118,7 +205,7 @@ test("JSONL translations remove protocol speaker markers before caching", () => 
   const state = shared.createAiJsonlTranslationState(items, "zh-CN");
   const accepted = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: ["0", "1"], translation: ">> 是的" }]
+    chunks: [rangeChunk(0, 1, ">> 是的")]
   });
 
   assert.equal(accepted.ok, true);
@@ -138,8 +225,8 @@ test("JSONL separates aligned Chinese chunks at an explicit speaker turn", () =>
   const accepted = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
     chunks: [
-      { ids: ["0", "1", "2"], translation: "是吗？" },
-      { ids: ["3", "4", "5"], translation: "对，对的。" }
+      rangeChunk(0, 2, "是吗？"),
+      rangeChunk(3, 5, "对，对的。")
     ]
   });
 
@@ -160,8 +247,8 @@ test("JSONL keeps oversized units when multiple aligned chunks provide recovery 
   const accepted = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
     chunks: [
-      { ids: items.slice(0, 80).map((item) => item.id), translation: "前半" },
-      { ids: items.slice(80).map((item) => item.id), translation: "后半" }
+      rangeChunk(items[0].id, items[79].id, "前半"),
+      rangeChunk(items[80].id, items[159].id, "后半")
     ]
   });
 
@@ -182,7 +269,7 @@ test("JSONL still rejects an oversized monolithic unit without alignment boundar
   const state = shared.createAiJsonlTranslationState(items, "zh-CN");
   const rejected = shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: items.map((item) => item.id), translation: "整个大单元" }]
+    chunks: [rangeChunk(items[0].id, items[159].id, "整个大单元")]
   });
 
   assert.equal(rejected.ok, false);
@@ -193,30 +280,30 @@ test("JSONL still rejects an oversized monolithic unit without alignment boundar
 test("JSONL state rejects reordered ids, hard-boundary crossings and records after done", () => {
   const reordered = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(reordered, {
-    type: "unit", chunks: [{ ids: ["1", "0"], translation: "乱序" }]
-  }).error, /unexpected JSONL id/);
+    type: "unit", chunks: [rangeChunk(1, 1, "乱序")]
+  }).error, /unexpected JSONL position/);
 
   const hardItems = sampleItems();
   hardItems[0] = { ...hardItems[0], hardAfter: true };
   const crossed = shared.createAiJsonlTranslationState(hardItems, "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(crossed, {
-    type: "unit", chunks: [{ ids: ["0", "1"], translation: "越界" }]
+    type: "unit", chunks: [rangeChunk(0, 1, "越界")]
   }).error, /hard boundary/);
 
   const afterDone = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.equal(shared.pushAiJsonlTranslationRecord(afterDone, { type: "done" }).ok, true);
   assert.match(shared.pushAiJsonlTranslationRecord(afterDone, {
-    type: "unit", chunks: [{ ids: ["0"], translation: "多余" }]
+    type: "unit", chunks: [rangeChunk(0, 0, "多余")]
   }).error, /after done/);
 });
 
 test("complete ordered coverage is final even when the model omits done", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "unit", chunks: [{ ids: ["0", "1"], translation: "前半" }]
+    type: "unit", chunks: [rangeChunk(0, 1, "前半")]
   }).ok, true);
   assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "unit", chunks: [{ ids: ["2", "3"], translation: "后半" }]
+    type: "unit", chunks: [rangeChunk(2, 3, "后半")]
   }).ok, true);
   const result = shared.aiJsonlTranslationResult(state, false);
   assert.equal(result.length, 4);
@@ -227,10 +314,10 @@ test("complete ordered coverage is final even when the model omits done", () => 
 test("a malformed tail preserves every previously valid JSONL unit", () => {
   const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "unit", chunks: [{ ids: ["0", "1"], translation: "已完成前缀" }]
+    type: "unit", chunks: [rangeChunk(0, 1, "已完成前缀")]
   }).ok, true);
   assert.equal(shared.pushAiJsonlTranslationRecord(state, {
-    type: "unit", chunks: [{ ids: ["3"], translation: "跳过了编号二" }]
+    type: "unit", chunks: [rangeChunk(3, 3, "跳过了编号二")]
   }).ok, false);
 
   assert.equal(shared.aiJsonlTranslationResult(state, false), null);
@@ -238,29 +325,52 @@ test("a malformed tail preserves every previously valid JSONL unit", () => {
   assert.equal(partial.length, 2);
   assert.deepEqual(partial.deferredIds, ["2", "3"]);
   assert.equal(partial.streamPartial, true);
-  assert.match(partial.streamError, /unexpected JSONL id/);
+  assert.match(partial.streamError, /unexpected JSONL position/);
 });
 
-test("the stream keeps complete leading alignment chunks before a missing id", () => {
+test("the stream keeps complete leading alignment chunks before a missing position", () => {
   const items = Array.from({ length: 6 }, (_value, id) => ({
-    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    id: String(221 + id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
     hardAfter: false
   }));
   const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
   const status = observer.onTextDelta(JSON.stringify({
     type: "unit",
     chunks: [
-      { ids: ["0", "1"], translation: "complete prefix" },
-      { ids: ["3", "4", "5"], translation: "skipped token" }
+      rangeChunk(0, 1, "complete prefix"),
+      rangeChunk(3, 5, "skipped token")
     ]
   }), true);
 
   assert.equal(status.stop, true);
   assert.equal(observer.result(false), null);
   const partial = observer.result(true);
-  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["0", "1"]);
-  assert.deepEqual(Array.from(partial.deferredIds), ["2", "3", "4", "5"]);
-  assert.match(partial.streamError, /unexpected JSONL id/);
+  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["221", "222"]);
+  assert.deepEqual(Array.from(partial.deferredIds), ["223", "224", "225", "226"]);
+  assert.match(partial.streamError, /unexpected JSONL position/);
+});
+
+test("a compact range stream recovers its safe prefix before a gapped range", () => {
+  const items = Array.from({ length: 6 }, (_value, id) => ({
+    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    hardAfter: false
+  }));
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  });
+  const status = observer.onTextDelta(JSON.stringify({
+    type: "unit",
+    chunks: [
+      { start: 0, end: 1, translation: "safe prefix" },
+      { start: 3, end: 5, translation: "missing token" }
+    ]
+  }), true);
+
+  assert.equal(status.stop, true);
+  assert.deepEqual(progress, [["0", "1"]]);
+  assert.deepEqual(Array.from(observer.result(true), (item) => String(item.id)), ["0", "1"]);
+  assert.deepEqual(Array.from(observer.result(true).deferredIds), ["2", "3", "4", "5"]);
 });
 
 test("an invalid JSONL tail publishes its safe leading prefix immediately", () => {
@@ -276,8 +386,8 @@ test("an invalid JSONL tail publishes its safe leading prefix immediately", () =
   const status = observer.onTextDelta(JSON.stringify({
     type: "unit",
     chunks: [
-      { ids: ["0", "1"], translation: "safe prefix" },
-      { ids: ["3", "4"], translation: "missing token" }
+      rangeChunk(0, 1, "safe prefix"),
+      rangeChunk(3, 4, "missing token")
     ]
   }), true);
 
@@ -292,9 +402,9 @@ test("aligned chunks wait for the giant outer unit to close", () => {
     hardAfter: false
   }));
   const chunks = [
-    { ids: ["0", "1"], translation: "前半" },
-    { ids: ["2", "3"], translation: "中段" },
-    { ids: ["4", "5", "6", "7"], translation: "后半" }
+    rangeChunk(0, 1, "前半"),
+    rangeChunk(2, 3, "中段"),
+    rangeChunk(4, 7, "后半")
   ];
   const progress = [];
   const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
@@ -318,8 +428,8 @@ test("a non-urgent request never publishes an unclosed outer semantic unit", () 
     hardAfter: false
   }));
   const chunks = [
-    { ids: ["0", "1"], translation: "前半" },
-    { ids: ["2", "3"], translation: "中段" }
+    rangeChunk(0, 1, "前半"),
+    rangeChunk(2, 3, "中段")
   ];
   const progress = [];
   const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
@@ -337,9 +447,9 @@ test("a non-urgent request never publishes an unclosed outer semantic unit", () 
   ]);
 });
 
-test("a repeated-id correction cannot publish the incomplete unit it revises", () => {
+test("a repeated-position correction cannot publish the incomplete unit it revises", () => {
   const items = Array.from({ length: 6 }, (_value, id) => ({
-    id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
+    id: String(42 + id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
     hardAfter: false
   }));
   const progress = [];
@@ -348,24 +458,24 @@ test("a repeated-id correction cannot publish the incomplete unit it revises", (
   });
 
   observer.onTextDelta(
-    '{"type":"unit","chunks":[{"ids":["0"],"translation":"confirmed prefix"}]}\n',
+    JSON.stringify({ type: "unit", chunks: [rangeChunk(0, 0, "confirmed prefix")] }) + "\n",
     false
   );
   observer.onTextDelta(
-    '{"type":"unit","chunks":[{"ids":["1","2","3","4","5"],"translation":"incomplete clause"}]}\n',
+    JSON.stringify({ type: "unit", chunks: [rangeChunk(1, 5, "incomplete clause")] }) + "\n",
     false
   );
   const rejected = observer.onTextDelta(
-    '{"type":"unit","chunks":[{"ids":["3","4","5"],"translation":"missing correction"}]}\n',
+    JSON.stringify({ type: "unit", chunks: [rangeChunk(3, 5, "missing correction")] }) + "\n",
     false
   );
 
   assert.equal(rejected.stop, true);
-  assert.deepEqual(progress, [["0"]]);
+  assert.deepEqual(progress, [["42"]]);
   const partial = observer.result(true);
-  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["0"]);
-  assert.deepEqual(Array.from(partial.deferredIds), ["1", "2", "3", "4", "5"]);
-  assert.match(partial.streamError, /unexpected JSONL id/);
+  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["42"]);
+  assert.deepEqual(Array.from(partial.deferredIds), ["43", "44", "45", "46", "47"]);
+  assert.match(partial.streamError, /unexpected JSONL position/);
 });
 
 test("the stream observer accepts multiline JSON objects without a fallback error", () => {
@@ -374,7 +484,7 @@ test("the stream observer accepts multiline JSON objects without a fallback erro
   const payload = [
     "{",
     '  "type": "unit",',
-    '  "chunks": [{"ids":["0","1"],"translation":"complete"}]',
+    '  "chunks": [{"start":0,"end":1,"translation":"complete"}]',
     "}",
     '{"type":"done"}'
   ].join("\n");
@@ -391,7 +501,7 @@ test("the stream observer ignores a truncated done tail after complete coverage"
   const items = sampleItems().slice(0, 2);
   const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
   const payload = [
-    '{"type":"unit","chunks":[{"ids":["0","1"],"translation":"complete"}]}',
+    '{"type":"unit","chunks":[{"start":0,"end":1,"translation":"complete"}]}',
     '{"type":"done"'
   ].join("\n");
   const result = observer.onTextDelta(payload, true);
@@ -407,7 +517,7 @@ test("JSONL structural validation does not reject natural numeric wording", () =
   const state = shared.createAiJsonlTranslationState(items, "zh-CN");
   assert.equal(shared.pushAiJsonlTranslationRecord(state, {
     type: "unit",
-    chunks: [{ ids: ["295", "296"], translation: "这差不多是十分满分。" }]
+    chunks: [rangeChunk(0, 1, "这差不多是十分满分。")]
   }).ok, true);
   assert.equal(shared.pushAiJsonlTranslationRecord(state, { type: "done" }).ok, true);
   assert.equal(shared.aiJsonlTranslationResult(state, false).length, 2);

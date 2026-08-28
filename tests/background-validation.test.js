@@ -124,7 +124,7 @@ test("provider-specific concurrency admits DeepSeek runway without overdriving c
   for (const release of compatibleReleases) release();
 });
 
-test("urgent segmentation uses the compact prompt without changing the JSONL contract", async () => {
+test("all segmentation lanes use compact alignment ranges", async () => {
   const prompts = [];
   const context = {
     AbortController,
@@ -143,11 +143,13 @@ test("urgent segmentation uses the compact prompt without changing the JSONL con
     aiRawCompletion: async (_config, messages, _signal, maxTokens, _temperature, trace) => {
       prompts.push({
         content: messages[0].content,
+        request: messages[1].content,
         requestClass: trace.requestClass,
         maxTokens
       });
+      const unit = '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"译文"}]}\n';
       trace.onTextDelta(
-        '{"type":"unit","chunks":[{"ids":["0"],"translation":"译文"}]}\n' +
+        unit +
         '{"type":"done"}\n', true
       );
       return { raw: "", diagnostics: { attempts: [] } };
@@ -157,7 +159,7 @@ test("urgent segmentation uses the compact prompt without changing the JSONL con
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
   const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
   const items = [{
-    id: "0", cueId: "0", text: "source", startMs: 0, endMs: 500,
+    id: "500", cueId: "cue-500", text: "source", startMs: 0, endMs: 500,
     pauseAfterMs: 0, softAfter: false, hardAfter: false
   }];
   const config = { contextPast: 1, contextFuture: 1 };
@@ -192,6 +194,103 @@ test("urgent segmentation uses the compact prompt without changing the JSONL con
   assert.match(prompts[0].content, /Punctuation carries meaning/);
   assert.match(prompts[0].content, /never silently concatenate two completed source sentences/);
   assert.match(prompts[0].content, /must not force a new display page/);
+  assert.match(prompts[0].content, /\{"start":0,"end":1,"translation":"\.\.\."\}/);
+  assert.match(prompts[0].content, /zero-based and local to this request/);
+  assert.match(prompts[0].content, /\[position,text\]/);
+  assert.match(prompts[0].request, /CURRENT_CUES:\n\[\[0,"source"\]\]/);
+  assert.doesNotMatch(prompts[0].request, /CURRENT_CUES:\n\[\[500/);
+  assert.match(prompts[2].content, /never enumerate an ids array/);
   assert.match(prompts[3].content, /Punctuation carries meaning/);
+  assert.match(prompts[3].content, /\{"start":0,"end":1,"translation":"\.\.\."\}/);
+  assert.match(prompts[3].content, /zero-based and local to this request/);
+  assert.match(prompts[3].content, /never enumerate an ids array/);
   assert.match(prompts[5].content, /never translate it as a period/);
+});
+
+test("a cancelled partial JSONL stream remains a cancellation, not a partial result", async () => {
+  const context = {
+    Array,
+    Date,
+    Map,
+    Math,
+    Number,
+    Object,
+    Promise,
+    Set,
+    String,
+    YTDS_SHARED: loadShared(),
+    MAX_PROMPT_SOURCE_CHARS: 28000,
+    appendDebug: () => {},
+    aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
+      trace.onTextDelta(
+        '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"已完成"}]}\n',
+        false
+      );
+      const error = new Error("AI request cancelled");
+      error.cancelled = true;
+      error.errorCode = "AI_CANCELLED";
+      throw error;
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(translationSource, context, { filename: "background/translation.js" });
+  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const items = [{
+    id: "0", cueId: "0", text: "source", startMs: 0, endMs: 500,
+    pauseAfterMs: 0, softAfter: false, hardAfter: true
+  }];
+
+  await assert.rejects(
+    fetch(items, "zh-CN", "en", [], [], { contextPast: 1, contextFuture: 1 }, null, {
+      requestClass: "urgent"
+    }),
+    (error) => error.errorCode === "AI_CANCELLED" && error.cancelled === true
+  );
+});
+
+test("a transport failure after malformed JSONL keeps the JSONL diagnostic code", async () => {
+  const context = {
+    Array,
+    Date,
+    Map,
+    Math,
+    Number,
+    Object,
+    Promise,
+    Set,
+    String,
+    YTDS_SHARED: loadShared(),
+    MAX_PROMPT_SOURCE_CHARS: 28000,
+    appendDebug: () => {},
+    aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
+      trace.onTextDelta(
+        '{"type":"unit","chunks":[{"start":0,"end":0,"translation":"已完成"}]}\n' +
+        '{"type":"unit","chunks":[{"start":2,"end":2,"translation":"跳号"}]}\n',
+        false
+      );
+      const error = new Error("AI request failed");
+      error.netfail = true;
+      error.errorCode = "AI_NETWORK_ERROR";
+      error.httpDiagnostics = { attempts: [{ netError: "net::ERR_FAILED" }] };
+      throw error;
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(translationSource, context, { filename: "background/translation.js" });
+  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const items = [
+    { id: "0", cueId: "0", text: "first", startMs: 0, endMs: 500, hardAfter: false },
+    { id: "1", cueId: "1", text: "second", startMs: 500, endMs: 1000, hardAfter: false },
+    { id: "2", cueId: "2", text: "third", startMs: 1000, endMs: 1500, hardAfter: true }
+  ];
+
+  const result = await fetch(items, "zh-CN", "en", [], [], {
+    contextPast: 1, contextFuture: 1
+  }, null, { requestClass: "urgent" });
+
+  assert.equal(result.errorCode, "AI_JSONL_INVALID");
+  assert.equal(result.error, "unexpected JSONL position 2 at offset 1");
+  assert.equal(result.streamPartial, true);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result.deferredIds, ["1", "2"]);
 });

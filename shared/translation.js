@@ -54,6 +54,17 @@
     return null;
   }
 
+  function hasOwn(value, key) {
+    return !!value && Object.prototype.hasOwnProperty.call(value, key);
+  }
+
+  function containsLegacyAlignmentIds(value) {
+    if (!value || typeof value !== "object") return false;
+    if (hasOwn(value, "ids") || hasOwn(value, "deferred_ids")) return true;
+    const children = Array.isArray(value) ? value : Object.values(value);
+    return children.some(containsLegacyAlignmentIds);
+  }
+
   function segmentedTranslationsFromJsonText(value, items, diagnostics) {
     const reject = (reason) => {
       if (diagnostics && typeof diagnostics === "object") diagnostics.reason = reason;
@@ -61,6 +72,9 @@
     };
     const parsed = jsonObjectFromText(value);
     const segments = parsed && parsed.segments;
+    if (containsLegacyAlignmentIds(parsed)) {
+      return reject("legacy ids arrays are not supported; use start/end ranges");
+    }
     if (!Array.isArray(segments) || !segments.length || !Array.isArray(items) || !items.length) {
       return reject("missing segments or current cue items");
     }
@@ -68,11 +82,11 @@
     const translations = [];
     let cursor = 0;
     for (const segment of segments) {
-      const ids = segment && Array.isArray(segment.ids)
-        ? segment.ids.map(String) : [];
+      const range = aiJsonlChunkIds({ expected }, segment, cursor);
+      const ids = range.ids;
       const translation = normalizeTranslatedText(segment && segment.translation);
-      if (!ids.length || !translation || cursor + ids.length > expected.length) {
-        return reject(`invalid segment at cue offset ${cursor}`);
+      if (range.error || !ids.length || !translation || cursor + ids.length > expected.length) {
+        return reject(range.error || `invalid segment at cue offset ${cursor}`);
       }
       for (let i = 0; i < ids.length; i++) {
         if (ids[i] !== expected[cursor + i]) {
@@ -240,6 +254,64 @@
     };
   }
 
+  function compactJsonlCoordinate(value) {
+    if (typeof value === "number") {
+      return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    }
+    const text = typeof value === "string" ? value.trim() : "";
+    if (!/^\d+$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+
+  // The model uses zero-based positions within the current request. Expand a
+  // validated local range against the caller's expected sequence so a skipped,
+  // duplicated or invented position is rejected while internal absolute IDs
+  // remain available to playback, caching and rendering.
+  function aiJsonlChunkIds(stateValue, chunkValue, offsetValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const chunk = chunkValue && typeof chunkValue === "object" ? chunkValue : null;
+    const offset = Math.max(0, Math.floor(Number(offsetValue) || 0));
+    if (!state || !Array.isArray(state.expected) || !chunk) {
+      return { ids: [], error: `invalid JSONL chunk at offset ${offset}` };
+    }
+    const hasChunkOwn = (key) => hasOwn(chunk, key);
+    const hasStart = hasChunkOwn("start");
+    const hasEnd = hasChunkOwn("end");
+    if (hasChunkOwn("ids")) return { ids: [], error: `invalid JSONL range at offset ${offset}` };
+    if (!hasStart && !hasEnd) {
+      return { ids: [], error: `invalid JSONL chunk at offset ${offset}` };
+    }
+    if (!hasStart || !hasEnd) {
+      return { ids: [], error: `invalid JSONL range at offset ${offset}` };
+    }
+    const start = compactJsonlCoordinate(chunk.start);
+    const end = compactJsonlCoordinate(chunk.end);
+    if (start == null || end == null || end < start) {
+      return { ids: [], error: `invalid JSONL range at offset ${offset}` };
+    }
+    const count = end - start + 1;
+    if (!Number.isSafeInteger(count) || offset + count > state.expected.length) {
+      return {
+        ids: [],
+        error: `unexpected JSONL position ${end} at offset ${Math.min(
+          state.expected.length, offset + Math.max(0, count - 1)
+        )}`
+      };
+    }
+    if (start !== offset) {
+      return { ids: [], error: `unexpected JSONL position ${start} at offset ${offset}` };
+    }
+    return { ids: state.expected.slice(offset, offset + count), error: "" };
+  }
+
+  function aiJsonlChunkStartOffset(chunkValue) {
+    const chunk = chunkValue && typeof chunkValue === "object" ? chunkValue : null;
+    if (!chunk) return -1;
+    const start = compactJsonlCoordinate(chunk.start);
+    return start == null ? -1 : start;
+  }
+
   function pushAiJsonlTranslationRecord(stateValue, recordValue) {
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
     const record = recordValue && typeof recordValue === "object" ? recordValue : null;
@@ -253,6 +325,9 @@
     if (state.error) return reject(state.error);
     if (state.done) return reject("JSONL record appears after done");
     if (!record) return reject("missing JSONL record");
+    if (hasOwn(record, "ids") || hasOwn(record, "deferred_ids")) {
+      return reject("legacy ids fields are not supported; use start/end ranges");
+    }
 
     if (record.type === "done") {
       const remaining = state.expected.slice(state.cursor);
@@ -268,10 +343,11 @@
     const alignedChunks = [];
     const ids = [];
     for (const chunk of chunks) {
-      const chunkIds = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
+      const chunkResult = aiJsonlChunkIds(state, chunk, state.cursor + ids.length);
+      const chunkIds = chunkResult.ids;
       const translation = normalizeTranslatedText(chunk && chunk.translation);
-      if (!chunkIds.length || !translation) {
-        return reject(`invalid JSONL chunk at offset ${state.cursor + ids.length}`);
+      if (chunkResult.error || !chunkIds.length || !translation) {
+        return reject(chunkResult.error || `invalid JSONL chunk at offset ${state.cursor + ids.length}`);
       }
       for (const id of chunkIds) {
         const expectedId = state.expected[state.cursor + ids.length];
@@ -319,9 +395,10 @@
   }
 
   // When a provider puts several complete alignment chunks inside one outer
-  // unit, a later chunk can still contain a missing or invented id. Preserve
-  // only the strictly ordered leading chunks so the next rolling request can
-  // resume at the first missing id. Never split a chunk or skip the mismatch.
+  // unit, a later chunk can still contain a missing or invented position.
+  // Preserve only the strictly ordered leading chunks so the next rolling
+  // request can resume at the first missing position. Never split a chunk or
+  // skip the mismatch.
   function aiJsonlLeadingRecordPrefix(stateValue, recordValue) {
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
     const record = recordValue && typeof recordValue === "object" ? recordValue : null;
@@ -330,9 +407,10 @@
     const chunks = [];
     let offset = state.cursor;
     for (const chunk of record.chunks) {
-      const ids = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
+      const chunkResult = aiJsonlChunkIds(state, chunk, offset);
+      const ids = chunkResult.ids;
       const translation = normalizeTranslatedText(chunk && chunk.translation);
-      if (!ids.length || !translation) break;
+      if (chunkResult.error || !ids.length || !translation) break;
       let valid = true;
       for (let index = 0; index < ids.length; index++) {
         if (ids[index] !== state.expected[offset + index]) {
@@ -348,7 +426,12 @@
         }
       }
       if (!valid) break;
-      chunks.push({ ids, translation });
+      const chunkStart = offset;
+      chunks.push({
+        start: chunkStart,
+        end: chunkStart + ids.length - 1,
+        translation
+      });
       offset += ids.length;
     }
     if (!chunks.length || chunks.length >= record.chunks.length) return null;
@@ -363,9 +446,7 @@
       return null;
     }
     const firstChunk = Array.isArray(record.chunks) ? record.chunks[0] : null;
-    const firstId = firstChunk && Array.isArray(firstChunk.ids)
-      ? String(firstChunk.ids[0] == null ? "" : firstChunk.ids[0]) : "";
-    const overlapStart = state.expected.indexOf(firstId);
+    const overlapStart = aiJsonlChunkStartOffset(firstChunk);
     if (overlapStart < 0 || overlapStart >= state.cursor) return null;
 
     const last = state.translations[state.translations.length - 1];
@@ -481,14 +562,18 @@
       return reject("missing aligned segments or current cue items");
     }
     const expected = items.map((item) => String(item && item.id));
-    const deferredIds = Array.isArray(parsed.deferred_ids)
-      ? parsed.deferred_ids.map(String) : [];
-    if (deferredIds.length > expected.length) return reject("deferred suffix exceeds current cues");
-    const completedCount = expected.length - deferredIds.length;
-    for (let index = 0; index < deferredIds.length; index++) {
-      if (deferredIds[index] !== expected[completedCount + index]) {
-        return reject(`invalid deferred suffix id ${deferredIds[index]} at offset ${completedCount + index}`);
-      }
+    if (containsLegacyAlignmentIds(parsed)) {
+      return reject("legacy ids arrays are not supported; use start/end ranges");
+    }
+    const deferredIds = [];
+    let completedCount = expected.length;
+    if (hasOwn(parsed, "deferred_start")) {
+      const deferredStart = compactJsonlCoordinate(parsed.deferred_start);
+      const deferredIndex = deferredStart == null || deferredStart > expected.length
+        ? -1 : deferredStart;
+      if (deferredIndex < 0) return reject("invalid deferred suffix start position");
+      completedCount = deferredIndex;
+      deferredIds.push(...expected.slice(deferredIndex));
     }
     let segments = [];
     if (Array.isArray(parsed.chunks) && parsed.chunks.length) {
@@ -510,28 +595,22 @@
         current.chunks.push(chunk);
       }
     } else if (Array.isArray(parsed.segments) && parsed.segments.length) {
-      // Backward compatibility and structural recovery: some model responses
-      // accidentally put the next {chunks:[...]} container inside the current
-      // chunks array. Lift container-only entries into following segments while
-      // leaving every actual id/translation leaf untouched for strict validation.
+      // Structural recovery: some model responses accidentally put the next
+      // {chunks:[...]} container inside the current chunks array. Lift
+      // container-only entries into following segments while leaving every
+      // range/translation leaf untouched for strict validation.
       const liftContainers = (container) => {
         const children = Array.isArray(container && container.chunks) ? container.chunks : [];
-        const hasNestedContainer = children.some((child) =>
-          child && !Array.isArray(child.ids) && Array.isArray(child.chunks)
-        );
         const out = [];
         let leaves = [];
         const flush = () => {
           if (!leaves.length) return;
-          out.push({
-            ...(!hasNestedContainer && container && Array.isArray(container.ids)
-              ? { ids: container.ids } : {}),
-            chunks: leaves
-          });
+          out.push({ chunks: leaves });
           leaves = [];
         };
         for (const child of children) {
-          if (child && !Array.isArray(child.ids) && Array.isArray(child.chunks)) {
+          if (child && !hasOwn(child, "start") && !hasOwn(child, "end") &&
+              Array.isArray(child.chunks)) {
             flush();
             out.push(...liftContainers(child));
           } else {
@@ -551,20 +630,28 @@
 
     for (const segment of segments) {
       const chunks = segment && Array.isArray(segment.chunks) ? segment.chunks : [];
-      const declaredIds = segment && Array.isArray(segment.ids) ? segment.ids.map(String) : [];
-      // The compact v3.24.3 schema omits segment.ids because the ordered chunk
-      // ids already describe the same coverage. Continue accepting the older
-      // duplicated form so cached/debug responses remain replayable.
-      const ids = declaredIds.length ? declaredIds : chunks.flatMap((chunk) =>
-        chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : []
-      );
-      if (!ids.length || !chunks.length || cursor + ids.length > completedCount) {
+      if (!chunks.length) {
         return reject(`invalid aligned segment at cue offset ${cursor}`);
       }
-      for (let i = 0; i < ids.length; i++) {
-        if (ids[i] !== expected[cursor + i]) {
-          return reject(`unexpected cue id ${ids[i]} at offset ${cursor + i}`);
+      const ids = [];
+      const alignedChunks = [];
+      for (const chunk of chunks) {
+        const range = aiJsonlChunkIds({ expected }, chunk, cursor + ids.length);
+        const chunkIds = range.ids;
+        const translation = normalizeTranslatedText(chunk && chunk.translation);
+        if (range.error || !chunkIds.length || !translation) {
+          return reject(range.error
+            ? range.error.replace(/JSONL/g, "aligned")
+            : `invalid aligned chunk at segment offset ${ids.length}`);
         }
+        if (cursor + ids.length + chunkIds.length > completedCount) {
+          return reject(`aligned chunk crosses deferred suffix at segment offset ${ids.length}`);
+        }
+        alignedChunks.push({ ids: chunkIds, translation });
+        ids.push(...chunkIds);
+      }
+      if (!ids.length || cursor + ids.length > completedCount) {
+        return reject(`invalid aligned segment at cue offset ${cursor}`);
       }
       for (let i = cursor; i < cursor + ids.length - 1; i++) {
         if (items[i] && items[i].hardAfter) {
@@ -580,30 +667,6 @@
       if (ids.length > 1 &&
           ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
         return reject(`oversized segment ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
-      }
-
-      const alignedChunks = [];
-      let chunkCursor = 0;
-      for (const chunk of chunks) {
-        const chunkIds = chunk && Array.isArray(chunk.ids) ? chunk.ids.map(String) : [];
-        const translation = normalizeTranslatedText(chunk && chunk.translation);
-        if (!chunkIds.length || !translation || chunkCursor + chunkIds.length > ids.length) {
-          return reject(`invalid aligned chunk at segment offset ${chunkCursor}`);
-        }
-        for (let i = 0; i < chunkIds.length; i++) {
-          if (chunkIds[i] !== ids[chunkCursor + i]) {
-            return reject(`unexpected aligned chunk id ${chunkIds[i]} at segment offset ${chunkCursor + i}`);
-          }
-        }
-        // Chunk size is a presentation concern, not a semantic-validity rule.
-        // Keep structurally correct model alignment even when one chunk is too
-        // wide; the renderer measures the real fonts and viewport and switches
-        // that unit to its pixel-aware pagination path when necessary.
-        alignedChunks.push({ ids: chunkIds, translation });
-        chunkCursor += chunkIds.length;
-      }
-      if (chunkCursor !== ids.length) {
-        return reject(`missing aligned chunk coverage after segment offset ${chunkCursor}`);
       }
 
       const speakerSwitches = speakerSwitchSeparators(

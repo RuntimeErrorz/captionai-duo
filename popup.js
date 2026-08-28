@@ -441,6 +441,7 @@ async function refreshEngineStatus() {
         };
         const summary = messages[status.kind] || messages.error;
         const code = status.errorCode ? YTDS_SHARED.aiErrorDescriptor(status).code : "";
+        if (code === "AI_CANCELLED") return;
         el.textContent = code ? `${summary} [${code}]` : summary;
         el.classList.add("warn");
         el.hidden = false;

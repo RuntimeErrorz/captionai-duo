@@ -292,7 +292,7 @@ function deepseekResponseWithBufferedProgress(request, response, state) {
   }
   if (!byId.size) return response;
   return {
-    ...(response && typeof response === "object" ? response : {}),
+    ...(response && typeof response === "object" ? response : {}), ...(response && response.error !== undefined ? { error: response.error } : {}), ...(response && response.errorCode !== undefined ? { errorCode: response.errorCode } : {}), ...(response && response.providerCode !== undefined ? { providerCode: response.providerCode } : {}), ...(response && response.streamError !== undefined ? { streamError: response.streamError } : {}),
     ok: true,
     translations: Array.from(byId.values()).sort((a, b) => Number(a.id) - Number(b.id)),
     partial: !!(response && response.partial) || buffered.length > 0
@@ -304,7 +304,7 @@ function reseedDeepseekCommitState(regionIndex, targetGroup) {
   const state = deepseekCommitState(regionIndex);
   if (!region || !state) return state;
   captionSession.deepseekExhaustedRegions.delete(regionIndex);
-
+  if (captionSession.deepseekVisibleErrors) captionSession.deepseekVisibleErrors.delete(regionIndex);
   let requestStart = Math.max(region.start, targetGroup - deepseekSeekBacktrackItems());
   // A previously committed unit immediately to the left is already a proven
   // semantic boundary. Start after it instead of inventing another guard.
@@ -521,7 +521,7 @@ function handleDeepseekTranslationProgress(msg) {
     }
   }
   if (!Number.isInteger(nextCursor) || nextCursor <= previousCursor) return false;
-
+  if (captionSession.deepseekVisibleErrors) captionSession.deepseekVisibleErrors.delete(request.regionIndex);
   // Refresh lag grace only after the immutable commit cursor advanced. A
   // provisional/left-guard fragment must not make a stalled playback request
   // look healthy indefinitely.

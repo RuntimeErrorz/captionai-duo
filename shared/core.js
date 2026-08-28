@@ -280,6 +280,24 @@
     });
   }
 
+  // Keep the original short error message available to the subtitle renderer
+  // when a provider did not supply a usable code. It still crosses the same
+  // recursive redaction boundary as diagnostics and is bounded so an
+  // untrusted provider response cannot become an unbounded caption.
+  function aiErrorMessage(value, fallback) {
+    const root = value && typeof value === "object" ? value : null;
+    const raw = root
+      ? (root.errorMessage || root.message || root.error || root.reason)
+      : value;
+    const source = raw == null || raw === "" ? fallback : raw;
+    if (source == null || source === "") return "";
+    const sanitize = internal.sanitizeDiagnosticValue;
+    const safe = typeof sanitize === "function"
+      ? sanitize(String(source), { maxStringChars: 600 })
+      : String(source).slice(0, 600);
+    return String(safe).replace(/[\r\n]+/g, " ").trim();
+  }
+
   function nonNegativeTokenCount(value) {
     const count = Number(value);
     return Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
@@ -347,15 +365,16 @@
   }
 
   // Prompt-only compact rows. Full timing metadata remains local for
-  // validation, rendering and SRT export; the model only needs lexical ids,
-  // text, the following pause and whether that edge is soft or hard. Omit
-  // trailing default fields because a zero pause and empty boundary carry no
-  // additional information for the model.
+  // validation, rendering and SRT export; the model only needs a zero-based
+  // position within this request, text, the following pause and whether that
+  // edge is soft or hard. Absolute lexical IDs stay outside the model
+  // protocol; omit trailing default fields because a zero pause and empty
+  // boundary carry no additional information for the model.
   function compactAiPromptCueRows(itemsValue) {
-    return (Array.isArray(itemsValue) ? itemsValue : []).filter(Boolean).map((item) => {
+    return (Array.isArray(itemsValue) ? itemsValue : []).filter(Boolean).map((item, index) => {
       const pauseAfterMs = Math.max(0, Math.round(Number(item.pauseAfterMs) || 0));
       const boundary = item.hardAfter ? "h" : item.softAfter ? "s" : "";
-      const row = [String(item.id), String(item.text || "")];
+      const row = [index, String(item.text || "")];
       if (pauseAfterMs || boundary) row.push(pauseAfterMs);
       if (boundary) row.push(boundary);
       return row;
@@ -518,7 +537,7 @@
     normalizeTargetLang,
     isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
     aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,
-    parseAiExtraBody, aiCompletionText, aiErrorDescriptor,
+    parseAiExtraBody, aiCompletionText, aiErrorDescriptor, aiErrorMessage,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
     aiExtraBodyUsesThinking,
     aiChatCompletionBody, normalizeDeepseekPrefetchBatches, normalizeAiContextCount,
