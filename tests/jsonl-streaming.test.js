@@ -33,6 +33,10 @@ function rangeChunk(start, end, translation) {
   return [Number(start), Number(end), translation];
 }
 
+function wireUnit(...chunks) {
+  return JSON.stringify(chunks);
+}
+
 test("accelerated JSONL publishes a complete unit before the next unit arrives", () => {
   const progress = [];
   const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
@@ -40,7 +44,7 @@ test("accelerated JSONL publishes a complete unit before the next unit arrives",
   }, { requestClass: "urgent" });
 
   const status = observer.onTextDelta(
-    JSON.stringify({ type: "unit", chunks: [rangeChunk(0, 1, "已完成")] }) + "\n",
+    wireUnit(rangeChunk(0, 1, "已完成")) + "\n",
     false
   );
 
@@ -142,27 +146,27 @@ test("JSONL accepts tuple chunks and rejects keyed or legacy chunk formats", () 
   assert.match(deferredField.error, /legacy ids fields are not supported/);
 });
 
-test("JSONL object framing survives pretty printing and arbitrary object splits", () => {
+test("JSONL array framing survives pretty printing and arbitrary array splits", () => {
   const first = shared.aiJsonlObjects(
-    '```jsonl\n{\n  "type": "unit",\n  "chunks": [[0,0,', false
+    '```jsonl\n[\n  [0,0,', false
   );
   assert.equal(first.objects.length, 0);
   const second = shared.aiJsonlObjects(
-    first.rest + '\n  "complete"]]\n}\n{"type":"done"}\n```', true
+    first.rest + '\n  "complete"]\n]\n[]\n```', true
   );
   assert.equal(second.rest, "");
   assert.equal(second.objects.length, 2);
   assert.equal(shared.aiJsonlRecordFromLine(second.objects[0]).record.type, "unit");
   assert.equal(shared.aiJsonlRecordFromLine(second.objects[1]).record.type, "done");
 
-  const wrapped = shared.aiJsonlObjects('[{"type":"done"}]', true);
+  const wrapped = shared.aiJsonlObjects('{"type":"done"}', true);
   assert.equal(wrapped.objects.length, 1);
-  assert.match(shared.aiJsonlRecordFromLine(wrapped.objects[0]).error, /not an object/);
+  assert.match(shared.aiJsonlRecordFromLine(wrapped.objects[0]).error, /chunk array/);
 });
 
-test("JSONL framing recovers a complete unit when only its outer wrapper is truncated", () => {
+test("JSONL framing recovers a complete unit when only its outer array is truncated", () => {
   const recovered = shared.aiJsonlObjects(
-    '{"type":"unit","chunks":[[0,0,"complete"]\n{"type":"done"}',
+    '[[0,0,"complete"]',
     true
   );
   assert.equal(recovered.rest, "");
@@ -172,6 +176,14 @@ test("JSONL framing recovers a complete unit when only its outer wrapper is trun
   assert.equal(decoded.record.chunks[0][0], 0);
   assert.equal(decoded.record.chunks[0][1], 0);
   assert.equal(decoded.record.chunks[0][2], "complete");
+});
+
+test("JSONL rejects the removed object wrapper instead of silently accepting it", () => {
+  const decoded = shared.aiJsonlRecordFromLine(
+    '{"type":"unit","chunks":[[0,0,"旧外壳"]]}'
+  );
+  assert.equal(decoded.record, null);
+  assert.match(decoded.error, /chunk array/);
 });
 
 test("JSONL state derives the deferred suffix from its coverage cursor", () => {
@@ -346,13 +358,10 @@ test("the stream keeps complete leading alignment chunks before a missing positi
     hardAfter: false
   }));
   const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
-  const status = observer.onTextDelta(JSON.stringify({
-    type: "unit",
-    chunks: [
-      rangeChunk(0, 1, "complete prefix"),
-      rangeChunk(3, 5, "skipped token")
-    ]
-  }), true);
+  const status = observer.onTextDelta(wireUnit(
+    rangeChunk(0, 1, "complete prefix"),
+    rangeChunk(3, 5, "skipped token")
+  ), true);
 
   assert.equal(status.stop, true);
   assert.equal(observer.result(false), null);
@@ -371,13 +380,10 @@ test("a compact range stream recovers its safe prefix before a gapped range", ()
   const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
     progress.push(Array.from(translations, (item) => String(item.id)));
   });
-  const status = observer.onTextDelta(JSON.stringify({
-    type: "unit",
-    chunks: [
-      rangeChunk(0, 1, "safe prefix"),
-      rangeChunk(3, 5, "missing token")
-    ]
-  }), true);
+  const status = observer.onTextDelta(wireUnit(
+    rangeChunk(0, 1, "safe prefix"),
+    rangeChunk(3, 5, "missing token")
+  ), true);
 
   assert.equal(status.stop, true);
   assert.deepEqual(progress, [["0", "1"]]);
@@ -395,20 +401,17 @@ test("an invalid JSONL tail publishes its safe leading prefix immediately", () =
     progress.push(Array.from(translations, (item) => String(item.id)));
   });
 
-  const status = observer.onTextDelta(JSON.stringify({
-    type: "unit",
-    chunks: [
-      rangeChunk(0, 1, "safe prefix"),
-      rangeChunk(3, 4, "missing token")
-    ]
-  }), true);
+  const status = observer.onTextDelta(wireUnit(
+    rangeChunk(0, 1, "safe prefix"),
+    rangeChunk(3, 4, "missing token")
+  ), true);
 
   assert.equal(status.stop, true);
   assert.deepEqual(progress, [["0", "1"]]);
   assert.deepEqual(Array.from(observer.result(true), (item) => String(item.id)), ["0", "1"]);
 });
 
-test("aligned chunks wait for the giant outer unit to close", () => {
+test("aligned chunks wait for the giant semantic-unit array to close", () => {
   const items = Array.from({ length: 8 }, (_value, id) => ({
     id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
     hardAfter: false
@@ -422,11 +425,11 @@ test("aligned chunks wait for the giant outer unit to close", () => {
   const observer = loadJsonlStreamObserver()(items, "zh-CN", (translations) => {
     progress.push(Array.from(translations, (item) => String(item.id)));
   }, { requestClass: "prefetch" });
-  const openOuterUnit = `{"type":"unit","chunks":${JSON.stringify(chunks.slice(0, 2)).slice(0, -1)}`;
-  assert.equal(observer.onTextDelta(openOuterUnit, false).stop, false);
+  const openUnit = JSON.stringify(chunks.slice(0, 2)).slice(0, -1);
+  assert.equal(observer.onTextDelta(openUnit, false).stop, false);
   assert.deepEqual(progress, []);
 
-  const closing = `,${JSON.stringify(chunks[2])}]}\n{"type":"done"}\n`;
+  const closing = `,${JSON.stringify(chunks[2])}]\n[]\n`;
   assert.equal(observer.onTextDelta(closing, true).stop, false);
   const result = observer.result(false);
   assert.equal(result.length, 8);
@@ -434,7 +437,7 @@ test("aligned chunks wait for the giant outer unit to close", () => {
     items.map((item) => item.id));
 });
 
-test("a non-urgent request never publishes an unclosed outer semantic unit", () => {
+test("a non-urgent request never publishes an unclosed semantic-unit array", () => {
   const items = Array.from({ length: 8 }, (_value, id) => ({
     id: String(id), text: `token-${id}`, startMs: id * 500, endMs: (id + 1) * 500,
     hardAfter: false
@@ -448,11 +451,11 @@ test("a non-urgent request never publishes an unclosed outer semantic unit", () 
     progress.push(Array.from(translations, (item) => String(item.id)));
   }, { requestClass: "prefetch" });
 
-  const openOuterUnit = `{"type":"unit","chunks":${JSON.stringify(chunks).slice(0, -1)}`;
-  assert.equal(observer.onTextDelta(openOuterUnit, false).stop, false);
+  const openUnit = JSON.stringify(chunks).slice(0, -1);
+  assert.equal(observer.onTextDelta(openUnit, false).stop, false);
   assert.deepEqual(progress, []);
 
-  const closing = `]}\n{"type":"done"}\n`;
+  const closing = `]\n[]\n`;
   assert.equal(observer.onTextDelta(closing, true).stop, false);
   assert.deepEqual(Array.from(observer.result(false), (item) => String(item.id)), [
     "0", "1", "2", "3"
@@ -470,15 +473,15 @@ test("a repeated-position correction cannot publish the incomplete unit it revis
   });
 
   observer.onTextDelta(
-    JSON.stringify({ type: "unit", chunks: [rangeChunk(0, 0, "confirmed prefix")] }) + "\n",
+    wireUnit(rangeChunk(0, 0, "confirmed prefix")) + "\n",
     false
   );
   observer.onTextDelta(
-    JSON.stringify({ type: "unit", chunks: [rangeChunk(1, 5, "incomplete clause")] }) + "\n",
+    wireUnit(rangeChunk(1, 5, "incomplete clause")) + "\n",
     false
   );
   const rejected = observer.onTextDelta(
-    JSON.stringify({ type: "unit", chunks: [rangeChunk(3, 5, "missing correction")] }) + "\n",
+    wireUnit(rangeChunk(3, 5, "missing correction")) + "\n",
     false
   );
 
@@ -490,15 +493,14 @@ test("a repeated-position correction cannot publish the incomplete unit it revis
   assert.match(partial.streamError, /unexpected JSONL position/);
 });
 
-test("the stream observer accepts multiline JSON objects without a fallback error", () => {
+test("the stream observer accepts multiline JSON arrays without a fallback error", () => {
   const items = sampleItems().slice(0, 2);
   const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
   const payload = [
-    "{",
-    '  "type": "unit",',
-    '  "chunks": [[0,1,"complete"]]',
-    "}",
-    '{"type":"done"}'
+    "[",
+    '  [0,1,"complete"]',
+    "]",
+    "[]"
   ].join("\n");
   for (let index = 0; index < payload.length; index += 7) {
     const status = observer.onTextDelta(payload.slice(index, index + 7), false);
@@ -513,8 +515,8 @@ test("the stream observer ignores a truncated done tail after complete coverage"
   const items = sampleItems().slice(0, 2);
   const observer = loadJsonlStreamObserver()(items, "zh-CN", () => {});
   const payload = [
-    '{"type":"unit","chunks":[[0,1,"complete"]]}',
-    '{"type":"done"'
+    '[[0,1,"complete"]]',
+    '['
   ].join("\n");
   const result = observer.onTextDelta(payload, true);
   assert.equal(result.stop, false);

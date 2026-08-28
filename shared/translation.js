@@ -124,10 +124,9 @@
   }
 
   // HTTP/SSE chunks and model-generated newlines are independent of JSON
-  // object boundaries. Frame complete top-level JSON values instead of
-  // assuming that every physical line is a complete JSON value. Arrays are
-  // deliberately returned as one candidate and rejected by the record
-  // validator; nested objects must not be mistaken for JSONL records.
+  // array boundaries. Frame complete top-level JSON values instead of
+  // assuming that every physical line is a complete JSON value. A non-empty
+  // top-level array is one semantic unit; [] is the completion marker.
   function aiJsonlObjects(value, flush) {
     const input = String(value || "");
     const objects = [];
@@ -182,15 +181,13 @@
   }
 
   // Some providers occasionally stop after the final aligned chunk and omit
-  // the outer `]}` (or append a truncated done object). The chunks before the
-  // missing wrapper are still complete JSON values. Recover only that narrow
-  // shape and only from a complete chunk boundary; arbitrary malformed output
-  // remains rejected by the normal record validator.
+  // the unit array's closing `]`. The chunks before the missing bracket are
+  // still complete JSON values. Recover only that narrow shape and only from
+  // a complete chunk boundary; arbitrary malformed output remains rejected by
+  // the normal record validator.
   function aiJsonlRecoverIncompleteUnit(value) {
     let text = String(value || "").trim();
-    if (!/^\{\s*"type"\s*:\s*"unit"\s*,\s*"chunks"\s*:\s*\[/i.test(text)) return "";
-    const doneMarker = text.search(/\n\s*\{\s*"type"\s*:\s*"done"/i);
-    if (doneMarker >= 0) text = text.slice(0, doneMarker).trimEnd();
+    if (!/^\[\s*\[/i.test(text)) return "";
     const brackets = [];
     let inString = false;
     let escaped = false;
@@ -210,8 +207,8 @@
       } else if (char === "}" || char === "]") {
         const opening = char === "}" ? "{" : "[";
         if (brackets[brackets.length - 1] !== opening) return "";
-        if ((opening === "{" || opening === "[") && brackets.length === 3 &&
-            brackets[0] === "{" && brackets[1] === "[") {
+        if (opening === "[" && brackets.length === 2 &&
+            brackets[0] === "[" && brackets[1] === "[") {
           lastChunkEnd = index + 1;
         }
         brackets.pop();
@@ -219,8 +216,8 @@
     }
     if (lastChunkEnd < 0) return "";
     try {
-      const parsed = JSON.parse(`${text.slice(0, lastChunkEnd)}]}`);
-      if (parsed && parsed.type === "unit" && Array.isArray(parsed.chunks) && parsed.chunks.length) {
+      const parsed = JSON.parse(`${text.slice(0, lastChunkEnd)}]`);
+      if (Array.isArray(parsed) && parsed.length) {
         return JSON.stringify(parsed);
       }
     } catch (_e) { /* the last complete chunk may still have malformed data */ }
@@ -234,10 +231,12 @@
     }
     try {
       const record = JSON.parse(line);
-      if (!record || typeof record !== "object" || Array.isArray(record)) {
-        return { ignored: false, record: null, error: "JSONL line is not an object" };
+      if (Array.isArray(record)) {
+        return record.length
+          ? { ignored: false, record: { type: "unit", chunks: record }, error: "" }
+          : { ignored: false, record: { type: "done" }, error: "" };
       }
-      return { ignored: false, record, error: "" };
+      return { ignored: false, record: null, error: "JSONL line must be a chunk array" };
     } catch (_e) {
       return { ignored: false, record: null, error: "invalid JSONL line" };
     }
@@ -375,7 +374,7 @@
     const durationMs = Number(lastItem.endMs) - Number(firstItem.startMs);
     const sourceChars = state.items.slice(state.cursor, state.cursor + ids.length)
       .reduce((sum, item) => sum + String(item && item.text || "").length, 0);
-    // A large outer unit is safe to carry when the model supplied multiple
+    // A large semantic unit is safe to carry when the model supplied multiple
     // ordered alignment chunks: the caller can promote those chunks to
     // smaller commit units at the maximum rolling window, and the renderer
     // can paginate the chunks without inventing a boundary. Keep the safety
@@ -506,7 +505,7 @@
   }
 
   // A provider can occasionally wrap many otherwise useful aligned chunks in
-  // one giant outer unit. If that unit reaches the caller's maximum rolling
+  // one giant semantic unit. If that unit reaches the caller's maximum rolling
   // window, the trailing commit guard cannot release any prefix. Preserve the
   // model's own linguistic boundaries by promoting its chunks to units; never
   // invent a boundary from words, punctuation, player cues or timestamps.

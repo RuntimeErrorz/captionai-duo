@@ -950,8 +950,8 @@ test("urgent and speculative lanes share one exact in-flight provider request", 
       return new Promise((resolve) => {
         completionResolve = () => {
           trace.onTextDelta(
-            '{"type":"unit","chunks":[[0,0,"译文"]]}\n' +
-            '{"type":"done"}\n', true
+            '[[0,0,"译文"]]\n' +
+            '[]\n', true
           );
           resolve({ raw: "", diagnostics: { attempts: [] } });
         };

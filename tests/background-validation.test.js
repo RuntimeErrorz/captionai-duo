@@ -147,10 +147,10 @@ test("all segmentation lanes use compact alignment ranges", async () => {
         requestClass: trace.requestClass,
         maxTokens
       });
-      const unit = '{"type":"unit","chunks":[[0,0,"译文"]]}\n';
+      const unit = '[[0,0,"译文"]]\n';
       trace.onTextDelta(
         unit +
-        '{"type":"done"}\n', true
+        '[]\n', true
       );
       return { raw: "", diagnostics: { attempts: [] } };
     }
@@ -190,7 +190,7 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   assert.ok(prompts[3].content.length > prompts[0].content.length);
   assert.match(prompts[0].content, /JSONL/);
   assert.match(prompts[0].content, /strict ordered prefix/);
-  assert.match(prompts[0].content, /\{"type":"done"\}/);
+  assert.match(prompts[0].content, /empty array is the only completion marker/);
   assert.match(prompts[0].content, /Punctuation carries meaning/);
   assert.match(prompts[0].content, /never silently concatenate two completed source sentences/);
   assert.match(prompts[0].content, /must not force a new display page/);
@@ -223,7 +223,7 @@ test("a cancelled partial JSONL stream remains a cancellation, not a partial res
     appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       trace.onTextDelta(
-        '{"type":"unit","chunks":[[0,0,"已完成"]]}\n',
+        '[[0,0,"已完成"]]\n',
         false
       );
       const error = new Error("AI request cancelled");
@@ -264,8 +264,8 @@ test("a transport failure after malformed JSONL keeps the JSONL diagnostic code"
     appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       trace.onTextDelta(
-        '{"type":"unit","chunks":[[0,0,"已完成"]]}\n' +
-        '{"type":"unit","chunks":[[2,2,"跳号"]]}\n',
+        '[[0,0,"已完成"]]\n' +
+        '[[2,2,"跳号"]]\n',
         false
       );
       const error = new Error("AI request failed");

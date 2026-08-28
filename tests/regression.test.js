@@ -270,7 +270,9 @@ assert.doesNotMatch(background, /videoIdFromUrl\(sender\.url \|\| sender\.tab\.u
 assert.doesNotMatch(background, /repairSuspiciousSemanticTranslations/);
 assert.doesNotMatch(background, /semantic-translation-repair/);
 assert.doesNotMatch(sharedSource, /translationQualityIssue/);
-assert.doesNotMatch(background, /final line shaped \{"type":"done","deferred_ids"/);
+assert.doesNotMatch(background, /\{"type":"unit","chunks"/);
+assert.doesNotMatch(background, /\{"type":"done"/);
+assert.match(background, /empty array is the only completion marker/);
 assert.doesNotMatch(background, /function deepseekTranslateCueFallback/);
 assert.doesNotMatch(background, /causal-cue-request/);
 assert.match(background, /chrome\.webRequest\.onErrorOccurred/);
