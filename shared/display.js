@@ -20,7 +20,8 @@
       ids: Array.isArray(chunk && chunk.ids) ? chunk.ids.map(String) : [],
       cues: Array.isArray(chunk && chunk.cues) ? chunk.cues.filter(Boolean) : [],
       source: String(chunk && chunk.source || "").trim(),
-      translation: String(chunk && chunk.translation || "").trim()
+      translation: String(chunk && chunk.translation || "").trim(),
+      sentenceBoundaryAfter: chunk && chunk.sentenceBoundaryAfter === true
     })).filter((chunk) => chunk.ids.length && chunk.translation);
     if (!chunks.length) return { pages: [], memberPages: {}, overflow: false };
     const sourceLimit = Math.max(1, Number(maxSourceWidthValue) || 1);
@@ -37,9 +38,7 @@
         ? mergeTimedCueTexts(cues)
         : pageChunks.map((chunk) => chunk.source).filter(Boolean).join(" ").trim();
       const speakerSwitches = speakerSwitchSeparators(pageChunks, cues);
-      const translation = joinTranslatedParts(
-        pageChunks.map((chunk) => chunk.translation), targetLang, speakerSwitches
-      );
+      const translation = joinTranslatedParts(pageChunks, targetLang, speakerSwitches);
       return { source, translation };
     };
 

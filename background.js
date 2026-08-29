@@ -3,6 +3,7 @@ importScripts(
   "shared/core.js",
   "shared/diagnostics.js",
   "shared/cues.js",
+  "shared/jsonl.js",
   "shared/translation.js",
   "shared/display.js",
   "shared/stream.js",

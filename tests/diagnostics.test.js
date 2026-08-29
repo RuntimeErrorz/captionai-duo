@@ -73,7 +73,7 @@ test("debug export is a versioned bundle and re-sanitizes persisted legacy entri
   const secret = "nonstandard-private-value";
   const session = memoryStorage({
     ytdsDebugLogs: [{
-      ts: "2026-01-01T00:00:00.000Z",
+      ts: new Date().toISOString(),
       scope: "background",
       event: "legacy-error",
       data: { error: `echo: ${secret}` }
@@ -120,6 +120,120 @@ test("debug export is a versioned bundle and re-sanitizes persisted legacy entri
   assert.equal(bundle.entries[1].data.promptTokens, 9);
   assert.doesNotMatch(serialized, new RegExp(secret));
   assert.match(serialized, /\[REDACTED\]/);
+});
+
+test("diagnostic retention keeps a 30-minute window and reports its coverage", async () => {
+  const session = memoryStorage();
+  const local = memoryStorage();
+  const startMs = Date.parse("2026-08-29T00:00:00.000Z");
+  let nowMs = startMs;
+  class TestDate extends Date {
+    constructor(...args) { super(args.length ? args[0] : nowMs); }
+    static now() { return nowMs; }
+  }
+  const context = {
+    Object, String, Number, Math, Map, Set, Date: TestDate, JSON, Promise,
+    URL, URLSearchParams,
+    setTimeout: (callback) => { callback(); return 1; },
+    clearTimeout: () => {},
+    YTDS_SHARED: loadShared(),
+    chrome: {
+      runtime: { getManifest: () => ({ version: "1.2.3" }) },
+      storage: { session, local }
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(stateSource, context, { filename: "background/state.js" });
+  const append = vm.runInContext("appendDebug", context);
+  const exportLogs = vm.runInContext("exportDebugLogs", context);
+
+  for (let index = 0; index <= 30 * 60; index++) {
+    nowMs = startMs + index * 1000;
+    append("background", "heartbeat", { index });
+  }
+
+  const bundle = JSON.parse(await exportLogs());
+  assert.equal(bundle.entryCount, 30 * 60 + 1);
+  assert.equal(bundle.coverageMs, 30 * 60 * 1000);
+  assert.equal(bundle.firstEntryAt, "2026-08-29T00:00:00.000Z");
+  assert.equal(bundle.lastEntryAt, "2026-08-29T00:30:00.000Z");
+});
+
+test("detailed diagnostic exports retain request, response and rendered text", async () => {
+  const session = memoryStorage();
+  const local = memoryStorage();
+  const context = {
+    Object, String, Number, Math, Map, Set, Date, JSON, Promise,
+    URL, URLSearchParams,
+    setTimeout: (callback) => { callback(); return 1; },
+    clearTimeout: () => {},
+    YTDS_SHARED: loadShared(),
+    chrome: {
+      runtime: { getManifest: () => ({ version: "1.2.3" }) },
+      storage: { session, local }
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(stateSource, context, { filename: "background/state.js" });
+  const append = vm.runInContext("appendDebug", context);
+  const exportLogs = vm.runInContext("exportDebugLogs", context);
+
+  append("background", "semantic-batch-request", {
+    requestId: "prefetch:1:2:0-1",
+    model: "deepseek-v4-flash",
+    endpointKind: "deepseek",
+    currentRows: [[0, "hello"], [1, "world"]],
+    contextBefore: [["c0", "past context"]],
+    contextAfter: [["c1", "future context"]]
+  });
+  append("content", "translation-painted", {
+    cueIdx: 1,
+    source: "a long source sentence",
+    previousTranslation: "旧译文",
+    translation: "一条长译文"
+  });
+  append("background", "semantic-batch-response", {
+    requestId: "prefetch:1:2:0-1",
+    deferredIds: ["2"],
+    units: [{
+      unitId: "semantic-0-1",
+      ids: ["0", "1"],
+      translation: "你好世界"
+    }]
+  });
+  const rawJsonl = '[[0,1,"你好世界"]]\n[]\n';
+  append("background", "semantic-jsonl-raw-response", {
+    requestId: "prefetch:1:2:0-1",
+    format: "jsonl",
+    responseChars: rawJsonl.length,
+    rawResponse: rawJsonl
+  });
+  append("background", "semantic-jsonl-rejected", {
+    requestId: "prefetch:1:2:0-1",
+    reason: "invalid JSONL chunk",
+    line: "[[0,0,\"坏输出\"]]",
+    completedItems: 0
+  });
+
+  const bundle = JSON.parse(await exportLogs());
+  const request = bundle.entries.find((entry) => entry.event === "semantic-batch-request");
+  const painted = bundle.entries.find((entry) => entry.event === "translation-painted");
+  const response = bundle.entries.find((entry) => entry.event === "semantic-batch-response");
+  const raw = bundle.entries.find((entry) => entry.event === "semantic-jsonl-raw-response");
+  const rejected = bundle.entries.find((entry) => entry.event === "semantic-jsonl-rejected");
+  assert.deepEqual(request.data.currentRows, [[0, "hello"], [1, "world"]]);
+  assert.deepEqual(request.data.contextBefore, [["c0", "past context"]]);
+  assert.deepEqual(request.data.contextAfter, [["c1", "future context"]]);
+  assert.equal(painted.data.source, "a long source sentence");
+  assert.equal(painted.data.previousTranslation, "旧译文");
+  assert.equal(painted.data.translation, "一条长译文");
+  assert.equal(painted.data.translation.length, 5);
+  assert.deepEqual(response.data.deferredIds, ["2"]);
+  assert.deepEqual(response.data.units, [{
+    unitId: "semantic-0-1", ids: ["0", "1"], translation: "你好世界"
+  }]);
+  assert.equal(raw.data.rawResponse, rawJsonl);
+  assert.equal(rejected.data.line, "[[0,0,\"坏输出\"]]");
 });
 
 test("caption invalidation emits an ordered state transition with both revisions", () => {

@@ -4,13 +4,98 @@
   if (globalThis.YTDS_SHARED) return;
   const internal = globalThis["__captionAiDuoSharedModulesV1__"];
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
+  const compactJsonlCoordinate = internal.compactJsonlCoordinate;
+  const isSameLanguage = internal.isSameLanguage;
 
   function normalizeTranslatedText(value) {
-    return String(value || "").replace(/>>/g, "").replace(/。/g, "").trim();
+    return String(value || "").replace(/>>/g, "").replace(/。/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function endsWithChineseFullStop(value) {
+    return /。(?:\s|>>)*$/.test(String(value || ""));
   }
 
   function isSpeakerSwitchMarker(value) {
     return String(value == null ? "" : value).trim() === ">>";
+  }
+
+  function comparableTranslationText(value) {
+    return String(value == null ? "" : value)
+      .normalize("NFKC")
+      .replace(/>>/g, "")
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .toLowerCase()
+      .replace(/[\p{P}\p{S}\s]+/gu, "");
+  }
+
+  function sourceTextForRange(itemsValue, offsetValue, countValue) {
+    const items = Array.isArray(itemsValue) ? itemsValue : [];
+    const offset = Math.max(0, Math.floor(Number(offsetValue) || 0));
+    const count = Math.max(0, Math.floor(Number(countValue) || 0));
+    return items.slice(offset, offset + count)
+      .map((item) => String(item && item.text || "").trim())
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  const TRANSLATION_FUNCTION_WORDS = Object.freeze({
+    en: new Set([
+      "a", "about", "after", "all", "an", "and", "are", "as", "at", "be", "because",
+      "but", "by", "can", "could", "do", "for", "from", "has", "have", "he", "her",
+      "here", "how", "i", "if", "in", "is", "it", "me", "my", "no", "not", "of", "on",
+      "or", "our", "so", "that", "the", "their", "there", "they", "this", "to", "was",
+      "we", "were", "what", "when", "where", "which", "who", "will", "with", "you", "your"
+    ]),
+    es: new Set(["a", "al", "con", "de", "del", "el", "en", "es", "la", "las", "lo", "los", "no", "o", "para", "por", "que", "se", "su", "un", "una", "y"]),
+    fr: new Set(["à", "au", "avec", "ce", "dans", "de", "des", "du", "elle", "en", "est", "et", "il", "la", "le", "les", "mais", "ne", "nos", "nous", "ou", "par", "pas", "pour", "que", "qui", "sont", "un", "une", "vous"]),
+    de: new Set(["aber", "alle", "als", "auf", "aus", "bei", "das", "dass", "der", "die", "ein", "eine", "für", "im", "in", "ist", "mit", "nicht", "oder", "sein", "sie", "sind", "und", "von", "war", "was", "zu"])
+  });
+
+  // Exact source echoes are usually a provider failure when the source and
+  // target languages differ. Keep this deliberately conservative: short
+  // names, acronyms, URLs, numbers, and title-like proper names may validly
+  // survive translation. A caller without both language tags cannot prove an
+  // echo is wrong, so it leaves the response untouched.
+  function isLikelyUntranslated(sourceValue, translationValue, sourceLang, targetLang) {
+    const source = String(sourceValue == null ? "" : sourceValue).trim();
+    const translation = String(translationValue == null ? "" : translationValue).trim();
+    if (!source || !translation || !sourceLang || !targetLang ||
+        (typeof isSameLanguage === "function" && isSameLanguage(sourceLang, targetLang))) {
+      return false;
+    }
+    if (comparableTranslationText(source) !== comparableTranslationText(translation)) return false;
+    if (/^(?:https?:\/\/|www\.|[\w.+-]+@[\w.-]+\.)/i.test(source)) return false;
+
+    const words = source.match(/[A-Za-z]+/g) || [];
+    if (!words.length) return false;
+    if (!/\s/.test(source) && words.length === 1) {
+      return words[0].length >= 6 && !/^[A-Z][a-z]+$/.test(words[0]);
+    }
+    if (words.filter((word) => word.length >= 2).length < 2) return false;
+
+    const titleLike = words.every((word) =>
+      /^[A-Z][a-z]+$/.test(word) || /^[A-Z0-9][A-Z0-9_-]*$/.test(word)
+    );
+    const hasLowercaseWord = words.some((word) =>
+      /[a-z]/.test(word) && !/^[A-Z][a-z]+$/.test(word)
+    );
+    const hasSentencePunctuation = /[.!?;:]/.test(source);
+    const language = String(sourceLang).trim().toLowerCase().split("-")[0];
+    const functionWords = TRANSLATION_FUNCTION_WORDS[language];
+    const hasFunctionWord = !!(functionWords && words.some((word) =>
+      functionWords.has(word.toLowerCase())
+    ));
+    if (titleLike && words.length <= 4 && !hasFunctionWord && !hasSentencePunctuation) return false;
+    return words.length >= 3 || hasLowercaseWord || hasSentencePunctuation;
+  }
+
+  function untranslatedRangeReason(itemsValue, offsetValue, countValue,
+    translationValue, sourceLang, targetLang) {
+    const source = sourceTextForRange(itemsValue, offsetValue, countValue);
+    return isLikelyUntranslated(source, translationValue, sourceLang, targetLang)
+      ? `untranslated source text at offset ${Math.max(0, Math.floor(Number(offsetValue) || 0))}`
+      : "";
   }
 
   // `>>` is a source-side speaker-turn marker. Return the separators that
@@ -65,7 +150,7 @@
     return children.some(containsLegacyAlignmentIds);
   }
 
-  function segmentedTranslationsFromJsonText(value, items, diagnostics) {
+  function segmentedTranslationsFromJsonText(value, items, diagnostics, targetLang, sourceLang) {
     const reject = (reason) => {
       if (diagnostics && typeof diagnostics === "object") diagnostics.reason = reason;
       return null;
@@ -87,8 +172,12 @@
       );
       const ids = range.ids;
       const translation = normalizeTranslatedText(segment && segment.translation);
-      if (range.error || !ids.length || !translation || cursor + ids.length > expected.length) {
-        return reject(range.error || `invalid segment at cue offset ${cursor}`);
+      const untranslated = translation && untranslatedRangeReason(
+        items, cursor, ids.length, translation, sourceLang, targetLang
+      );
+      if (range.error || !ids.length || !translation || untranslated ||
+          cursor + ids.length > expected.length) {
+        return reject(range.error || untranslated || `invalid segment at cue offset ${cursor}`);
       }
       for (let i = 0; i < ids.length; i++) {
         if (ids[i] !== expected[cursor + i]) {
@@ -123,146 +212,21 @@
     return translations;
   }
 
-  // HTTP/SSE chunks and model-generated newlines are independent of JSON
-  // array boundaries. Frame complete top-level JSON values instead of
-  // assuming that every physical line is a complete JSON value. A non-empty
-  // top-level array is one semantic unit; [] is the completion marker.
-  function aiJsonlObjects(value, flush) {
-    const input = String(value || "");
-    const objects = [];
-    let cursor = 0;
-    let start = -1;
-    const brackets = [];
-    let inString = false;
-    let escaped = false;
-    for (let index = 0; index < input.length; index++) {
-      const char = input[index];
-      if (start < 0) {
-        if (char === "{" || char === "[") {
-          start = index;
-          brackets.push(char);
-          inString = false;
-          escaped = false;
-        }
-        continue;
-      }
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') {
-        inString = true;
-      } else if (char === "{" || char === "[") {
-        brackets.push(char);
-      } else if (char === "}" || char === "]") {
-        const opening = char === "}" ? "{" : "[";
-        if (brackets[brackets.length - 1] === opening) brackets.pop();
-        if (!brackets.length) {
-          objects.push(input.slice(start, index + 1));
-          cursor = index + 1;
-          start = -1;
-        }
-      }
-    }
-    let rest = start >= 0 ? input.slice(start) : input.slice(cursor);
-    if (flush) {
-      const tail = rest.trim();
-      const recovered = aiJsonlRecoverIncompleteUnit(tail);
-      if (recovered) {
-        objects.push(recovered);
-      } else if (tail && !/^```(?:jsonl?|ndjson)?$/i.test(tail) && tail !== "```") {
-        objects.push(tail);
-      }
-      rest = "";
-    }
-    return { objects, rest };
-  }
-
-  // Some providers occasionally stop after the final aligned chunk and omit
-  // the unit array's closing `]`. The chunks before the missing bracket are
-  // still complete JSON values. Recover only that narrow shape and only from
-  // a complete chunk boundary; arbitrary malformed output remains rejected by
-  // the normal record validator.
-  function aiJsonlRecoverIncompleteUnit(value) {
-    let text = String(value || "").trim();
-    if (!/^\[\s*\[/i.test(text)) return "";
-    const brackets = [];
-    let inString = false;
-    let escaped = false;
-    let lastChunkEnd = -1;
-    for (let index = 0; index < text.length; index++) {
-      const char = text[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-        continue;
-      }
-      if (char === '"') {
-        inString = true;
-      } else if (char === "{" || char === "[") {
-        brackets.push(char);
-      } else if (char === "}" || char === "]") {
-        const opening = char === "}" ? "{" : "[";
-        if (brackets[brackets.length - 1] !== opening) return "";
-        if (opening === "[" && brackets.length === 2 &&
-            brackets[0] === "[" && brackets[1] === "[") {
-          lastChunkEnd = index + 1;
-        }
-        brackets.pop();
-      }
-    }
-    if (lastChunkEnd < 0) return "";
-    try {
-      const parsed = JSON.parse(`${text.slice(0, lastChunkEnd)}]`);
-      if (Array.isArray(parsed) && parsed.length) {
-        return JSON.stringify(parsed);
-      }
-    } catch (_e) { /* the last complete chunk may still have malformed data */ }
-    return "";
-  }
-
-  function aiJsonlRecordFromLine(value) {
-    const line = String(value || "").trim();
-    if (!line || /^```(?:jsonl?|ndjson)?$/i.test(line) || line === "```") {
-      return { ignored: true, record: null, error: "" };
-    }
-    try {
-      const record = JSON.parse(line);
-      if (Array.isArray(record)) {
-        return record.length
-          ? { ignored: false, record: { type: "unit", chunks: record }, error: "" }
-          : { ignored: false, record: { type: "done" }, error: "" };
-      }
-      return { ignored: false, record: null, error: "JSONL line must be a chunk array" };
-    } catch (_e) {
-      return { ignored: false, record: null, error: "invalid JSONL line" };
-    }
-  }
-
-  function createAiJsonlTranslationState(itemsValue, targetLang) {
+  function createAiJsonlTranslationState(itemsValue, targetLang, sourceLang) {
     const items = Array.isArray(itemsValue) ? itemsValue.filter(Boolean) : [];
     return {
       items,
       expected: items.map((item) => String(item && item.id)),
       targetLang: String(targetLang || ""),
+      sourceLang: String(sourceLang || ""),
       cursor: 0,
       translations: [],
+      // Hold marker-only units until a spoken unit can carry their coverage.
+      pendingMarkerChunks: [],
       done: false,
-      error: ""
+      error: "",
+      recoverableError: ""
     };
-  }
-
-  function compactJsonlCoordinate(value) {
-    if (typeof value === "number") {
-      return Number.isSafeInteger(value) && value >= 0 ? value : null;
-    }
-    const text = typeof value === "string" ? value.trim() : "";
-    if (!/^\d+$/.test(text)) return null;
-    const parsed = Number(text);
-    return Number.isSafeInteger(parsed) ? parsed : null;
   }
 
   function aiJsonlRangeIds(stateValue, startValue, endValue, offsetValue) {
@@ -295,6 +259,68 @@
     return Array.isArray(chunkValue)
       ? normalizeTranslatedText(chunkValue[2])
       : "";
+  }
+
+  function aiJsonlChunkMayBeEmpty(stateValue, idsValue, offsetValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const ids = Array.isArray(idsValue) ? idsValue : [];
+    const offset = Math.max(0, Math.floor(Number(offsetValue) || 0));
+    if (!state || !Array.isArray(state.items) || !ids.length) return false;
+    return ids.every((_id, index) => {
+      const source = String(state.items[offset + index] &&
+        state.items[offset + index].text || "").trim();
+      return isSpeakerSwitchMarker(source) || !source || /^[\p{P}\s]+$/u.test(source);
+    });
+  }
+
+  // A model may omit a standalone speaker marker while still returning the
+  // surrounding spoken chunks. It is safe to advance over only marker/blank
+  // source rows; a skipped word, number or punctuation remains a protocol
+  // error because its meaning cannot be reconstructed from the response.
+  function aiJsonlSafeOmittedMarkerIds(stateValue, startValue, offsetValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const offset = Math.max(0, Math.floor(Number(offsetValue) || 0));
+    const start = compactJsonlCoordinate(startValue);
+    if (!state || !Array.isArray(state.expected) || !Array.isArray(state.items) ||
+        start == null || start <= offset || start > state.expected.length) return null;
+    const ids = state.expected.slice(offset, start);
+    if (!ids.length || !ids.every((_id, index) => {
+      const source = String(state.items[offset + index] &&
+        state.items[offset + index].text || "").trim();
+      return isSpeakerSwitchMarker(source) || !source;
+    })) return null;
+    for (let index = offset; index < start; index++) {
+      if (state.items[index] && state.items[index].hardAfter) return null;
+    }
+    return ids;
+  }
+
+  function aiJsonlChunkHasSentenceBoundary(chunkValue) {
+    return Array.isArray(chunkValue) && endsWithChineseFullStop(chunkValue[2]);
+  }
+
+  function mergeEmptyAlignedChunks(chunksValue) {
+    const chunks = Array.isArray(chunksValue) ? chunksValue : [];
+    const merged = [];
+    let leadingIds = [];
+    for (const chunkValue of chunks) {
+      const chunk = chunkValue && typeof chunkValue === "object" ? chunkValue : {};
+      const ids = Array.isArray(chunk.ids) ? chunk.ids.slice() : [];
+      if (!chunk.translation) {
+        if (merged.length) {
+          const previous = merged[merged.length - 1];
+          previous.ids.push(...ids);
+          if (chunk.sentenceBoundaryAfter) previous.sentenceBoundaryAfter = true;
+        } else {
+          leadingIds.push(...ids);
+        }
+        continue;
+      }
+      merged.push({ ...chunk, ids: leadingIds.concat(ids) });
+      leadingIds = [];
+    }
+    if (leadingIds.length && merged.length) merged[0].ids.unshift(...leadingIds);
+    return merged;
   }
 
   // The model uses zero-based positions within the current request. Expand a
@@ -345,77 +371,138 @@
     if (record.type !== "unit") return reject("unknown JSONL record type");
     const chunks = Array.isArray(record.chunks) ? record.chunks : [];
     if (!chunks.length) return reject(`missing JSONL unit chunks at offset ${state.cursor}`);
+    const pendingMarkerChunks = Array.isArray(state.pendingMarkerChunks)
+      ? state.pendingMarkerChunks : [];
+    const pendingMarkerIds = pendingMarkerChunks.flatMap((chunk) =>
+      Array.isArray(chunk && chunk.ids) ? chunk.ids : []);
+    const chunkBaseOffset = state.cursor + pendingMarkerIds.length;
     const alignedChunks = [];
     const ids = [];
+    let hasVisibleTranslation = false;
     for (const chunk of chunks) {
-      const chunkResult = aiJsonlChunkIds(state, chunk, state.cursor + ids.length);
+      let chunkOffset = chunkBaseOffset + ids.length;
+      let chunkResult = aiJsonlChunkIds(state, chunk, chunkOffset);
+      if (chunkResult.error) {
+        const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], chunkOffset);
+        if (omittedIds && omittedIds.length) {
+          alignedChunks.push({ ids: omittedIds, translation: "" });
+          ids.push(...omittedIds);
+          chunkOffset += omittedIds.length;
+          chunkResult = aiJsonlChunkIds(state, chunk, chunkOffset);
+        }
+      }
       const chunkIds = chunkResult.ids;
       const translation = aiJsonlChunkTranslation(chunk);
-      if (chunkResult.error || !chunkIds.length || !translation) {
-        return reject(chunkResult.error || `invalid JSONL chunk at offset ${state.cursor + ids.length}`);
+      const markerOnly = !translation && aiJsonlChunkMayBeEmpty(
+        state, chunkIds, chunkOffset
+      );
+      const untranslated = translation && untranslatedRangeReason(
+        state.items, chunkOffset, chunkIds.length, translation,
+        state.sourceLang, state.targetLang
+      );
+      if (chunkResult.error || !chunkIds.length || (!translation && !markerOnly) || untranslated) {
+        return reject(chunkResult.error || untranslated ||
+          `invalid JSONL chunk at offset ${state.cursor + ids.length}`);
       }
+      if (translation) hasVisibleTranslation = true;
       for (const id of chunkIds) {
-        const expectedId = state.expected[state.cursor + ids.length];
+        const expectedId = state.expected[chunkBaseOffset + ids.length];
         if (id !== expectedId) {
-          return reject(`unexpected JSONL id ${id} at offset ${state.cursor + ids.length}`);
+          return reject(`unexpected JSONL id ${id} at offset ${chunkBaseOffset + ids.length}`);
         }
         ids.push(id);
       }
-      alignedChunks.push({ ids: chunkIds, translation });
+      alignedChunks.push({
+        ids: chunkIds,
+        translation,
+        ...(aiJsonlChunkHasSentenceBoundary(chunk) ? { sentenceBoundaryAfter: true } : {})
+      });
     }
     if (!ids.length) return reject(`empty JSONL unit at offset ${state.cursor}`);
-    for (let index = state.cursor; index < state.cursor + ids.length - 1; index++) {
+    if (!hasVisibleTranslation) {
+      // Keep the cursor before the marker suffix so the next spoken unit can
+      // carry it; an unfinished suffix remains deferred without an error.
+      state.pendingMarkerChunks.push(...alignedChunks);
+      return {
+        ok: true,
+        type: "marker-only",
+        ids,
+        translations: []
+      };
+    }
+    const allIds = pendingMarkerIds.concat(ids);
+    const allChunks = mergeEmptyAlignedChunks(pendingMarkerChunks.concat(alignedChunks));
+    const allStart = state.cursor;
+    const allEnd = allStart + allIds.length;
+    for (let index = allStart; index < allEnd - 1; index++) {
       if (state.items[index] && state.items[index].hardAfter) {
         return reject(`JSONL unit crosses hard boundary after cue ${state.expected[index]}`);
       }
     }
-    const firstItem = state.items[state.cursor] || {};
-    const lastItem = state.items[state.cursor + ids.length - 1] || {};
+    const firstItem = state.items[allStart] || {};
+    const lastItem = state.items[allEnd - 1] || {};
     const durationMs = Number(lastItem.endMs) - Number(firstItem.startMs);
-    const sourceChars = state.items.slice(state.cursor, state.cursor + ids.length)
+    const sourceChars = state.items.slice(allStart, allEnd)
       .reduce((sum, item) => sum + String(item && item.text || "").length, 0);
-    // A large semantic unit is safe to carry when the model supplied multiple
-    // ordered alignment chunks: the caller can promote those chunks to
-    // smaller commit units at the maximum rolling window, and the renderer
-    // can paginate the chunks without inventing a boundary. Keep the safety
-    // ceiling for a monolithic unit, where there is no trustworthy recovery
-    // boundary and an over-merged response must still be rejected.
-    if (ids.length > 1 && alignedChunks.length <= 1 &&
+    // Multiple ordered chunks provide recovery boundaries; keep the ceiling
+    // for a monolithic over-merged unit.
+    const translatedChunkCount = allChunks.filter((chunk) => chunk && chunk.translation).length;
+    if (allIds.length > 1 && translatedChunkCount <= 1 &&
         ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
-      return reject(`oversized JSONL unit ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
+      return reject(`oversized JSONL unit ${allIds[0]}-${allIds[allIds.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
     }
     const speakerSwitches = speakerSwitchSeparators(
-      alignedChunks, state.items.slice(state.cursor, state.cursor + ids.length)
+      allChunks, state.items.slice(allStart, allEnd)
     );
-    const translation = joinTranslatedParts(
-      alignedChunks.map((chunk) => chunk.translation), state.targetLang, speakerSwitches
-    );
-    const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
-    const translations = ids.map((id, index) => index === 0
-      ? { id, translation, unitId, alignedChunks }
+    const translation = joinTranslatedParts(allChunks, state.targetLang, speakerSwitches);
+    const unitId = `semantic-${allIds[0]}-${allIds[allIds.length - 1]}`;
+    const translations = allIds.map((id, index) => index === 0
+      ? { id, translation, unitId, alignedChunks: allChunks }
       : { id, translation, unitId });
     state.translations.push(...translations);
-    state.cursor += ids.length;
-    return { ok: true, type: "unit", unitId, ids, translations };
+    state.cursor = chunkBaseOffset + ids.length;
+    state.pendingMarkerChunks = [];
+    return { ok: true, type: "unit", unitId, ids: allIds, translations };
   }
 
   // When a provider puts several complete alignment chunks inside one outer
   // unit, a later chunk can still contain a missing or invented position.
   // Preserve only the strictly ordered leading chunks so the next rolling
-  // request can resume at the first missing position. Never split a chunk or
-  // skip the mismatch.
+  // request can resume at the first missing position. Only standalone marker
+  // rows may be skipped; never split a spoken chunk or skip a real mismatch.
   function aiJsonlLeadingRecordPrefix(stateValue, recordValue) {
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
     const record = recordValue && typeof recordValue === "object" ? recordValue : null;
     if (!state || !Array.isArray(state.items) || !Array.isArray(state.expected) ||
         !record || record.type !== "unit" || !Array.isArray(record.chunks)) return null;
+    const pendingMarkerChunks = Array.isArray(state.pendingMarkerChunks)
+      ? state.pendingMarkerChunks : [];
+    const pendingMarkerIds = pendingMarkerChunks.flatMap((chunk) =>
+      Array.isArray(chunk && chunk.ids) ? chunk.ids : []);
     const chunks = [];
-    let offset = state.cursor;
+    let offset = state.cursor + pendingMarkerIds.length;
+    let stopped = false;
     for (const chunk of record.chunks) {
-      const chunkResult = aiJsonlChunkIds(state, chunk, offset);
+      let chunkResult = aiJsonlChunkIds(state, chunk, offset);
+      const omittedIds = chunkResult.error
+        ? aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], offset)
+        : null;
+      if (omittedIds && omittedIds.length) {
+        chunks.push([offset, offset + omittedIds.length - 1, ""]);
+        offset += omittedIds.length;
+        chunkResult = aiJsonlChunkIds(state, chunk, offset);
+      }
       const ids = chunkResult.ids;
       const translation = aiJsonlChunkTranslation(chunk);
-      if (chunkResult.error || !ids.length || !translation) break;
+      const markerOnly = !translation && aiJsonlChunkMayBeEmpty(state, ids, offset);
+      const untranslated = translation && untranslatedRangeReason(
+        state.items, offset, ids.length, translation,
+        state.sourceLang, state.targetLang
+      );
+      if (chunkResult.error || !ids.length || (!translation && !markerOnly) || untranslated) {
+        stopped = true;
+        break;
+      }
       let valid = true;
       for (let index = 0; index < ids.length; index++) {
         if (ids[index] !== state.expected[offset + index]) {
@@ -423,19 +510,25 @@
           break;
         }
       }
-      if (!valid) break;
+      if (!valid) {
+        stopped = true;
+        break;
+      }
       for (let index = offset; index < offset + ids.length - 1; index++) {
         if (state.items[index] && state.items[index].hardAfter) {
           valid = false;
           break;
         }
       }
-      if (!valid) break;
+      if (!valid) {
+        stopped = true;
+        break;
+      }
       const chunkStart = offset;
-      chunks.push([chunkStart, chunkStart + ids.length - 1, translation]);
+      chunks.push([chunkStart, chunkStart + ids.length - 1, chunk[2]]);
       offset += ids.length;
     }
-    if (!chunks.length || chunks.length >= record.chunks.length) return null;
+    if (!chunks.length || !stopped) return null;
     return { type: "unit", chunks };
   }
 
@@ -470,14 +563,17 @@
     const state = stateValue && typeof stateValue === "object" ? stateValue : null;
     if (!state || !Array.isArray(state.translations) || !Array.isArray(state.expected)) return null;
     const coverageComplete = state.cursor === state.expected.length;
-    const partial = (!state.done && !coverageComplete) || !!state.error;
-    if (partial && (!allowPartial || !state.translations.length)) return null;
+    const hasPendingMarkers = Array.isArray(state.pendingMarkerChunks) &&
+      state.pendingMarkerChunks.length > 0;
+    const partial = (!state.done && !coverageComplete) || hasPendingMarkers || !!state.error;
+    if (partial && (!allowPartial || (!state.translations.length && !hasPendingMarkers))) return null;
     const deferredIds = state.expected.slice(state.cursor);
     const out = state.translations.slice();
     Object.defineProperties(out, {
       deferredIds: { value: deferredIds },
       streamPartial: { value: partial },
-      streamError: { value: String(state.error || "") }
+      streamError: { value: String(state.error || "") },
+      recoverableJsonlError: { value: String(state.recoverableError || "") }
     });
     return out;
   }
@@ -485,10 +581,16 @@
   function joinTranslatedParts(values, targetLang, speakerSwitchesValue) {
     const speakerSwitches = Array.isArray(speakerSwitchesValue) ? speakerSwitchesValue : [];
     const parts = (Array.isArray(values) ? values : [])
-      .map((value, index) => ({
-        text: normalizeTranslatedText(value),
-        speakerSwitchBefore: !!speakerSwitches[index]
-      }))
+      .map((value, index) => {
+        const raw = value && typeof value === "object" && !Array.isArray(value)
+          ? value.translation : value;
+        return {
+          text: normalizeTranslatedText(raw),
+          sentenceBoundaryAfter: !!(value && typeof value === "object" &&
+            value.sentenceBoundaryAfter === true) || endsWithChineseFullStop(raw),
+          speakerSwitchBefore: !!speakerSwitches[index]
+        };
+      })
       .filter((part) => part.text);
     if (!parts.length) return "";
     const compact = /^(?:zh|ja|ko)(?:-|$)/i.test(String(targetLang || ""));
@@ -497,9 +599,11 @@
       const part = parts[i].text;
       const nextIsPunctuation = /^[,.;:!?。，；：！？、)）\]】}」』]/.test(part);
       const asciiBoundary = /[A-Za-z0-9]$/.test(out) && /^[A-Za-z0-9]/.test(part);
-      const separator = parts[i].speakerSwitchBefore ? " "
-        : nextIsPunctuation ? "" : compact ? (asciiBoundary ? " " : "") : " ";
-      out += separator + part;
+      const sentenceBoundary = parts[i - 1].sentenceBoundaryAfter;
+      const compactSeparator = asciiBoundary || sentenceBoundary ? " " : "";
+      const finalSeparator = parts[i].speakerSwitchBefore ? " "
+        : nextIsPunctuation ? "" : compact ? compactSeparator : " ";
+      out += finalSeparator + part;
     }
     return out.trim();
   }
@@ -538,11 +642,19 @@
       for (const chunk of chunks) {
         const ids = chunk.ids.map(String);
         const translation = normalizeTranslatedText(chunk.translation);
+        const sentenceBoundaryAfter = chunk.sentenceBoundaryAfter === true ||
+          endsWithChineseFullStop(chunk.translation);
         const chunkUnitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
         for (let ordinal = 0; ordinal < ids.length; ordinal++) {
           const item = { ...members[memberOffset + ordinal], translation, unitId: chunkUnitId };
+          delete item.sentenceBoundaryAfter;
+          if (sentenceBoundaryAfter) item.sentenceBoundaryAfter = true;
           delete item.alignedChunks;
-          if (ordinal === 0) item.alignedChunks = [{ ids: ids.slice(), translation }];
+          if (ordinal === 0) item.alignedChunks = [{
+            ids: ids.slice(),
+            translation,
+            ...(sentenceBoundaryAfter ? { sentenceBoundaryAfter: true } : {})
+          }];
           recovered.push(item);
         }
         memberOffset += ids.length;
@@ -553,7 +665,7 @@
     return promoted ? recovered : list.slice();
   }
 
-  function alignedTranslationsFromJsonText(value, items, targetLang, diagnostics) {
+  function alignedTranslationsFromJsonText(value, items, targetLang, diagnostics, sourceLang) {
     const reject = (reason) => {
       if (diagnostics && typeof diagnostics === "object") diagnostics.reason = reason;
       return null;
@@ -629,25 +741,42 @@
         return reject(`invalid aligned segment at cue offset ${cursor}`);
       }
       const ids = [];
-      const alignedChunks = [];
+      let alignedChunks = [];
+      let hasVisibleTranslation = false;
       for (const chunk of chunks) {
-        const range = aiJsonlChunkIds({ expected }, chunk, cursor + ids.length);
+        const chunkOffset = cursor + ids.length;
+        const range = aiJsonlChunkIds({ expected }, chunk, chunkOffset);
         const chunkIds = range.ids;
         const translation = aiJsonlChunkTranslation(chunk);
-        if (range.error || !chunkIds.length || !translation) {
+        const markerOnly = !translation && aiJsonlChunkMayBeEmpty(
+          { items }, chunkIds, chunkOffset
+        );
+        const untranslated = translation && untranslatedRangeReason(
+          items, chunkOffset, chunkIds.length, translation, sourceLang, targetLang
+        );
+        if (range.error || !chunkIds.length || (!translation && !markerOnly) || untranslated) {
           return reject(range.error
             ? range.error.replace(/JSONL/g, "aligned")
-            : `invalid aligned chunk at segment offset ${ids.length}`);
+            : untranslated || `invalid aligned chunk at segment offset ${ids.length}`);
         }
+        if (translation) hasVisibleTranslation = true;
         if (cursor + ids.length + chunkIds.length > completedCount) {
           return reject(`aligned chunk crosses deferred suffix at segment offset ${ids.length}`);
         }
-        alignedChunks.push({ ids: chunkIds, translation });
+        alignedChunks.push({
+          ids: chunkIds,
+          translation,
+          ...(aiJsonlChunkHasSentenceBoundary(chunk) ? { sentenceBoundaryAfter: true } : {})
+        });
         ids.push(...chunkIds);
       }
       if (!ids.length || cursor + ids.length > completedCount) {
         return reject(`invalid aligned segment at cue offset ${cursor}`);
       }
+      if (!hasVisibleTranslation) {
+        return reject(`empty aligned segment at cue offset ${cursor}`);
+      }
+      alignedChunks = mergeEmptyAlignedChunks(alignedChunks);
       for (let i = cursor; i < cursor + ids.length - 1; i++) {
         if (items[i] && items[i].hardAfter) {
           return reject(`segment crosses hard boundary after cue ${expected[i]}`);
@@ -667,9 +796,7 @@
       const speakerSwitches = speakerSwitchSeparators(
         alignedChunks, items.slice(cursor, cursor + ids.length)
       );
-      const translation = joinTranslatedParts(
-        alignedChunks.map((chunk) => chunk.translation), targetLang, speakerSwitches
-      );
+      const translation = joinTranslatedParts(alignedChunks, targetLang, speakerSwitches);
       const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
       for (let i = 0; i < ids.length; i++) {
         translations.push(i === 0
@@ -688,5 +815,5 @@
     return translations;
   }
 
-Object.assign(internal, { normalizeTranslatedText, speakerSwitchSeparators, segmentedTranslationsFromJsonText, aiJsonlObjects, aiJsonlRecordFromLine, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
+Object.assign(internal, { normalizeTranslatedText, speakerSwitchSeparators, segmentedTranslationsFromJsonText, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts, semanticUnitsFromAlignedChunks, alignedTranslationsFromJsonText });
 })();

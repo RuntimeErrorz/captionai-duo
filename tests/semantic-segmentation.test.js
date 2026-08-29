@@ -87,3 +87,31 @@ test("semantic parser normalizes natural model translations without content heur
   assert.equal(output.length, 2);
   assert.equal(output[0].translation, "这差不多是10分满分");
 });
+
+test("semantic fallback rejects a verbatim source phrase across languages", () => {
+  const copyItems = [
+    { id: "0", text: "I met", startMs: 0, endMs: 700, hardAfter: false },
+    { id: "1", text: "American soldiers.", startMs: 700, endMs: 1700, hardAfter: false }
+  ];
+  const diagnostics = {};
+  const output = shared.segmentedTranslationsFromJsonText(
+    JSON.stringify({ segments: [{
+      start: 0, end: 1, translation: "I met American soldiers."
+    }] }),
+    copyItems, diagnostics, "zh-CN", "en"
+  );
+
+  assert.equal(output, null);
+  assert.match(diagnostics.reason, /untranslated source text/);
+});
+
+test("removing Chinese full stops preserves a space between adjacent sentences", () => {
+  assert.equal(
+    shared.normalizeTranslatedText("但在这个封闭的世界里拍摄将极其困难。声音越来越大了。"),
+    "但在这个封闭的世界里拍摄将极其困难 声音越来越大了"
+  );
+  assert.equal(
+    shared.normalizeTranslatedText("第一句。  第二句。"),
+    "第一句 第二句"
+  );
+});

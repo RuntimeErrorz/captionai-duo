@@ -34,6 +34,41 @@ test("aligned response validates nested cue coverage and preserves chunk metadat
   assert.deepEqual(Array.from(output[0].alignedChunks[1].ids), ["223", "224"]);
 });
 
+test("aligned response rejects a verbatim source phrase across languages", () => {
+  const diagnostics = {};
+  const output = shared.alignedTranslationsFromJsonText(
+    JSON.stringify({ segments: [{ chunks: [
+      responseChunk(0, 1, "The Shah is letting this happen, but very soon after, he dies,")
+    ] }] }),
+    successorItems, "zh-CN", diagnostics, "en"
+  );
+
+  assert.equal(output, null);
+  assert.match(diagnostics.reason, /untranslated source text/);
+});
+
+test("Chinese full stops preserve spaces between aligned translation chunks", () => {
+  const response = JSON.stringify({ segments: [{
+    chunks: [
+      responseChunk(0, 1, "第一句。"),
+      responseChunk(2, 3, "第二句。")
+    ]
+  }] });
+  const output = shared.alignedTranslationsFromJsonText(response, successorItems, "zh-CN");
+
+  assert.equal(output[0].translation, "第一句 第二句");
+  assert.equal(output[0].alignedChunks[0].sentenceBoundaryAfter, true);
+  assert.equal(output[0].alignedChunks[1].sentenceBoundaryAfter, true);
+  const plan = shared.alignedChunkDisplayPlan(
+    output[0].alignedChunks.map((chunk) => ({
+      ...chunk,
+      cues: chunk.ids.map((id) => successorItems[Number(id) - 221])
+    })),
+    1000, 1000, lengthMeasure, lengthMeasure, "zh-CN"
+  );
+  assert.equal(plan.pages[0].translation, "第一句 第二句");
+});
+
 test("speaker-turn markers create a visible space in aligned CJK display text", () => {
   const items = [
     { id: "0", text: ">>", startMs: 0, endMs: 100, hardAfter: false },

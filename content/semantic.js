@@ -383,7 +383,7 @@ function commitDeepseekResponsePrefix(
     if (!unit.alignedChunks && Array.isArray(item.alignedChunks)) {
       unit.alignedChunks = item.alignedChunks.map((chunk) => ({
         ids: Array.isArray(chunk && chunk.ids) ? chunk.ids.map(String) : [],
-        translation: YTDS_SHARED.normalizeTranslatedText(chunk && chunk.translation)
+        translation: YTDS_SHARED.normalizeTranslatedText(chunk && chunk.translation), sentenceBoundaryAfter: chunk && chunk.sentenceBoundaryAfter === true
       })).filter((chunk) => chunk.ids.length && chunk.translation);
     }
     byUnit.set(unitId, unit);

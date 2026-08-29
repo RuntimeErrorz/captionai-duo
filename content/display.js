@@ -91,7 +91,12 @@ function cacheSemanticDisplayCluster(unitsValue, logPages) {
       const cues = numericIds.map((id) => captionSession.sentGroups[id]).filter(Boolean);
       if (!ids.length || cues.length !== ids.length || !chunk.translation) continue;
       coveredIds.push(...ids);
-      displayChunks.push({ ids, cues, translation: String(chunk.translation) });
+      displayChunks.push({
+        ids,
+        cues,
+        translation: String(chunk.translation),
+        sentenceBoundaryAfter: chunk.sentenceBoundaryAfter === true
+      });
     }
     const exactCoverage = coveredIds.length === expectedIds.length &&
       coveredIds.every((id, index) => id === expectedIds[index]);

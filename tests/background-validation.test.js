@@ -139,7 +139,6 @@ test("all segmentation lanes use compact alignment ranges", async () => {
     String,
     YTDS_SHARED: loadShared(),
     MAX_PROMPT_SOURCE_CHARS: 28000,
-    appendDebug: () => {},
     aiRawCompletion: async (_config, messages, _signal, maxTokens, _temperature, trace) => {
       prompts.push({
         content: messages[0].content,
@@ -207,6 +206,47 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   assert.match(prompts[5].content, /never translate it as a period/);
 });
 
+test("detailed semantic diagnostics retain the raw JSONL response", async () => {
+  const debug = [];
+  const raw = '[[0,0,"完整译文"]]\n[]\n';
+  const context = {
+    Array,
+    Date,
+    Map,
+    Math,
+    Number,
+    Object,
+    Promise,
+    Set,
+    String,
+    YTDS_SHARED: loadShared(),
+    MAX_PROMPT_SOURCE_CHARS: 28000,
+    appendDebug: (...args) => debug.push(args),
+    aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
+      trace.onTextDelta(raw, true);
+      return { raw, diagnostics: { attempts: [] } };
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(translationSource, context, { filename: "background/translation.js" });
+  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const result = await fetch([{
+    id: "0", cueId: "cue-0", text: "source", startMs: 0, endMs: 500,
+    pauseAfterMs: 0, softAfter: false, hardAfter: false
+  }], "zh-CN", "en", [], [], {}, null, {
+    debug: true,
+    requestId: "commit:0:1:0-0",
+    requestClass: "urgent"
+  });
+
+  const rawEvent = debug.find((entry) => entry[1] === "semantic-jsonl-raw-response");
+  assert.ok(rawEvent);
+  assert.equal(rawEvent[2].format, "jsonl");
+  assert.equal(rawEvent[2].responseChars, raw.length);
+  assert.equal(rawEvent[2].rawResponse, raw);
+  assert.equal(result[0].translation, "完整译文");
+});
+
 test("a cancelled partial JSONL stream remains a cancellation, not a partial result", async () => {
   const context = {
     Array,
@@ -220,7 +260,6 @@ test("a cancelled partial JSONL stream remains a cancellation, not a partial res
     String,
     YTDS_SHARED: loadShared(),
     MAX_PROMPT_SOURCE_CHARS: 28000,
-    appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       trace.onTextDelta(
         '[[0,0,"已完成"]]\n',
@@ -261,7 +300,6 @@ test("a transport failure after malformed JSONL keeps the JSONL diagnostic code"
     String,
     YTDS_SHARED: loadShared(),
     MAX_PROMPT_SOURCE_CHARS: 28000,
-    appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       trace.onTextDelta(
         '[[0,0,"已完成"]]\n' +

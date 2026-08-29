@@ -61,7 +61,8 @@ html.ytds-active .caption-window {
      font is decorative or unusually large. */
   font-family: "Cascadia Mono", "SFMono-Regular", "Roboto Mono", Consolas,
     "Liberation Mono", "Courier New", ui-monospace, monospace !important;
-  font-size: 0.78em !important;
+  /* Keep protocol errors readable while they are shown in the translation row. */
+  font-size: 1.56em !important;
   font-style: normal;
   letter-spacing: 0.01em;
 }

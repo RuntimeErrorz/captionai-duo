@@ -889,7 +889,6 @@ test("malformed JSONL falls back to a bounded prefix and exposes the suffix", as
     aiResponseCacheId: () => "fallback-cache",
     readAiResponseCache: async () => null,
     writeAiResponseCache: async () => {},
-    appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       calls.push(!!(trace && trace.jsonLines));
       if (trace && trace.jsonLines) {
@@ -944,7 +943,6 @@ test("urgent and speculative lanes share one exact in-flight provider request", 
     aiResponseCacheId: () => "same-request",
     readAiResponseCache: async () => null,
     writeAiResponseCache: async () => {},
-    appendDebug: () => {},
     aiRawCompletion: async (_config, _messages, _signal, _maxTokens, _temperature, trace) => {
       networkCalls++;
       return new Promise((resolve) => {
@@ -2021,7 +2019,7 @@ test("same-group playback watchdog and rate change re-arm accelerated current pr
   assert.deepEqual(calls, [{ group: 0, includePredecessor: true, urgent: true }]);
 });
 
-test("cached translations are normalized again at the content cache boundary", () => {
+test("cached translations are normalized again while preserving sentence spacing", () => {
   const cached = [
     {
       id: "0",
@@ -2036,10 +2034,10 @@ test("cached translations are normalized again at the content cache boundary", (
   const nextCursor = commit(0, 0, 1, 0, 500, cached, 0);
 
   assert.equal(nextCursor, 2);
-  assert.equal(harness.context.captionSession.transCache.get("video g0"), "缓存译文");
+  assert.equal(harness.context.captionSession.transCache.get("video g0"), "缓存 译文");
   assert.equal(
     harness.context.captionSession.deepseekAlignedChunksCache.get("semantic-0-1")[0].translation,
-    "缓存译文"
+    "缓存 译文"
   );
 });
 
@@ -2123,7 +2121,6 @@ test("a no-progress retry bypasses a cached semantic response and replaces it", 
     aiResponseCacheId: () => "cache-id",
     readAiResponseCache: async () => { cacheReads++; return cached; },
     writeAiResponseCache: async () => { cacheWrites++; },
-    appendDebug: () => {},
     deepseekSegmentBatchFetch: async () => fresh
   };
   vm.createContext(context);

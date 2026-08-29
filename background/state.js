@@ -28,7 +28,7 @@ const MAX_TRANSLATE_CHARS = 4000;
 // remain independent safety limits.
 const MAX_BATCH_ITEMS = 320;
 const MAX_PROMPT_SOURCE_CHARS = 28000;
-const AI_PROMPT_CACHE_VERSION = "prompt-v33-deepseek-array-jsonl";
+const AI_PROMPT_CACHE_VERSION = "prompt-v34-deepseek-array-jsonl";
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";
 const AI_RESPONSE_CACHE_MAX_ENTRIES = 96;
 const AI_RESPONSE_CACHE_MAX_CHARS = 2000000;
@@ -38,9 +38,17 @@ const AI_TOKEN_USAGE_KEY = "ytdsAiTokenUsageV1";
 // but Chromium forks may lag) — degrade to in-memory state without it.
 const sessionStore = (chrome.storage && chrome.storage.session) || null;
 const debugStore = sessionStore || (chrome.storage && chrome.storage.local) || null;
-const DEBUG_MAX = 1200;
-const DEBUG_MAX_CHARS = 4000000;
-const DEBUG_MAX_ENTRY_CHARS = 30000;
+// Keep enough headroom for a 30-minute reproduction at the current event
+// rate. Detailed request/response/display payloads are retained below, while
+// the age window has an extra 15-minute margin.
+const DEBUG_MIN_RETENTION_MS = 30 * 60 * 1000;
+const DEBUG_RETENTION_MS = DEBUG_MIN_RETENTION_MS + 15 * 60 * 1000;
+// Detailed request/response text is intentionally retained for local testing.
+// Keep the age window above the requested 30-minute reproduction while giving
+// raw semantic responses enough room to remain useful in the exported bundle.
+const DEBUG_MAX = 50000;
+const DEBUG_MAX_CHARS = 24000000;
+const DEBUG_MAX_ENTRY_CHARS = 120000;
 const DEBUG_BUNDLE_SCHEMA_VERSION = 1;
 let debugLogs = [];
 let debugChars = 0;
@@ -107,18 +115,25 @@ async function refreshDebugKnownSecrets() {
 }
 
 function sanitizeDebugValue(value) {
-  return YTDS_SHARED.sanitizeDiagnosticValue(value, { secrets: debugKnownSecrets });
+  return YTDS_SHARED.sanitizeDiagnosticValue(value, {
+    secrets: debugKnownSecrets,
+    maxArray: 512,
+    maxKeys: 128,
+    maxStringChars: 30000
+  });
 }
 
 function sanitizeDebugEntry(entry) {
   const value = entry && typeof entry === "object" ? entry : {};
+  const event = String(sanitizeDebugValue(value.event || "event")).slice(0, 96);
+  const data = sanitizeDebugValue(value.data == null ? null : value.data);
   return {
     protocolVersion: DEBUG_BUNDLE_SCHEMA_VERSION,
     sequence: Math.max(0, Math.floor(Number(value.sequence) || 0)),
     ts: String(sanitizeDebugValue(value.ts || new Date().toISOString())).slice(0, 48),
     scope: String(sanitizeDebugValue(value.scope || "background")).slice(0, 48),
-    event: String(sanitizeDebugValue(value.event || "event")).slice(0, 96),
-    data: sanitizeDebugValue(value.data == null ? null : value.data)
+    event,
+    data
   };
 }
 
@@ -347,8 +362,8 @@ function appendDebug(scope, event, data) {
       data: {
         truncated: true,
         originalChars: serialized.length,
-          keys: data && typeof data === "object" ? Object.keys(data).slice(0, 24) : []
-        }
+        keys: data && typeof data === "object" ? Object.keys(data).slice(0, 24) : []
+      }
     });
     serialized = JSON.stringify(entry);
   }
@@ -364,7 +379,14 @@ function appendDebug(scope, event, data) {
 }
 
 function trimDebugLogs() {
-  while (debugLogs.length > DEBUG_MAX || debugChars > DEBUG_MAX_CHARS) {
+  const cutoff = Date.now() - DEBUG_RETENTION_MS;
+  const isTooOld = (entry) => {
+    const timestamp = Date.parse(String(entry && entry.ts || ""));
+    return Number.isFinite(timestamp) && timestamp < cutoff;
+  };
+  while (debugLogs.length &&
+      (debugLogs.length > DEBUG_MAX || debugChars > DEBUG_MAX_CHARS ||
+       isTooOld(debugLogs[0]))) {
     const removed = debugLogs.shift();
     if (removed) debugChars -= JSON.stringify(removed).length;
   }
@@ -377,11 +399,19 @@ async function exportDebugLogs() {
   // added after the event was recorded cannot leak through the clipboard.
   await refreshDebugKnownSecrets();
   const entries = debugLogs.map(sanitizeDebugEntry);
+  const firstTs = entries.length ? entries[0].ts : "";
+  const lastTs = entries.length ? entries[entries.length - 1].ts : "";
+  const firstMs = Date.parse(firstTs);
+  const lastMs = Date.parse(lastTs);
   return JSON.stringify({
     schemaVersion: DEBUG_BUNDLE_SCHEMA_VERSION,
     exportedAt: new Date().toISOString(),
     extensionVersion: String(chrome.runtime.getManifest().version || ""),
     entryCount: entries.length,
+    coverageMs: Number.isFinite(firstMs) && Number.isFinite(lastMs)
+      ? Math.max(0, lastMs - firstMs) : 0,
+    firstEntryAt: firstTs,
+    lastEntryAt: lastTs,
     entries
   }, null, 2);
 }

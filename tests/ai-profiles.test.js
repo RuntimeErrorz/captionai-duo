@@ -110,11 +110,72 @@ test("switching a profile materializes secrets locally and emits one unified rev
   assert.equal(JSON.stringify(syncWrites[0]).includes("gemini-secret"), false);
 });
 
-test("profile renaming is inline and never opens a native prompt", () => {
-  assert.doesNotMatch(source, /\bprompt\s*\(/);
-  assert.match(source, /aiProfileNameEditor/);
-  assert.match(source, /event\.key === "Enter"/);
-  assert.match(source, /event\.key === "Escape"/);
+test("profile renaming edits and persists the active profile inline", async () => {
+  const { context, local } = profileContext();
+  let focused = false;
+  let selected = false;
+  const nodes = {
+    aiProfileSelect: { hidden: false },
+    aiProfileNameEditor: {
+      hidden: true,
+      value: "",
+      focus() { focused = true; },
+      select() { selected = true; }
+    },
+    newAiProfile: { hidden: false },
+    renameAiProfile: { hidden: false, textContent: "" },
+    cancelRenameAiProfile: { hidden: true },
+    deleteAiProfile: { hidden: false },
+    aiProfileSelectValue: { textContent: "" },
+    aiProfileMenu: {
+      children: [],
+      replaceChildren(...children) { this.children = children; }
+    }
+  };
+  context.$ = (id) => nodes[id] || null;
+  context.document = {
+    createElement() {
+      return {
+        dataset: {},
+        setAttribute() {}
+      };
+    }
+  };
+  context.prompt = () => { throw new Error("native prompt must not be used"); };
+  vm.runInContext(`aiConfigProfileStore = {
+    activeId: "first",
+    profiles: [{
+      id: "first",
+      name: "Original",
+      targetLang: "zh-CN",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+      apiKey: "",
+      extraBody: "{}",
+      contextPast: 1,
+      contextFuture: 1,
+      prefetchBatches: 1
+    }]
+  }; aiConfigProfileReady = true`, context);
+
+  vm.runInContext("startAiConfigProfileRename()", context);
+  assert.equal(nodes.aiProfileSelect.hidden, true);
+  assert.equal(nodes.aiProfileNameEditor.hidden, false);
+  assert.equal(nodes.newAiProfile.hidden, true);
+  assert.equal(nodes.cancelRenameAiProfile.hidden, false);
+  assert.equal(nodes.deleteAiProfile.hidden, true);
+  assert.equal(nodes.renameAiProfile.textContent, "保存");
+  assert.equal(nodes.aiProfileNameEditor.value, "Original");
+  assert.equal(focused, true);
+  assert.equal(selected, true);
+
+  nodes.aiProfileNameEditor.value = "Renamed";
+  await vm.runInContext("finishAiConfigProfileRename(true)", context);
+
+  assert.equal(local.aiConfigProfileStoreV1.profiles[0].name, "Renamed");
+  assert.equal(nodes.aiProfileSelect.hidden, false);
+  assert.equal(nodes.aiProfileNameEditor.hidden, true);
+  assert.equal(nodes.renameAiProfile.textContent, "重命名");
 });
 
 test("profile order changes locally without switching the active profile", async () => {

@@ -28,8 +28,7 @@ function loadRateLimitHarness(errorValue, urgent = false) {
     cleanContext: () => [],
     YTDS_SHARED: { ...loadShared(), videoIdMatchesPageUrls: () => true },
     acquireDeepSeekSlot: () => { throw errorValue; },
-    persistAiStatus: (...args) => statuses.push(args),
-    sendResponse: () => {}
+    persistAiStatus: (...args) => statuses.push(args)
   };
   vm.createContext(context);
   vm.runInContext(messagesSource, context, { filename: "background/messages.js" });
@@ -66,8 +65,7 @@ function loadPartialResultHarness(translations, urgent = true, fastPath = false)
     acquireDeepSeekSlot: () => () => {},
     registerDeepSeekController: () => () => {},
     deepseekTranslateBatch: async () => translations,
-    persistAiStatus: (...args) => statuses.push(args),
-    sendResponse: (response) => responses.push(response)
+    persistAiStatus: (...args) => statuses.push(args)
   };
   vm.createContext(context);
   vm.runInContext(messagesSource, context, { filename: "background/messages.js" });
