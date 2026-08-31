@@ -93,3 +93,55 @@ test("caption-track selection accepts only the current video's listed tracks", (
   assert.equal(configs[2].captionTrackId, "auto");
   assert.equal(configs[2].translationTrackId, "track:en:manual:one");
 });
+
+test("caption-track catalog diagnostics retain labels without proof-bearing URLs", () => {
+  const events = [];
+  const context = {
+    location: { origin: "https://www.youtube.com" },
+    window: {},
+    settings: { enabled: true, debugEnabled: true },
+    captionSession: {
+      currentVideoId: "abcdefghijk",
+      availableCaptionTracks: [],
+      selectedCaptionTrackId: "auto",
+      selectedTranslationTrackId: "ai",
+      configNonce: 0
+    },
+    emitDebug: (event, data) => events.push({ event, data }),
+    captionButtonDebugState: () => ({})
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(bridgeSource, context);
+  vm.runInContext(`onInjectMessage({
+    source: window,
+    origin: location.origin,
+    data: {
+      source: "ytds-inject",
+      type: "caption-tracks",
+      videoId: "abcdefghijk",
+      catalogReason: "catalog-scan",
+      tracks: [{
+        id: "track:en:asr:a.en",
+        languageCode: "en",
+        label: "English (auto-generated)",
+        kind: "asr"
+      }],
+      selectedTrackId: "auto",
+      preferredTrackId: "track:en:asr:a.en",
+      selectedTranslationTrackId: "ai"
+    }
+  })`, context);
+
+  const catalog = events.find((entry) => entry.event === "caption-track-catalog");
+  assert.ok(catalog, JSON.stringify(events));
+  assert.equal(catalog.data.reason, "catalog-scan");
+  assert.equal(JSON.stringify(catalog.data.tracks), JSON.stringify([{
+    id: "track:en:asr:a.en",
+    languageCode: "en",
+    label: "English (auto-generated)",
+    kind: "asr",
+    labelFallback: false
+  }]));
+  assert.doesNotMatch(JSON.stringify(catalog), /timedtext|baseUrl|proof/);
+});

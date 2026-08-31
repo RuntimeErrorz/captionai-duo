@@ -88,7 +88,6 @@
       return "";
     }
   }
-
   // Auto mode deliberately follows the source/original track even when
   // YouTube carries an old auto-translation parameter across navigation.
   function selectedTrackUrl(url) { return sourceTrackUrl(url); }
@@ -179,12 +178,15 @@
     if (sourceTrackId && incomingTrackId) return sourceTrackId === incomingTrackId;
     return selectedTrackUrl(url) === sourceUrl || normKey(url) === sourceKey;
   }
-  function publishCaptionTracks() { post("caption-tracks", {
-    tracks: availableCaptionTracks.map((track) => ({ ...track })),
-    selectedTrackId: selectedCaptionTrackId,
-    preferredTrackId: preferredCaptionTrackId,
-    selectedTranslationTrackId
-  }); }
+  function publishCaptionTracks(reason) {
+    post("caption-tracks", {
+      tracks: availableCaptionTracks.map((track) => ({ ...track })),
+      selectedTrackId: selectedCaptionTrackId,
+      preferredTrackId: preferredCaptionTrackId,
+      selectedTranslationTrackId,
+      catalogReason: String(reason || "changed").slice(0, 40)
+    });
+  }
 
   function postCaptionTracks(force, skipSourceSelection) {
     if (!trackCatalog || typeof trackCatalog.scan !== "function") {

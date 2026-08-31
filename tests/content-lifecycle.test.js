@@ -8,6 +8,23 @@ const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const lifecycleSource = fs.readFileSync(path.join(root, "content", "lifecycle.js"), "utf8");
+const stateUiSource = fs.readFileSync(path.join(root, "content", "state-ui.js"), "utf8");
+
+test("content i18n falls back when the extension context is invalidated", () => {
+  const context = {
+    window: { __ytdsContentLoaded: false },
+    chrome: {
+      i18n: {
+        getMessage() { throw new Error("Extension context invalidated"); }
+      }
+    }
+  };
+  const i18nSectionEnd = stateUiSource.indexOf("// ---- shared settings model");
+  vm.createContext(context);
+  vm.runInContext(stateUiSource.slice(0, i18nSectionEnd), context);
+
+  assert.equal(vm.runInContext('t("missing", "fallback")', context), "fallback");
+});
 
 test("same-video navigate-finish preserves the active caption session", () => {
   const listeners = new Map();

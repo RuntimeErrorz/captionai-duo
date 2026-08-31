@@ -10,7 +10,13 @@ window.__ytdsContentLoaded = true;
 // Safe wrapper around chrome.i18n.getMessage: returns the localized string,
 // or the supplied fallback if i18n is unavailable / the key is missing, so
 // nothing breaks if a message is absent.
-const t = (k, fb) => (chrome.i18n && chrome.i18n.getMessage(k)) || fb;
+function t(k, fb) {
+  try {
+    const message = chrome.i18n && chrome.i18n.getMessage(k);
+    if (message) return message;
+  } catch (_e) { /* extension context may be invalidated after a reload */ }
+  return fb;
+}
 
 // ---- shared settings model (MUST match popup.js DEFAULTS) ----------------
 const DEFAULTS = YTDS_SHARED.DEFAULTS;
@@ -58,6 +64,7 @@ let extensionContextInvalidated = false;
 
 // overlay
 let overlay = null;
+let panelEl = null;
 let origEl = null;
 let transEl = null;
 let handleEl = null;
@@ -295,13 +302,16 @@ function ensureOverlay() {
 
   overlay = document.createElement("div");
   overlay.id = "ytds-overlay";
+  panelEl = document.createElement("div");
+  panelEl.className = "ytds-panel";
   transEl = document.createElement("div");
   transEl.className = "ytds-line ytds-trans";
   origEl = document.createElement("div");
   origEl.className = "ytds-line ytds-orig";
 
-  overlay.appendChild(transEl);
-  overlay.appendChild(origEl);
+  panelEl.appendChild(transEl);
+  panelEl.appendChild(origEl);
+  overlay.appendChild(panelEl);
   buildHandle();                  // drag grip (its listeners die with overlay)
   player.appendChild(overlay);
   styleOverlay();
@@ -444,8 +454,7 @@ function styleOverlay() {
 
   // spacing + order
   const rowGap = Math.max(0, Number(settings.rowGap) || 0);
-  overlay.style.gap = rowGap + "px";
-  overlay.style.setProperty("--ytds-row-gap", rowGap + "px");
+  panelEl.style.gap = rowGap + "px";
   if (settings.order === "trans-top") {
     overlay.classList.add("ytds-trans-top");
     overlay.classList.remove("ytds-orig-top");
@@ -460,7 +469,6 @@ function styleOverlay() {
   origEl.style.fontSize = (fullscreen ? settings.origFullscreenSize : settings.origSize) + "px";
   origEl.style.color = settings.origColor;
   const origBg = rgba(settings.origBg, settings.origBgOpacity);
-  origEl.style.backgroundColor = origBg;
   origEl.style.setProperty("--ytds-line-bg", origBg);
   origEl.style.textShadow = "none";
   origEl.style.webkitTextStroke = outlineStyle(
@@ -473,7 +481,6 @@ function styleOverlay() {
   transEl.style.fontSize = (fullscreen ? settings.transFullscreenSize : settings.transSize) + "px";
   transEl.style.color = settings.transColor;
   const transBg = rgba(settings.transBg, settings.transBgOpacity);
-  transEl.style.backgroundColor = transBg;
   transEl.style.setProperty("--ytds-line-bg", transBg);
   transEl.style.textShadow = "none";
   transEl.style.webkitTextStroke = outlineStyle(
@@ -481,9 +488,18 @@ function styleOverlay() {
   );
   transEl.style.paintOrder = "stroke";
 
+  const sharedBg = origBg === transBg;
+  origEl.style.backgroundColor = sharedBg ? "" : origBg;
+  transEl.style.backgroundColor = sharedBg ? "" : transBg;
+
   // per-line visibility
   origEl.style.display = settings.showOriginal ? "" : "none";
   transEl.style.display = settings.showTranslation ? "" : "none";
+  // Identical row surfaces can be painted once by the content-sized panel. This
+  // removes the fractional boundary where two translucent backgrounds meet;
+  // different user-selected surfaces continue to render per row.
+  panelEl.style.backgroundColor = sharedBg ? origBg : "";
+  overlay.classList.toggle("ytds-shared-bg", sharedBg);
 
   applyPosition();
   updateEmptyState();
@@ -501,6 +517,7 @@ function removeOverlay() {
   }
   dragging = false;
   if (overlay) { overlay.remove(); overlay = null; } // removes handle + its listeners
+  panelEl = null;
   origEl = null;
   transEl = null;
   handleEl = null;

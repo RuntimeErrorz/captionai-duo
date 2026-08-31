@@ -193,6 +193,41 @@ test("caption catalog exposes every YouTube track without proof-bearing URLs", a
   assert.equal(observed.track.label, "English (auto-generated)");
 });
 
+test("caption catalog upgrades a language-code label when a later player response has the track name", () => {
+  const trackUrl = "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en&kind=asr&pot=proof-en";
+  const context = {
+    URL,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    ytInitialPlayerResponse: {
+      captions: { playerCaptionsTracklistRenderer: { captionTracks: [{
+        baseUrl: trackUrl, languageCode: "en", kind: "asr", vssId: "a.en"
+      }] } }
+    },
+    window: null
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, "inject/caption-tracks.js"), "utf8"), context);
+
+  const first = vm.runInContext("window.__ytdsCaptionTrackCatalog.scan('abcdefghijk')", context);
+  assert.equal(first.tracks[0].label, "en");
+
+  context.ytplayer = { config: { args: { player_response: {
+    captions: { playerCaptionsTracklistRenderer: { captionTracks: [{
+      baseUrl: trackUrl, languageCode: "en", kind: "asr", vssId: "a.en",
+      name: { simpleText: "English (auto-generated)" }
+    }] } }
+  } } } };
+  const refreshed = vm.runInContext(
+    "window.__ytdsCaptionTrackCatalog.scan('abcdefghijk')", context
+  );
+  assert.equal(refreshed.tracks[0].label, "English (auto-generated)");
+  assert.equal(refreshed.tracks[0].id, first.tracks[0].id);
+});
+
 test("explicit caption selection fetches the chosen language track", async () => {
   const listeners = new Map();
   const posts = [];

@@ -29,7 +29,7 @@ function popupContext() {
   const context = {
     YTDS_SHARED: { DEFAULTS: {} },
     chrome: {
-      i18n: { getMessage: () => "" },
+      i18n: { getMessage: () => "", getUILanguage: () => "en" },
       storage: {
         onChanged: { addListener: () => {} },
         sync: { get: () => {} },
@@ -64,6 +64,17 @@ test("caption labels use YouTube's track name without rewriting it", () => {
     "safeCaptionTrack({id: 'track:en:manual:m.en', label: 'English (auto-generated)', languageCode: 'en', kind: 'manual'}).label",
     context
   ), "English (auto-generated)");
+});
+
+test("code-only caption labels get a readable fallback without changing track identity", () => {
+  const context = popupContext();
+  const track = vm.runInContext(
+    "safeCaptionTrack({id: 'track:en:asr:a.en', label: 'en', languageCode: 'en', kind: 'asr'})",
+    context
+  );
+  assert.equal(track.label, "English (auto-generated)");
+  assert.equal(track.id, "track:en:asr:a.en");
+  assert.equal(track.kind, "asr");
 });
 
 test("automatic caption selection displays the resolved track without an auto option", () => {

@@ -59,20 +59,29 @@
     return "";
   }
 
+  function isLanguageCodeLabel(label, language) {
+    const left = languageCode(label).toLowerCase();
+    const right = languageCode(language).toLowerCase();
+    return !!left && left === right;
+  }
+
   function trackLabelForSource(source, fallback) {
     const key = sourceKey(source);
+    let codeLabel = "";
     if (key) {
       for (const response of playerResponses()) {
         for (const raw of captionTracksFrom(response)) {
           const rawSource = canonicalSource(raw && raw.baseUrl);
           if (rawSource && sourceKey(rawSource) === key) {
             const label = trackLabel(raw && raw.name);
-            if (label) return label;
+            if (!label) continue;
+            if (!isLanguageCodeLabel(label, fallback)) return label;
+            if (!codeLabel) codeLabel = label;
           }
         }
       }
     }
-    return fallback;
+    return codeLabel || fallback;
   }
 
   function canonicalSource(value) {
@@ -292,7 +301,10 @@
       } catch (_e) { return; }
       seenSources.add(key);
       const kind = raw && raw.kind === "asr" ? "asr" : "manual";
-      const label = trackLabel(raw && raw.name) || language;
+      // The same track can appear in several player-response surfaces. Some
+      // early responses contain the URL/language but omit name; search all
+      // current responses before falling back to the language code.
+      const label = trackLabelForSource(source, language);
       const vssId = safeIdPart(raw && raw.vssId);
       const baseId = `track:${language.toLowerCase()}:${kind}:${vssId || hash(key)}`;
       let id = baseId;

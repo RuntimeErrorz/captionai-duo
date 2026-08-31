@@ -40,6 +40,18 @@ function onInjectMessage(evt) {
     } else if (!tracks.some((track) => track.id === captionSession.selectedTranslationTrackId)) {
       captionSession.selectedTranslationTrackId = "ai";
     }
+    emitDebug("caption-track-catalog", {
+      reason: String(d.catalogReason || "changed").slice(0, 40),
+      trackCount: tracks.length,
+      tracks: tracks.map((track) => ({
+        id: track.id,
+        languageCode: track.languageCode,
+        label: track.label,
+        kind: track.kind,
+        labelFallback: String(track.label || "").toLowerCase() ===
+          String(track.languageCode || "").toLowerCase()
+      }))
+    });
     return;
   }
   if (d.type === "diagnostic") {
