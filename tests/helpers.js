@@ -20,6 +20,7 @@ const CONTENT_FILES = Object.freeze([
   "content/player-toggle.js",
   "content/diagnostics.js",
   "content/session.js",
+  "content/semantic-policy.js",
   "content/cue-playback.js",
   "content/display.js",
   "content/semantic-requests.js",

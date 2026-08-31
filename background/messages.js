@@ -78,7 +78,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: "invalid translation batch", errorCode: "AI_INVALID_BATCH" });
       return;
     }
-    const endpointKind = msg.endpointKind === "deepseek" ? "deepseek" : "compatible";
+    const endpointKind = msg.endpointKind === "deepseek" || msg.endpointKind === "gemini"
+      ? msg.endpointKind : "compatible";
     let release;
     try { release = acquireDeepSeekSlot(sender, !!msg.urgent, endpointKind); }
     catch (err) {

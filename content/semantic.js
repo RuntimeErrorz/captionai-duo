@@ -156,7 +156,7 @@ function deepseekCommitState(regionIndex) {
       limitEnd: region.end,
       targetThrough: region.start - 1,
       urgentTarget: region.start - 1,
-      windowItems: DEEPSEEK_INITIAL_REQUEST_ITEMS,
+      windowItems: deepseekInitialRequestItems(),
       recoveryWindowItems: false, noProgressRange: "",
       prefetchQueue: [],
       prefetchQueued: new Set(),
@@ -332,7 +332,7 @@ function reseedDeepseekCommitState(regionIndex, targetGroup) {
   state.limitEnd = Math.max(targetGroup, limitEnd);
   state.targetThrough = requestStart - 1;
   state.urgentTarget = requestStart - 1;
-  state.windowItems = DEEPSEEK_INITIAL_REQUEST_ITEMS;
+  state.windowItems = deepseekInitialRequestItems();
   state.recoveryWindowItems = false; state.noProgressRange = "";
   emitDebug("semantic-commit-reseeded", {
     regionIndex,
@@ -530,7 +530,7 @@ function handleDeepseekTranslationProgress(msg) {
   state.cursor = nextCursor;
   state.commitFloor = nextCursor;
   reconcileDeepseekPrefetchCandidates(state, nextCursor);
-  state.windowItems = DEEPSEEK_REQUEST_ITEMS;
+  state.windowItems = deepseekSteadyRequestItems();
   state.recoveryWindowItems = false; state.noProgressRange = "";
   captionSession.deepseekExhaustedRegions.delete(request.regionIndex);
   request.progressTranslations = request.progressTranslations.filter(
@@ -547,7 +547,7 @@ function handleDeepseekTranslationProgress(msg) {
     nextCursor
   });
   if (deepseekStreamHandoffReady(
-    request, state, deepseekMaxRequestItems(), DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS
+    request, state, deepseekMaxRequestItems(), deepseekNormalMaxRequestItems()
   )) handoffDeepseekStream(request.regionIndex, request, state);
   repaintActiveDeepseekTranslation();
   return true;
@@ -567,18 +567,6 @@ function deepseekUrgentTargetTailItems() {
     ));
   }
   return DEEPSEEK_URGENT_TARGET_TAIL_ITEMS;
-}
-
-function deepseekMaxRequestItems() {
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  if (Number.isFinite(rate) && rate >= 2.5) {
-    const configured = typeof DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS === "number"
-      ? DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS : 160;
-    return Math.min(DEEPSEEK_MAX_REQUEST_ITEMS, Math.max(1, configured));
-  }
-  return Number.isFinite(rate) && rate >= 1.75
-    ? DEEPSEEK_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
 }
 
 function deepseekKeepAcceleratedUrgentLane(requestWasUrgent, state) {
@@ -634,7 +622,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   const planningState = planningWindowItems > state.windowItems
     ? { ...state, windowItems: planningWindowItems } : state;
   const initialUrgentItems = acceleratedPlayback && requestUrgent && !recoveryWindow
-    ? acceleratedUrgentItems : DEEPSEEK_URGENT_REQUEST_ITEMS;
+    ? acceleratedUrgentItems : deepseekUrgentRequestItems();
   const requestPlan = YTDS_SHARED.semanticCommitRequestPlan(
     planningState, requestStart, DEEPSEEK_COMMIT_GUARD_ITEMS,
     maxRequestItems, requestUrgent, initialUrgentItems,
@@ -741,7 +729,7 @@ function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, 
   const currentMissing = !captionSession.transCache.has(groupKey(gIdx));
   const targetTailItems = deepseekUrgentTargetTailItems();
   const urgentRequestItems = Math.max(
-    DEEPSEEK_URGENT_REQUEST_ITEMS,
+    deepseekUrgentRequestItems(),
     targetTailItems + DEEPSEEK_COMMIT_GUARD_ITEMS
   );
   const maxRequestItems = deepseekMaxRequestItems();

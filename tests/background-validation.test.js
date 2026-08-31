@@ -122,6 +122,13 @@ test("provider-specific concurrency admits DeepSeek runway without overdriving c
   assert.equal(typeof urgentRelease, "function");
   urgentRelease();
   for (const release of compatibleReleases) release();
+
+  const geminiRelease = context.acquireDeepSeekSlot(sender, false, "gemini");
+  assert.throws(
+    () => context.acquireDeepSeekSlot(sender, false, "gemini"),
+    /local concurrency guard busy/
+  );
+  geminiRelease();
 });
 
 test("all segmentation lanes use compact alignment ranges", async () => {

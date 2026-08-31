@@ -92,8 +92,20 @@ const DEEPSEEK_REQUEST_ITEMS = 80; // normal monotonic request window
 const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
 const DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS = 64; // keep DeepSeek's visible stream short at >=1.75x; future runway is speculative
 const DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS = 48; // DeepSeek output is slower than playback at >=2.5x; hand off to the staged runway sooner
-const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // Gemini/OpenAI-compatible streams can fill the wider visible runway
+const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // generic compatible streams can fill the wider visible runway
 const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
+// Gemini Flash Lite's free tier is request-limited. Use a wider sequential
+// writer and keep its quota-saving policy separate from generic compatible
+// endpoints, whose latency/concurrency trade-offs are different.
+const GEMINI_INITIAL_REQUEST_ITEMS = 160;
+const GEMINI_REQUEST_ITEMS = 160;
+const GEMINI_URGENT_REQUEST_ITEMS = 160;
+const GEMINI_ACCELERATED_URGENT_REQUEST_ITEMS = 160;
+const GEMINI_HIGH_SPEED_URGENT_REQUEST_ITEMS = 192;
+const GEMINI_NORMAL_MAX_REQUEST_ITEMS = 240;
+const GEMINI_MAX_REQUEST_ITEMS = 320;
+const GEMINI_HIGH_SPEED_MAX_REQUEST_ITEMS = 320;
+const GEMINI_MAX_SPECULATIVE_REQUESTS = 0;
 const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
 const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
 const DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x

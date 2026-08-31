@@ -150,6 +150,20 @@
     }
   }
 
+  // The Google OpenAI-compatible endpoint accepts several model families. Keep
+  // Gemini policy decisions tied to the model contract rather than treating
+  // every request sent to that host as Gemini.
+  function isGeminiModel(value) {
+    const model = String(value || "").trim().toLowerCase().replace(/^models\//, "");
+    return /^gemini(?:[-_.]|$)/.test(model);
+  }
+
+  function aiProviderKind(baseUrlValue, modelValue) {
+    const endpointKind = aiEndpointKind(baseUrlValue);
+    if (endpointKind !== "compatible") return endpointKind;
+    return isGeminiModel(modelValue) ? "gemini" : "compatible";
+  }
+
   function aiChatCompletionsUrl(value) {
     const base = normalizeAiBaseUrl(value);
     if (!base) return "";
@@ -535,7 +549,7 @@
   Object.assign(internal, {
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
     normalizeTargetLang,
-    isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
+    isSameLanguage, normalizeAiBaseUrl, aiEndpointKind, isGeminiModel, aiProviderKind,
     aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,
     parseAiExtraBody, aiCompletionText, aiErrorDescriptor, aiErrorMessage,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,

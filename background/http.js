@@ -1,6 +1,95 @@
 // AI HTTP streaming, retry and cancellation transport.
 "use strict";
 
+// Gemini free-tier request quota must be shared across tabs, not managed by a
+// single YouTube tab. Space starts globally and leave a small margin below the
+// 15 RPM tier; larger content windows reduce the resulting latency.
+const GEMINI_MIN_REQUEST_INTERVAL_MS = 4200;
+const GEMINI_REQUEST_RATE_STATE = new Map();
+
+function aiRequestCancelledError() {
+  const error = new Error("AI request cancelled");
+  error.name = "AbortError";
+  error.cancelled = true;
+  error.errorCode = "AI_CANCELLED";
+  return error;
+}
+
+function waitForAiRateDelay(delayValue, signal) {
+  const delay = Math.max(0, Math.ceil(Number(delayValue) || 0));
+  if (!delay) {
+    if (signal && signal.aborted) return Promise.reject(aiRequestCancelledError());
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    let onAbort = null;
+    const cleanup = () => {
+      if (timer != null) clearTimeout(timer);
+      timer = null;
+      if (signal && onAbort && typeof signal.removeEventListener === "function") {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const done = () => { cleanup(); resolve(); };
+    onAbort = () => { cleanup(); reject(aiRequestCancelledError()); };
+    if (signal && typeof signal.addEventListener === "function") {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    timer = setTimeout(done, delay);
+  });
+}
+
+function aiRequestRateKey(config) {
+  return `${String(config && config.baseUrl || config && config.endpoint || "")}\n` +
+    `${String(config && config.model || "")}`;
+}
+
+function waitForAiRequestSlot(config, signal) {
+  const providerKind = config && config.endpointKind === "gemini"
+    ? "gemini"
+    : typeof YTDS_SHARED.aiProviderKind === "function"
+      ? YTDS_SHARED.aiProviderKind(config && config.baseUrl, config && config.model)
+      : "";
+  if (providerKind !== "gemini") return Promise.resolve(0);
+
+  const key = aiRequestRateKey(config);
+  const state = GEMINI_REQUEST_RATE_STATE.get(key) || {
+    lastStartedAt: null, tail: Promise.resolve(), cleanupTimer: null
+  };
+  if (state.cleanupTimer != null) {
+    clearTimeout(state.cleanupTimer);
+    state.cleanupTimer = null;
+  }
+  GEMINI_REQUEST_RATE_STATE.set(key, state);
+  const predecessor = state.tail;
+  let release;
+  const mine = new Promise((resolve) => { release = resolve; });
+  state.tail = mine;
+  return predecessor.then(async () => {
+    const waitMs = Number.isFinite(state.lastStartedAt)
+      ? Math.max(0, state.lastStartedAt + GEMINI_MIN_REQUEST_INTERVAL_MS - Date.now()) : 0;
+    await waitForAiRateDelay(waitMs, signal);
+    if (signal && signal.aborted) throw aiRequestCancelledError();
+    state.lastStartedAt = Date.now();
+    return waitMs;
+  }).finally(() => {
+    release();
+    if (GEMINI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine) {
+      // Keep the last start timestamp alive for one quota interval. Deleting
+      // it immediately would let sequential calls bypass the global gate.
+      state.cleanupTimer = setTimeout(() => {
+        state.cleanupTimer = null;
+        if (GEMINI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine &&
+            Date.now() - state.lastStartedAt >= GEMINI_MIN_REQUEST_INTERVAL_MS) {
+          GEMINI_REQUEST_RATE_STATE.delete(key);
+        }
+      }, GEMINI_MIN_REQUEST_INTERVAL_MS);
+    }
+  });
+}
+
 async function fetchAiStreamWithTimeout(
   url, options, timeoutMs, connectTimeoutMs, externalSignal, onHeaders, onTextDelta
 ) {
@@ -270,8 +359,10 @@ async function getAiConfig() {
     chrome.storage.local.get({ aiExtraBodyProfiles: {} })
   ]);
   const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(stored.aiBaseUrl);
-  const endpointKind = YTDS_SHARED.aiEndpointKind(baseUrl);
   const model = String(stored.aiModel || YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160);
+  const endpointKind = typeof YTDS_SHARED.aiProviderKind === "function"
+    ? YTDS_SHARED.aiProviderKind(baseUrl, model)
+    : YTDS_SHARED.aiEndpointKind(baseUrl);
   const profiles = local.aiExtraBodyProfiles && typeof local.aiExtraBodyProfiles === "object"
     ? local.aiExtraBodyProfiles : {};
   const profileScope = YTDS_SHARED.aiRequestProfileScope(baseUrl, model);
@@ -339,6 +430,7 @@ async function aiRawCompletion(
     const networkTraceId = aiNetworkAttemptTraceId(trace.requestId, attemptNumber);
     const attemptInfo = { attempt: attemptNumber, timeoutMs, connectTimeoutMs, networkTraceId };
     attempts.push(attemptInfo);
+    attemptInfo.rateWaitMs = await waitForAiRequestSlot(config, externalSignal);
     if (typeof trace.onAttemptStart === "function") trace.onAttemptStart(attemptNumber);
     if (trace.debug) appendDebug("background", "deepseek-http-attempt-start", {
       requestId: trace.requestId || "",
@@ -347,6 +439,7 @@ async function aiRawCompletion(
       timeoutMs,
       connectTimeoutMs,
       networkTraceId,
+      rateWaitMs: attemptInfo.rateWaitMs,
       requestChars: requestOptions.body.length
     });
     try {

@@ -42,6 +42,15 @@ assert.equal(shared.isSameLanguage("zh-Hant", "zh-CN"), false);
 assert.equal(shared.isSameLanguage("", "en"), false);
 assert.equal(shared.aiEndpointKind("https://api.deepseek.com"), "deepseek");
 assert.equal(shared.aiEndpointKind("https://gateway.example/v1"), "compatible");
+assert.equal(shared.aiProviderKind(
+  "https://generativelanguage.googleapis.com/v1beta/openai",
+  "gemini-3.5-flash-lite-preview"
+), "gemini");
+assert.equal(shared.aiProviderKind(
+  "https://generativelanguage.googleapis.com/v1beta/openai",
+  "gemini-3.1-flash-lite-preview"
+), "gemini");
+assert.equal(shared.aiProviderKind("https://gateway.example/v1", "other-model"), "compatible");
 assert.equal(shared.normalizeAiBaseUrl("https://gateway.example/v1/"),
   "https://gateway.example/v1");
 assert.equal(shared.normalizeAiBaseUrl("http://localhost:11434/v1"),

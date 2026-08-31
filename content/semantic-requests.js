@@ -9,37 +9,8 @@ const DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS = 2500;
 const DEEPSEEK_STREAM_HANDOFF_MIN_ITEMS = 64;
 const DEEPSEEK_HIGH_SPEED_STREAM_HANDOFF_MIN_ITEMS = 16;
 const DEEPSEEK_STREAM_HANDOFF_MAX_REMAINING_ITEMS = 48;
-const DEEPSEEK_MAX_SPECULATIVE_REQUESTS = 2;
-// Speculative output is billed even when playback never reaches it. Keep the
-// accelerated runway useful but bounded; the scheduler will refill it as the
-// committed cursor advances instead of paying for a whole distant transcript.
-const DEEPSEEK_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 3;
-const DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 4;
-const COMPATIBLE_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 2;
-const COMPATIBLE_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 3;
 const DEEPSEEK_SPECULATIVE_REQUEST_ITEMS = 96;
 
-function deepseekEndpointKind() {
-  const baseUrl = typeof settings === "object" && settings ? settings.aiBaseUrl : "";
-  return typeof YTDS_SHARED.aiEndpointKind === "function"
-    ? YTDS_SHARED.aiEndpointKind(baseUrl) : "deepseek";
-}
-function deepseekMaxSpeculativeRequests() {
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  const deepseek = deepseekEndpointKind() === "deepseek";
-  if (Number.isFinite(rate) && rate >= 2.5) {
-    return deepseek
-      ? DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS
-      : COMPATIBLE_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS;
-  }
-  if (Number.isFinite(rate) && rate >= 1.75) {
-    return deepseek
-      ? DEEPSEEK_ACCELERATED_MAX_SPECULATIVE_REQUESTS
-      : COMPATIBLE_ACCELERATED_MAX_SPECULATIVE_REQUESTS;
-  }
-  return deepseek ? DEEPSEEK_MAX_SPECULATIVE_REQUESTS : 1;
-}
 function deepseekRequestHasProgress(request) {
   if (!request) return false;
   const requestStart = Number(request.requestStart);
@@ -94,19 +65,6 @@ function deepseekSeekBacktrackItems() {
   if (Number.isFinite(rate) && rate >= 2.5) return Math.min(base, 24);
   if (Number.isFinite(rate) && rate >= 1.75) return Math.min(base, 40);
   return base;
-}
-function deepseekAcceleratedUrgentRequestItems() {
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  const deepseek = deepseekEndpointKind() === "deepseek";
-  if (Number.isFinite(rate) && rate >= 2.5) {
-    return deepseek
-      ? DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS
-      : COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS;
-  }
-  return deepseek
-    ? DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS
-    : COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS;
 }
 function deepseekLeadingUnitReachesRequestEnd(translationsValue, requestStartValue, requestEndValue) {
   const translations = Array.isArray(translationsValue) ? translationsValue : [];
@@ -440,7 +398,7 @@ function pumpDeepseekSpeculativeRequests(regionIndex, stateValue) {
       deepseekMaxRequestItems(),
       Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
           Number(getVideo() && getVideo().playbackRate) >= 1.75
-        ? DEEPSEEK_SPECULATIVE_REQUEST_ITEMS : DEEPSEEK_REQUEST_ITEMS
+        ? DEEPSEEK_SPECULATIVE_REQUEST_ITEMS : deepseekSteadyRequestItems()
     );
     const end = Math.min(state.limitEnd, start + Math.max(1, itemCount) - 1);
     if (deepseekSpeculativeRangeOverlaps(regionIndex, start, end)) continue;
@@ -694,7 +652,7 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     if (request.promotedFromPrefetch) {
       storeDeepseekPrefetchCandidate(state, request, resp);
     }
-    state.windowItems = DEEPSEEK_REQUEST_ITEMS;
+    state.windowItems = deepseekSteadyRequestItems();
     state.recoveryWindowItems = false; state.noProgressRange = "";
   }
   const madeProgress = state.cursor > requestStart;

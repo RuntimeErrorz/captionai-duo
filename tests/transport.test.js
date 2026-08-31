@@ -9,7 +9,9 @@ const { loadShared } = require("./helpers");
 
 const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
-const semanticSource = ["content/semantic-requests.js", "content/semantic.js"].map((file) =>
+const semanticSource = [
+  "content/semantic-policy.js", "content/semantic-requests.js", "content/semantic.js"
+].map((file) =>
   fs.readFileSync(path.join(root, file), "utf8")).join("\n");
 const displaySource = fs.readFileSync(path.join(root, "content/display.js"), "utf8");
 const playbackSource = fs.readFileSync(path.join(root, "content/cue-playback.js"), "utf8");
@@ -170,7 +172,10 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     },
     settings: {
       targetLang: options.targetLang || "zh-CN", debugEnabled: true,
-      aiBaseUrl: options.aiBaseUrl || "https://api.deepseek.com"
+      aiBaseUrl: options.aiBaseUrl || "https://api.deepseek.com",
+      aiModel: options.aiModel || "test-model",
+      ...(options.prefetchBatches == null
+        ? {} : { deepseekPrefetchBatches: options.prefetchBatches })
     },
     DEEPSEEK_INITIAL_REQUEST_ITEMS: 48,
     DEEPSEEK_REQUEST_ITEMS: 80,
@@ -179,6 +184,15 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
     COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
     COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80,
+    GEMINI_INITIAL_REQUEST_ITEMS: 160,
+    GEMINI_REQUEST_ITEMS: 160,
+    GEMINI_URGENT_REQUEST_ITEMS: 160,
+    GEMINI_ACCELERATED_URGENT_REQUEST_ITEMS: 160,
+    GEMINI_HIGH_SPEED_URGENT_REQUEST_ITEMS: 192,
+    GEMINI_NORMAL_MAX_REQUEST_ITEMS: 240,
+    GEMINI_MAX_REQUEST_ITEMS: 320,
+    GEMINI_HIGH_SPEED_MAX_REQUEST_ITEMS: 320,
+    GEMINI_MAX_SPECULATIVE_REQUESTS: 0,
     DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
     DEEPSEEK_MAX_REQUEST_ITEMS: 320,
     DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
@@ -245,7 +259,9 @@ function loadPlaybackPrefetchHarness(options = {}) {
     deferResponses: true,
     groupCount: options.groupCount ?? 801,
     limitEnd: options.limitEnd ?? 800,
-    aiBaseUrl: options.aiBaseUrl
+    aiBaseUrl: options.aiBaseUrl,
+    aiModel: options.aiModel,
+    prefetchBatches: options.prefetchBatches
   });
   harness.context.settings.enabled = true;
   for (const [name, value] of Object.entries({
@@ -394,6 +410,36 @@ test("Gemini usage metadata is retained from a usage-only SSE event", async () =
   assert.equal(result.text, "hello");
   assert.equal(result.usage.promptTokenCount, 31);
   assert.equal(result.usage.totalTokenCount, 38);
+});
+
+test("Gemini request slots leave a 4.2 second global start interval", async () => {
+  const timers = [];
+  const cleared = new Set();
+  const context = loadHttpContext(async () => {
+    throw new Error("network should not be reached");
+  }, {
+    Date: { now: () => 0 },
+    setTimeout: (callback, delay) => {
+      const id = timers.length + 1;
+      timers.push({ id, callback, delay });
+      return id;
+    },
+    clearTimeout: (timerId) => { cleared.add(timerId); }
+  });
+  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
+  const config = {
+    endpointKind: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-3.1-flash-lite-preview"
+  };
+  assert.equal(await waitForSlot(config, null), 0);
+  const second = waitForSlot(config, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  const rateTimer = timers.find((timer) => !cleared.has(timer.id));
+  assert.ok(rateTimer);
+  assert.equal(rateTimer.delay, 4200);
+  rateTimer.callback();
+  assert.equal(await second, 4200);
 });
 
 test("promoting a live prefetch reuses it instead of cancelling it", () => {
@@ -1455,6 +1501,34 @@ test("3x DeepSeek uses a short visible writer while Gemini keeps the wider lane"
   const geminiRequests = gemini.requests;
   assert.equal(geminiRequests[0].requestStart, 0);
   assert.equal(geminiRequests[0].items.length, 80);
+});
+
+test("Gemini Flash Lite uses a quota-sized cold request", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 160, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiModel: "gemini-3.1-flash-lite-preview"
+  });
+  vm.runInContext("pumpDeepseekCommitRegion(0, true)", harness.context);
+
+  const requests = harness.messages.filter((message) => message.type === "translateBatch");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].endpointKind, "gemini");
+  assert.equal(requests[0].items.length, 160);
+});
+
+test("Gemini Flash Lite disables automatic speculative runway at high speed", () => {
+  const { harness, requests } = loadPlaybackPrefetchHarness({
+    windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
+    batchSize: 32, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
+    highSpeedPrefetchBatches: 12, prefetchBatches: 1,
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiModel: "gemini-3.5-flash-lite-preview"
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].endpointKind, "gemini");
+  assert.equal(requests[0].items.length, 192);
 });
 
 test("3x compatible playback keeps a provider-safe speculative lane", () => {

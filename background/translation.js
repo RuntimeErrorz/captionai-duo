@@ -269,10 +269,12 @@ async function deepseekSegmentBatchFetch(
   // DeepSeek's fast model spends enough output budget on its aligned JSONL
   // prefix that a 2048-token cap can stop after only a small safe prefix (the
   // rest is then requested again, which is fatal at accelerated playback).
-  // Keep Gemini/compatible urgent calls small for first-byte latency, while
-  // giving the DeepSeek contract the same full runway budget as the normal
-  // prompt. The stream observer still accepts a partial prefix safely.
-  const maxOutputTokens = config && config.endpointKind === "deepseek"
+  // Gemini Flash Lite is request-limited, so its wider current window also
+  // needs the full output budget to avoid a continuation spending another
+  // request. Generic compatible urgent calls stay smaller for first-byte
+  // latency; the stream observer still accepts a partial prefix safely.
+  const maxOutputTokens = config && (config.endpointKind === "deepseek" ||
+      config.endpointKind === "gemini")
     ? 4096 : urgentPrompt ? 2048 : 4096;
   if (trace && trace.debug) appendDebug("background", "prompt-context-budget", {
     requestId: trace.requestId || "",
