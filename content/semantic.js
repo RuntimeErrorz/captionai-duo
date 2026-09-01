@@ -54,11 +54,16 @@ function buildHybridCueGroups(list) {
       const nextSourceCueIndex = i + 1 < captionSession.sentGroups.length ? captionSession.sentGroups[i + 1].startIdx : -1;
       const crossesCue = sourceCueIndex !== nextSourceCueIndex;
       const timingPauseMs = Math.max(0, Number(atom.pauseAfterMs) || 0);
+      const rawCuePauseMs = crossesCue ? deepseekPauseAfter(list, sourceCueIndex) : 0;
       // A timed JSON3 atom has a more precise adjacent-onset signal than the
-      // rolling caption window's display duration. Only use the raw cue gap
-      // when lexical timing is unavailable; a cue edge alone is not a break.
-      const pauseAfterMs = atom.timed === true ? timingPauseMs : crossesCue
-        ? deepseekPauseAfter(list, sourceCueIndex) : 0;
+      // rolling caption window's display duration. A long raw-cue hole is the
+      // exception: the final timed atom has no following word onset, but a
+      // hard-sized hole is still an unambiguous semantic/display boundary.
+      const hardRawCuePauseMs = Number.isFinite(rawCuePauseMs) &&
+        rawCuePauseMs >= DEEPSEEK_HARD_PAUSE_MS ? rawCuePauseMs : 0;
+      const pauseAfterMs = atom.timed === true
+        ? Math.max(timingPauseMs, hardRawCuePauseMs)
+        : crossesCue ? rawCuePauseMs : 0;
       const pauseKind = YTDS_SHARED.semanticPauseKind(
         pauseAfterMs, DEEPSEEK_SOFT_PAUSE_MS, DEEPSEEK_HARD_PAUSE_MS
       );

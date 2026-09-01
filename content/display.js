@@ -285,7 +285,8 @@ function rebuildDeepseekDisplayCache(repaint) {
     const cue = captionSession.cueList[captionSession.activeCueIdx];
     const source = sourceForDisplayedCue(captionSession.activeCueIdx, cue);
     const display = captionSession.deepseekDisplayCache.get(groupKey(captionSession.activeGroupIdx));
-    const translation = display && display.translation || captionSession.transCache.get(groupKey(captionSession.activeGroupIdx));
+    const translation = display && display.translation ||
+      captionSession.transCache.get(groupKey(captionSession.activeGroupIdx));
     setOriginal(source);
     if (translation) setTranslation(translation, source);
   }

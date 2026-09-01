@@ -162,6 +162,32 @@ test("timed onset gaps also survive a rolling cue edge", () => {
   assert.equal(groupedGoing.softAfter, true);
 });
 
+test("a hard raw-cue hole becomes a boundary after the final timed atom", () => {
+  const first = {
+    text: "completed now", start: 100000, end: 102000, dur: 2000,
+    parts: [
+      { text: "completed ", offsetMs: 0 },
+      { text: "now", offsetMs: 500 }
+    ]
+  };
+  const second = {
+    text: "next phrase", start: 107000, end: 109000, dur: 2000,
+    parts: [
+      { text: "next ", offsetMs: 0 },
+      { text: "phrase", offsetMs: 500 }
+    ]
+  };
+  const groups = buildSemanticGroups([first, second]);
+  const completed = groups.find((group) => group.text === "now");
+  const next = groups.find((group) => group.text === "next");
+
+  assert.ok(completed);
+  assert.ok(next);
+  assert.ok(completed.pauseAfterMs >= 5000);
+  assert.equal(completed.hardAfter, true);
+  assert.equal(next.hardAfter, false);
+});
+
 test("semantic timeline carries an intra-cue pause into the model boundary flags", () => {
   const words = ["we", "can", "use", "the", "device", "after", "the", "break", "and", "continue"];
   const offsets = [0, 360, 720, 1080, 1440, 3650, 4010, 4370, 4730, 5090];

@@ -36,11 +36,11 @@ function activeCueIdxAt(t) {
   return -1;                        // genuine gap
 }
 
-// YouTube can leave a hole between two timed cues even when the semantic
+// YouTube can leave a short hole between two timed cues even when the semantic
 // timeline has validated them as one continuous unit. Retain the preceding
-// display page across that open semantic boundary until the next member starts.
-// The semantic hard-boundary state is authoritative; a separate display-time
-// gap threshold would disagree on which units are allowed to cross a pause.
+// display page across that bounded open semantic boundary until the next
+// member starts. A hard-sized raw-cue gap is a real display boundary even if
+// the model temporarily assigns both sides to one semantic unit.
 function semanticGapCueIdxAt(t) {
   if (!captionSession.cueList || !captionSession.cueToGroup) return -1;
   const previousCue = findCueIdx(t);

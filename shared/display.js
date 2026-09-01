@@ -6,6 +6,10 @@
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
   const { mergeTimedCueTexts, joinTranslatedParts, speakerSwitchSeparators } = internal;
   const SEMANTIC_DISPLAY_CONTIGUITY_TOLERANCE_MS = 80;
+  // Match the hard timing boundary used by the content semantic timeline.
+  // Semantic ownership can smooth a short raw-cue hole, but it must not keep
+  // a completed caption visible through a real pause.
+  const SEMANTIC_DISPLAY_MAX_CUE_GAP_MS = 4000;
 
   function resolveFullscreenState(nativeApiAvailable, fullscreenElement, playerClassFullscreen) {
     // YouTube may remove its class after fullscreenchange; native state is authoritative.
@@ -41,7 +45,6 @@
       const translation = joinTranslatedParts(pageChunks, targetLang, speakerSwitches);
       return { source, translation };
     };
-
     const memberPages = {};
     const pages = [];
     let current = [];
@@ -503,7 +506,8 @@
     const nextStart = Number(next.start);
     if (![time, previousEnd, nextStart].every(Number.isFinite)) return false;
     const gap = nextStart - previousEnd;
-    return gap >= 0 && time >= previousEnd && time < nextStart;
+    return gap >= 0 && gap < SEMANTIC_DISPLAY_MAX_CUE_GAP_MS &&
+      time >= previousEnd && time < nextStart;
   }
 
   // AI semantic boundaries describe meaning, not how long a player will keep a

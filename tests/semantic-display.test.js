@@ -2,10 +2,16 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
 const { loadShared } = require("./helpers");
 
 const shared = loadShared();
 const lengthMeasure = (text) => String(text).length;
+const playbackSource = fs.readFileSync(
+  path.join(__dirname, "..", "content", "cue-playback.js"), "utf8"
+);
 
 function pageForMember(plan, memberIndex) {
   const page = plan.assignments[memberIndex];
@@ -173,7 +179,7 @@ test("one semantic unit remains continuously visible across a non-hard raw cue h
   ), false, "the bridge applies only inside the raw cue hole");
 });
 
-test("semantic gap continuity depends on semantic ownership, not raw gap duration", () => {
+test("semantic gap continuity requires ownership and a bounded raw gap", () => {
   let state = 0x47c2a91d;
   const random = () => {
     state = Math.imul(state ^ (state >>> 15), 1 | state);
@@ -198,8 +204,74 @@ test("semantic gap continuity depends on semantic ownership, not raw gap duratio
       previousUnit,
       nextUnit,
       boundaryOpen
-    ), sameUnit && boundaryOpen, `timeline invariant failed for seed run ${run}`);
+    ), sameUnit && boundaryOpen && gap < 4000,
+    `timeline invariant failed for seed run ${run}`);
   }
+});
+
+test("a hard-sized raw cue hole cannot retain the preceding semantic caption", () => {
+  const previous = { start: 3241359, end: 3244359 };
+  const next = { start: 3295359, end: 3301720 };
+
+  assert.equal(shared.shouldBridgeSemanticCueGap(
+    previous, next, 3292640,
+    "semantic-2308-2338", "semantic-2308-2338", true
+  ), false, "a 51-second hole must clear the completed caption");
+  assert.equal(shared.shouldBridgeSemanticCueGap(
+    previous, { start: previous.end + 3999, end: previous.end + 4999 },
+    previous.end + 2000, "same", "same", true
+  ), true, "a sub-hard pause may still preserve semantic continuity");
+  assert.equal(shared.shouldBridgeSemanticCueGap(
+    previous, { start: previous.end + 4000, end: previous.end + 5000 },
+    previous.end + 2000, "same", "same", true
+  ), false, "the hard pause threshold is an actual display boundary");
+});
+
+test("playback clears a completed caption during a long semantic cue hole", () => {
+  const painted = [];
+  const context = {
+    Array, Map, Math, Number, Object, String,
+    YTDS_SHARED: shared,
+    captionSession: {
+      cueList: [
+        { text: "completed caption", start: 3241359, end: 3244359 },
+        { text: "next caption", start: 3295359, end: 3301720 }
+      ],
+      cueToGroup: [0, 1],
+      cueToGroups: [[0], [1]],
+      sentGroups: [
+        { start: 3241359, end: 3244359, hardAfter: false },
+        { start: 3295359, end: 3301720, hardAfter: false }
+      ],
+      deepseekUnitCache: new Map([
+        ["video g0", "semantic-same"],
+        ["video g1", "semantic-same"]
+      ]),
+      activeCueIdx: 0,
+      activeGroupIdx: 0,
+      lastDebugCueIdx: 0
+    },
+    settings: { enabled: true },
+    getVideo: () => ({ currentTime: 3292.640, playbackRate: 1 }),
+    extensionContextAlive: () => true,
+    // Keep the reduced fixture focused on the gap-clearing branch; the
+    // manual-mode flag only suppresses unrelated prefetch setup below it.
+    manualTranslationSelected: () => true,
+    groupKey: (id) => `video g${id}`,
+    setOriginal: (text) => painted.push({ type: "source", text }),
+    setTranslation: (text, source) => painted.push({ type: "translation", text, source }),
+    emitDebug: () => {}
+  };
+  vm.createContext(context);
+  vm.runInContext(playbackSource, context, { filename: "content/cue-playback.js" });
+  vm.runInContext("cueTick({ type: 'timeupdate' })", context);
+
+  assert.equal(context.captionSession.activeCueIdx, -1);
+  assert.equal(context.captionSession.activeGroupIdx, -1);
+  assert.deepEqual(painted, [
+    { type: "source", text: "" },
+    { type: "translation", text: "", source: "" }
+  ]);
 });
 
 test("an imperceptible tail unit is co-displayed with the preceding unit from the same cue", () => {
