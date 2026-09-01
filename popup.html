@@ -27,7 +27,11 @@
         <div class="field">
           <label for="captionTrackSelect" data-i18n="captionTrackLabel">原文语言</label>
           <select id="captionTrackSelect" aria-label="原文语言"
-                  data-i18n-aria="captionTrackLabel"></select>
+                  data-i18n-aria="captionTrackLabel">
+            <option value="" disabled selected data-i18n="captionTrackLoading">
+              正在读取当前视频字幕轨…
+            </option>
+          </select>
         </div>
         <div class="field">
           <label for="translationTrackSelect" data-i18n="translationTrackLabel">译文字幕</label>

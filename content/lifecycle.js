@@ -88,6 +88,11 @@ function onNav() {
 // single listener instances (added once; never accumulate)
 window.addEventListener("yt-navigate-finish", onNav, true);
 window.addEventListener("message", onInjectMessage, false);
+// Recover identity when restored tabs delay yt-navigate-finish.
+if (typeof setInterval === "function") captionSession.navigationPollTimer = setInterval(() => {
+  const nextVideoId = videoIdFromLocation();
+  if (nextVideoId !== captionSession.currentVideoId) onNav();
+}, 500);
 document.addEventListener("fullscreenchange", () => {
   if (overlay) styleOverlay();
   scheduleDeepseekDisplayReflow(true);

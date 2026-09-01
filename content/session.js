@@ -65,6 +65,7 @@ function createCaptionSessionState(initialVideoId) {
     nonceFallback: 0,
     cueRecoveryTimer: null,
     cueRecoveryAttempt: 0,
+    navigationPollTimer: null,
     lastDebugCueIdx: -1,
     weEnabledCC: false
   };

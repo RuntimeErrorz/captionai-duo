@@ -91,18 +91,15 @@
   // Auto mode deliberately follows the source/original track even when
   // YouTube carries an old auto-translation parameter across navigation.
   function selectedTrackUrl(url) { return sourceTrackUrl(url); }
-
   function normalizeCaptionTrackSelection(value) {
     const text = String(value || "").trim().slice(0, 160);
     if (!text || text === "auto") return "auto";
     return /^[A-Za-z0-9._:-]+$/.test(text) ? text : "";
   }
-
   function isTimedtext(url) {
     return typeof url === "string" && url.indexOf(TIMEDTEXT_MARK) !== -1 &&
       YTDS_SHARED.isAllowedTimedtextUrl(url);
   }
-
   function rememberInternalTimedtext(url) {
     const now = Date.now();
     internalTimedtextUrls.set(String(url), now + INTERNAL_TIMEDTEXT_TTL_MS);
@@ -706,8 +703,11 @@
       if (evt.origin !== location.origin) return;
       const d = evt.data;
       if (!d || d.source !== "ytds-content") return;
-
-      if (d.type === "config") {
+      if (d.type === "caption-tracks-request" &&
+          String(d.videoId || "") === currentVideoId &&
+          (Number(d.nonce) || 0) === reqNonce) {
+        postCaptionTracks(d.force === true, true);
+      } else if (d.type === "config") {
         if (!Number.isInteger(d.nonce) || d.nonce <= 0) return;
         // Treat the config message as the authoritative nav signal: reset any
         // stale capture synchronously if the location video changed, rather

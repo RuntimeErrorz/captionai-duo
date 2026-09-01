@@ -14,6 +14,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return;
   }
   if (msg.type === "getCaptionTracks") {
+    if (typeof requestCaptionTrackCatalog === "function") {
+      const tracks = Array.isArray(captionSession.availableCaptionTracks)
+        ? captionSession.availableCaptionTracks : [];
+      requestCaptionTrackCatalog(tracks.length === 0);
+    }
     sendResponse(captionTrackResponse());
     return;
   }

@@ -849,6 +849,13 @@ function onCues(data) {
   const nextTrackId = typeof data.captionTrackId === "string" &&
     /^[A-Za-z0-9._:-]{1,160}$/.test(data.captionTrackId)
     ? data.captionTrackId : "auto";
+  if (typeof rememberCaptionTrackFromCue === "function") {
+    rememberCaptionTrackFromCue({
+      captionTrackId: nextTrackId,
+      sourceLang: nextSourceLang,
+      trackKind: nextTrackKind
+    });
+  }
   const nextSignature = cueTrackFingerprint(
     nextVideoId, nextTrackKind, nextSourceLang, nextTrackId, nextCueList
   );

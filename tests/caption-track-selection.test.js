@@ -9,6 +9,9 @@ const vm = require("node:vm");
 const bridgeSource = fs.readFileSync(
   path.join(__dirname, "..", "content", "bridge.js"), "utf8"
 );
+const exportSource = fs.readFileSync(
+  path.join(__dirname, "..", "content", "export.js"), "utf8"
+);
 
 test("caption-track selection accepts only the current video's listed tracks", () => {
   const configs = [];
@@ -144,4 +147,58 @@ test("caption-track catalog diagnostics retain labels without proof-bearing URLs
     labelFallback: false
   }]));
   assert.doesNotMatch(JSON.stringify(catalog), /timedtext|baseUrl|proof/);
+});
+
+test("cue metadata restores the active track after navigation clears the catalog", () => {
+  const context = {
+    location: { origin: "https://www.youtube.com" },
+    window: {},
+    settings: { enabled: true },
+    captionSession: {
+      currentVideoId: "abcdefghijk",
+      availableCaptionTracks: [],
+      preferredCaptionTrackId: "",
+      selectedCaptionTrackId: "auto",
+      selectedTranslationTrackId: "ai"
+    },
+    emitDebug: () => {},
+    captionButtonDebugState: () => ({})
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(bridgeSource, context);
+
+  const remembered = vm.runInContext("rememberCaptionTrackFromCue({" +
+    "captionTrackId: 'track:en:asr:a.en', sourceLang: 'en', trackKind: 'asr'" +
+    "})", context);
+  assert.equal(remembered, true);
+  const response = vm.runInContext("captionTrackResponse()", context);
+  assert.equal(response.tracks.length, 1);
+  assert.equal(response.tracks[0].id, "track:en:asr:a.en");
+  assert.equal(response.preferredTrackId, "track:en:asr:a.en");
+});
+
+test("caption-track queries force a MAIN-world replay only while the content catalog is empty", () => {
+  let messageHandler = null;
+  const replayRequests = [];
+  const responses = [];
+  const context = {
+    chrome: {
+      runtime: {
+        onMessage: { addListener: (handler) => { messageHandler = handler; } }
+      }
+    },
+    captionSession: { availableCaptionTracks: [] },
+    requestCaptionTrackCatalog: (force) => replayRequests.push(force),
+    captionTrackResponse: () => ({ ok: true })
+  };
+  vm.createContext(context);
+  vm.runInContext(exportSource, context);
+
+  messageHandler({ type: "getCaptionTracks" }, {}, (response) => responses.push(response));
+  context.captionSession.availableCaptionTracks = [{ id: "track:en:asr:a.en" }];
+  messageHandler({ type: "getCaptionTracks" }, {}, (response) => responses.push(response));
+
+  assert.deepEqual(replayRequests, [true, false]);
+  assert.deepEqual(responses, [{ ok: true }, { ok: true }]);
 });

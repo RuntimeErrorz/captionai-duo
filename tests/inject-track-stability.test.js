@@ -93,6 +93,67 @@ test("auto selection strips stale translation parameters and catalogs an observe
   assert.doesNotMatch(JSON.stringify(observedCatalog), /timedtext|fresh/);
 });
 
+test("caption catalog requests replay a ready catalog after the content copy is cleared", () => {
+  const listeners = new Map();
+  const posts = [];
+  const context = {
+    URL,
+    AbortController,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "abcdefghijk",
+      isAllowedTimedtextUrl: (url) =>
+        String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    ytInitialPlayerResponse: {
+      captions: { playerCaptionsTracklistRenderer: { captionTracks: [{
+        baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en&kind=asr&pot=proof-en",
+        languageCode: "en", kind: "asr", vssId: "a.en",
+        name: { simpleText: "English (auto-generated)" }
+      }] } }
+    },
+    XMLHttpRequest: function XMLHttpRequest() {},
+    performance: { getEntriesByType: () => [] },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {}
+  };
+  context.XMLHttpRequest.prototype.open = function open() {};
+  context.XMLHttpRequest.prototype.send = function send() {};
+  context.window = context;
+  context.addEventListener = (type, callback) => listeners.set(type, callback);
+  context.postMessage = (message) => posts.push(message);
+
+  vm.createContext(context);
+  vm.runInContext(injectSource, context);
+  context.messageListener = listeners.get("message");
+
+  vm.runInContext(
+    "messageListener({source: window, origin: location.origin, " +
+    "data: {source: 'ytds-content', type: 'caption-tracks-request', " +
+    "videoId: 'abcdefghijk', nonce: 0, force: true}});",
+    context
+  );
+  const firstReplay = posts.filter((entry) => entry.type === "caption-tracks");
+  assert.equal(firstReplay.length, 1, JSON.stringify(posts));
+  assert.equal(firstReplay[0].tracks.length, 1);
+  assert.equal(firstReplay[0].preferredTrackId, firstReplay[0].tracks[0].id);
+  assert.doesNotMatch(JSON.stringify(firstReplay[0]), /proof-|timedtext/);
+
+  posts.length = 0;
+  vm.runInContext(
+    "messageListener({source: window, origin: location.origin, " +
+    "data: {source: 'ytds-content', type: 'caption-tracks-request', " +
+    "videoId: 'abcdefghijk', nonce: 0, force: false}});",
+    context
+  );
+  assert.equal(posts.filter((entry) => entry.type === "caption-tracks").length, 0);
+});
+
 test("caption catalog exposes every YouTube track without proof-bearing URLs", async () => {
   const listeners = new Map();
   const posts = [];

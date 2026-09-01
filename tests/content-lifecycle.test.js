@@ -74,3 +74,67 @@ test("same-video navigate-finish preserves the active caption session", () => {
   assert.equal(calls.some(([name]) => name === "sendConfig"), false, JSON.stringify(calls));
   assert.equal(calls.some(([name]) => name === "syncCaptions"), true, JSON.stringify(calls));
 });
+
+test("cold-start URL discovery enters the video session even without yt-navigate-finish", () => {
+  const listeners = new Map();
+  const intervals = [];
+  const calls = [];
+  let currentUrlVideoId = "";
+  const context = {
+    settings: { enabled: true },
+    INITIAL_CUE_RECOVERY_MS: 7000,
+    captionSession: {
+      currentVideoId: "",
+      cueList: null,
+      weEnabledCC: false
+    },
+    videoIdFromLocation: () => currentUrlVideoId,
+    emitCaptionStateTransition: (...args) => calls.push(["transition", ...args]),
+    emitDebug: (...args) => calls.push(["debug", ...args]),
+    stopCueLoop: () => calls.push(["stopCueLoop"]),
+    resetCaptionSessionState: (reason) => calls.push(["reset", reason]),
+    removeOverlay: () => calls.push(["removeOverlay"]),
+    stopCueRecovery: () => calls.push(["stopRecovery"]),
+    ensureOverlay: () => calls.push(["ensureOverlay"]),
+    sendConfig: (...args) => calls.push(["sendConfig", ...args]),
+    scheduleCueRecovery: (...args) => calls.push(["scheduleRecovery", ...args]),
+    syncCaptions: (...args) => calls.push(["syncCaptions", ...args]),
+    onInjectMessage: () => {},
+    scheduleDeepseekDisplayReflow: () => {},
+    styleOverlay: () => {},
+    overlay: null,
+    loadSettings: () => ({ then: () => {} }),
+    applyStateToDom: () => {},
+    setInterval: (callback, delay) => {
+      intervals.push({ callback, delay });
+      return intervals.length;
+    },
+    document: {
+      addEventListener: () => {},
+      fonts: null,
+      readyState: "complete",
+      documentElement: { classList: { toggle: () => {} } }
+    },
+    window: {
+      addEventListener: (type, callback) => listeners.set(type, callback)
+    }
+  };
+
+  vm.createContext(context);
+  vm.runInContext(lifecycleSource, context);
+  assert.equal(intervals.length, 1);
+  assert.equal(intervals[0].delay, 500);
+
+  currentUrlVideoId = "abcdefghijk";
+  intervals[0].callback();
+
+  assert.equal(context.captionSession.currentVideoId, "abcdefghijk");
+  assert.equal(calls.some(([name]) => name === "reset"), true, JSON.stringify(calls));
+  assert.equal(calls.some(([name]) => name === "sendConfig"), true, JSON.stringify(calls));
+  assert.equal(calls.some(([name]) => name === "scheduleRecovery"), true, JSON.stringify(calls));
+  assert.equal(calls.some(([name]) => name === "syncCaptions"), true, JSON.stringify(calls));
+
+  currentUrlVideoId = "";
+  intervals[0].callback();
+  assert.equal(context.captionSession.currentVideoId, "");
+});

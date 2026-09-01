@@ -151,6 +151,55 @@ function normalizeCaptionTrack(value) {
   return { id, languageCode, label, kind: value.kind === "asr" ? "asr" : "manual" };
 }
 
+// A valid cue response is also authoritative evidence that the current video
+// has an active caption track. Keep that evidence in the content-side catalog
+// so a navigation cannot leave the popup empty when YouTube's player response
+// arrives later (or omits its caption-track renderer altogether).
+function rememberCaptionTrackFromCue(data) {
+  if (!data || typeof data !== "object") return false;
+  const languageCode = String(data.sourceLang || "").trim().replace(/_/g, "-").slice(0, 24);
+  if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/.test(languageCode)) return false;
+  const kind = data.trackKind === "asr" ? "asr" : "manual";
+  const reportedId = normalizeCaptionTrackSelection(data.captionTrackId);
+  const id = reportedId && reportedId !== "auto"
+    ? reportedId : `track:${languageCode.toLowerCase()}:${kind}:observed`;
+  const tracks = Array.isArray(captionSession.availableCaptionTracks)
+    ? captionSession.availableCaptionTracks : [];
+  let track = tracks.find((item) => item && item.id === id);
+  if (!track) {
+    const sameKind = tracks.filter((item) => item &&
+      item.languageCode === languageCode && item.kind === kind);
+    if (sameKind.length === 1) track = sameKind[0];
+  }
+  let changed = false;
+  if (!track) {
+    if (tracks.length >= 100) return false;
+    track = { id, languageCode, label: languageCode, kind };
+    captionSession.availableCaptionTracks = tracks.concat(track);
+    changed = true;
+  }
+  if (captionSession.selectedCaptionTrackId === "auto" &&
+      (!captionSession.preferredCaptionTrackId ||
+       !captionSession.availableCaptionTracks.some((item) =>
+         item.id === captionSession.preferredCaptionTrackId))) {
+    captionSession.preferredCaptionTrackId = track.id;
+    changed = true;
+  }
+  return changed;
+}
+
+function requestCaptionTrackCatalog(force) {
+  try {
+    window.postMessage({
+      source: "ytds-content",
+      type: "caption-tracks-request",
+      videoId: String(captionSession.currentVideoId || ""),
+      nonce: Number(captionSession.configNonce) || 0,
+      force: force === true
+    }, location.origin);
+  } catch (_e) { /* ignore */ }
+}
+
 function captionTrackResponse() {
   return {
     ok: true,

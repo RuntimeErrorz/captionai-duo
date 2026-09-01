@@ -30,6 +30,7 @@ function popupContext() {
     YTDS_SHARED: { DEFAULTS: {} },
     chrome: {
       i18n: { getMessage: () => "", getUILanguage: () => "en" },
+      runtime: { lastError: null },
       storage: {
         onChanged: { addListener: () => {} },
         sync: { get: () => {} },
@@ -130,4 +131,68 @@ test("automatic caption selection displays the resolved track without an auto op
   });
   assert.equal(context.nodes.captionTrackSelect.value, "track:en:manual:preferred");
   assert.equal(context.nodes.captionTrackSelect.options.length, 2);
+});
+
+test("automatic caption selection falls back to a listed track when no preferred track is reported", () => {
+  const context = popupContext();
+  context.paintCaptionTrackOptions({
+    tracks: [{
+      id: "track:en:asr:a.en",
+      label: "English (auto-generated)",
+      languageCode: "en",
+      kind: "asr"
+    }, {
+      id: "track:en-us:manual:m.en",
+      label: "English (United States)",
+      languageCode: "en-US",
+      kind: "manual"
+    }],
+    selectedTrackId: "auto",
+    selectedTranslationTrackId: "ai"
+  });
+
+  assert.equal(context.nodes.captionTrackSelect.value, "track:en:asr:a.en");
+  assert.equal(context.nodes.captionTrackSelect.options.length, 2);
+});
+
+test("popup keeps polling so a delayed caption catalog becomes visible without reopening", async () => {
+  const context = popupContext();
+  const timers = [];
+  const responses = [
+    { ok: true, tracks: [], selectedTrackId: "auto", selectedTranslationTrackId: "ai" },
+    { ok: true, tracks: [{
+      id: "track:en:asr:a.en",
+      label: "English (auto-generated)",
+      languageCode: "en",
+      kind: "asr"
+    }], preferredTrackId: "track:en:asr:a.en", selectedTrackId: "auto", selectedTranslationTrackId: "ai" }
+  ];
+  let requestCount = 0;
+  context.setTimeout = (callback, delay) => {
+    timers.push({ callback, delay });
+    return timers.length;
+  };
+  context.clearTimeout = () => {};
+  context.chrome.tabs = {
+    query: (_query, callback) => callback([{ id: 17 }]),
+    sendMessage: (_tabId, _message, callback) => {
+      requestCount++;
+      callback(responses.shift() || responses[responses.length - 1]);
+    }
+  };
+
+  context.startCaptionTrackRefresh();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requestCount, 1);
+  assert.equal(context.nodes.captionTrackSelect.disabled, true);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 350);
+
+  timers.shift().callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requestCount, 2);
+  assert.equal(context.nodes.captionTrackSelect.disabled, false);
+  assert.equal(context.nodes.captionTrackSelect.value, "track:en:asr:a.en");
+
+  context.stopCaptionTrackRefresh();
 });

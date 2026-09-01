@@ -11,6 +11,10 @@ let activeLine = "trans";        // which line the tab editor is bound to
 let activeWorkspace = "translation"; // translation | display | tools
 let exportVariant = "bi";        // SRT export content: "bi" | "orig" | "trans" (local, not stored)
 let captionTrackRefreshSerial = 0;
+let captionTrackRefreshTimer = null;
+let captionTrackRefreshActive = false;
+let captionTrackRefreshInFlight = false;
+const CAPTION_TRACK_REFRESH_INTERVAL_MS = 350;
 
 // ---- i18n ----------------------------------------------------------------
 // Safe wrapper: returns the localized message, or the fallback if the key is
@@ -228,36 +232,77 @@ function paintCaptionTrackOptions(response) {
     translationOption.textContent = label;
     translationOptions.push(translationOption);
   }
-  select.replaceChildren(...originalOptions);
+  if (originalOptions.length) {
+    select.replaceChildren(...originalOptions);
+  } else {
+    const loading = document.createElement("option");
+    loading.value = "";
+    loading.textContent = t("captionTrackLoading", "Reading this video's caption tracks…");
+    loading.disabled = true;
+    loading.selected = true;
+    select.replaceChildren(loading);
+  }
+  select.disabled = originalOptions.length === 0;
   translationSelect.replaceChildren(...translationOptions);
   const wantedTranslation = String(response && response.selectedTranslationTrackId || "ai");
+  // Auto mode normally carries a preferred track. If YouTube omits its
+  // default marker, keep the control usable and deterministic instead of
+  // setting a non-existent select value (which renders as a blank field).
+  const fallbackTrackId = originalOptions.length ? originalOptions[0].value : "";
   select.value = originalOptions.some((option) => option.value === displayedTrackId)
-    ? displayedTrackId : "";
+    ? displayedTrackId : fallbackTrackId;
   translationSelect.value = translationOptions.some((option) => option.value === wantedTranslation)
     ? wantedTranslation : "ai";
-  // An empty catalog is expected while a video has no captions or while
-  // YouTube is still exposing its track list. Keep the selector usable and
-  // avoid turning that normal state into a persistent warning.
-  hint.textContent = "";
-  hint.hidden = true;
+  if (originalOptions.length) {
+    hint.textContent = "";
+    hint.hidden = true;
+  } else {
+    hint.textContent = t("captionTrackLoading", "Reading this video's caption tracks…");
+    hint.hidden = false;
+  }
   hint.classList.remove("warn");
 }
 
-async function refreshCaptionTracks(retries) {
-  const serial = ++captionTrackRefreshSerial;
-  const retryCount = Number.isInteger(retries) ? retries : 2;
-  const tab = await getActiveTab();
-  const response = tab && tab.id != null
-    ? await sendToTab(tab.id, { type: "getCaptionTracks" }) : null;
-  if (serial !== captionTrackRefreshSerial) return;
-  if (response && response.ok) {
-    paintCaptionTrackOptions(response);
-    if ((!response.tracks || !response.tracks.length) && retryCount > 0) {
-      setTimeout(() => refreshCaptionTracks(retryCount - 1), 350);
-    }
-    return;
+function stopCaptionTrackRefresh() {
+  captionTrackRefreshActive = false;
+  captionTrackRefreshSerial++;
+  if (captionTrackRefreshTimer) {
+    clearTimeout(captionTrackRefreshTimer);
+    captionTrackRefreshTimer = null;
   }
-  paintCaptionTrackOptions({ tracks: [], selectedTrackId: "auto" });
+}
+
+function scheduleCaptionTrackRefresh() {
+  if (!captionTrackRefreshActive || captionTrackRefreshTimer) return;
+  captionTrackRefreshTimer = setTimeout(() => {
+    captionTrackRefreshTimer = null;
+    refreshCaptionTracks();
+  }, CAPTION_TRACK_REFRESH_INTERVAL_MS);
+}
+
+function startCaptionTrackRefresh() {
+  captionTrackRefreshActive = true;
+  if (!captionTrackRefreshInFlight && !captionTrackRefreshTimer) refreshCaptionTracks();
+}
+
+async function refreshCaptionTracks() {
+  if (!captionTrackRefreshActive || captionTrackRefreshInFlight) return;
+  const serial = ++captionTrackRefreshSerial;
+  captionTrackRefreshInFlight = true;
+  try {
+    const tab = await getActiveTab();
+    const response = tab && tab.id != null
+      ? await sendToTab(tab.id, { type: "getCaptionTracks" }) : null;
+    if (serial !== captionTrackRefreshSerial || !captionTrackRefreshActive) return;
+    if (response && response.ok) {
+      paintCaptionTrackOptions(response);
+    } else {
+      paintCaptionTrackOptions({ tracks: [], selectedTrackId: "auto" });
+    }
+  } finally {
+    captionTrackRefreshInFlight = false;
+    if (captionTrackRefreshActive) scheduleCaptionTrackRefresh();
+  }
 }
 
 function activateWorkspace(workspace, scrollToTop) {
@@ -583,7 +628,8 @@ function wire() {
   document.querySelectorAll(".workspace-tab").forEach((button) => {
     button.addEventListener("click", () => {
       activateWorkspace(button.dataset.workspace, true);
-      if (button.dataset.workspace === "translation") refreshCaptionTracks(2);
+      if (button.dataset.workspace === "translation") startCaptionTrackRefresh();
+      else stopCaptionTrackRefresh();
     });
   });
   $("targetLang").addEventListener("change", async (e) => {
@@ -685,13 +731,13 @@ function wire() {
     const tab = await getActiveTab();
     const response = tab && tab.id != null
       ? await sendToTab(tab.id, { type: "setCaptionTrack", trackId: e.target.value }) : null;
-    if (!response || !response.ok) refreshCaptionTracks(1);
+    if (!response || !response.ok) startCaptionTrackRefresh();
   });
   $("translationTrackSelect").addEventListener("change", async (e) => {
     const tab = await getActiveTab();
     const response = tab && tab.id != null
       ? await sendToTab(tab.id, { type: "setTranslationTrack", trackId: e.target.value }) : null;
-    if (!response || !response.ok) refreshCaptionTracks(1);
+    if (!response || !response.ok) startCaptionTrackRefresh();
   });
 
   // row gap
@@ -759,6 +805,7 @@ function wire() {
 // ---- boot ----------------------------------------------------------------
 applyI18n();                       // localize static markup before first paint
 window.addEventListener("pagehide", () => {
+  stopCaptionTrackRefresh();
   flushSyncPatch();
   flushAiExtraBodySave();
 });
@@ -783,7 +830,7 @@ chrome.storage.sync.get(null, (got) => {
     bindUI();
     await Promise.all([loadCurrentAiApiKey(), loadCurrentAiExtraBody()]);
     wire();
-    refreshCaptionTracks(2);
+    startCaptionTrackRefresh();
     refreshEngineStatus();
     refreshAiTokenUsage();
   });
