@@ -26,7 +26,7 @@ function deepseekIsGemini() {
 }
 
 function deepseekInitialRequestItems() {
-  return deepseekIsGemini() ? GEMINI_INITIAL_REQUEST_ITEMS : DEEPSEEK_INITIAL_REQUEST_ITEMS;
+  return deepseekIsGemini() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_INITIAL_REQUEST_ITEMS;
 }
 
 function deepseekSteadyRequestItems() {
@@ -34,18 +34,18 @@ function deepseekSteadyRequestItems() {
 }
 
 function deepseekUrgentRequestItems() {
-  return deepseekIsGemini() ? GEMINI_URGENT_REQUEST_ITEMS : DEEPSEEK_URGENT_REQUEST_ITEMS;
+  return deepseekIsGemini() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_URGENT_REQUEST_ITEMS;
 }
 
 function deepseekNormalMaxRequestItems() {
   return deepseekIsGemini()
-    ? GEMINI_NORMAL_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
+    ? GEMINI_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
 }
 
 function deepseekMaxSpeculativeRequests() {
+  if (deepseekIsGemini()) return GEMINI_MAX_SPECULATIVE_REQUESTS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  if (deepseekIsGemini()) return GEMINI_MAX_SPECULATIVE_REQUESTS;
   const deepseek = deepseekEndpointKind() === "deepseek";
   if (Number.isFinite(rate) && rate >= 2.5) {
     return deepseek
@@ -61,13 +61,9 @@ function deepseekMaxSpeculativeRequests() {
 }
 
 function deepseekAcceleratedUrgentRequestItems() {
+  if (deepseekIsGemini()) return GEMINI_REQUEST_ITEMS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  if (deepseekIsGemini()) {
-    return Number.isFinite(rate) && rate >= 2.5
-      ? GEMINI_HIGH_SPEED_URGENT_REQUEST_ITEMS
-      : GEMINI_ACCELERATED_URGENT_REQUEST_ITEMS;
-  }
   const deepseek = deepseekEndpointKind() === "deepseek";
   if (Number.isFinite(rate) && rate >= 2.5) {
     return deepseek
@@ -80,13 +76,9 @@ function deepseekAcceleratedUrgentRequestItems() {
 }
 
 function deepseekMaxRequestItems() {
+  if (deepseekIsGemini()) return GEMINI_MAX_REQUEST_ITEMS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  if (deepseekIsGemini()) {
-    if (Number.isFinite(rate) && rate >= 2.5) return GEMINI_HIGH_SPEED_MAX_REQUEST_ITEMS;
-    return Number.isFinite(rate) && rate >= 1.75
-      ? GEMINI_MAX_REQUEST_ITEMS : GEMINI_NORMAL_MAX_REQUEST_ITEMS;
-  }
   if (Number.isFinite(rate) && rate >= 2.5) {
     const configured = typeof DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS === "number"
       ? DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS : 160;

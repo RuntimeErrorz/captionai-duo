@@ -94,17 +94,11 @@ const DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS = 64; // keep DeepSeek's visible
 const DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS = 48; // DeepSeek output is slower than playback at >=2.5x; hand off to the staged runway sooner
 const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // generic compatible streams can fill the wider visible runway
 const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
-// Gemini Flash Lite's free tier is request-limited. Use a wider sequential
-// writer and keep its quota-saving policy separate from generic compatible
-// endpoints, whose latency/concurrency trade-offs are different.
-const GEMINI_INITIAL_REQUEST_ITEMS = 160;
-const GEMINI_REQUEST_ITEMS = 160;
-const GEMINI_URGENT_REQUEST_ITEMS = 160;
-const GEMINI_ACCELERATED_URGENT_REQUEST_ITEMS = 160;
-const GEMINI_HIGH_SPEED_URGENT_REQUEST_ITEMS = 192;
-const GEMINI_NORMAL_MAX_REQUEST_ITEMS = 240;
+// Gemini Flash Lite's free tier is request-limited. Always use one wider
+// sequential window at every playback rate, and keep its quota-saving policy
+// separate from generic compatible endpoints, whose trade-offs differ.
+const GEMINI_REQUEST_ITEMS = 320; // spend one quota slot on a full runway
 const GEMINI_MAX_REQUEST_ITEMS = 320;
-const GEMINI_HIGH_SPEED_MAX_REQUEST_ITEMS = 320;
 const GEMINI_MAX_SPECULATIVE_REQUESTS = 0;
 const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
 const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap

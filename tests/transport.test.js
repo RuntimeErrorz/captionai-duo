@@ -184,14 +184,8 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
     COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
     COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80,
-    GEMINI_INITIAL_REQUEST_ITEMS: 160,
-    GEMINI_REQUEST_ITEMS: 160,
-    GEMINI_URGENT_REQUEST_ITEMS: 160,
-    GEMINI_ACCELERATED_URGENT_REQUEST_ITEMS: 160,
-    GEMINI_HIGH_SPEED_URGENT_REQUEST_ITEMS: 192,
-    GEMINI_NORMAL_MAX_REQUEST_ITEMS: 240,
+    GEMINI_REQUEST_ITEMS: 320,
     GEMINI_MAX_REQUEST_ITEMS: 320,
-    GEMINI_HIGH_SPEED_MAX_REQUEST_ITEMS: 320,
     GEMINI_MAX_SPECULATIVE_REQUESTS: 0,
     DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
     DEEPSEEK_MAX_REQUEST_ITEMS: 320,
@@ -1503,9 +1497,9 @@ test("3x DeepSeek uses a short visible writer while Gemini keeps the wider lane"
   assert.equal(geminiRequests[0].items.length, 80);
 });
 
-test("Gemini Flash Lite uses a quota-sized cold request", () => {
+test("Gemini Flash Lite uses the full request window at ordinary playback", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
-    windowItems: 160, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
+    windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     aiModel: "gemini-3.1-flash-lite-preview"
   });
@@ -1514,10 +1508,10 @@ test("Gemini Flash Lite uses a quota-sized cold request", () => {
   const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(requests.length, 1);
   assert.equal(requests[0].endpointKind, "gemini");
-  assert.equal(requests[0].items.length, 160);
+  assert.equal(requests[0].items.length, 320);
 });
 
-test("Gemini Flash Lite disables automatic speculative runway at high speed", () => {
+test("Gemini Flash Lite uses a full single-request runway at high speed", () => {
   const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
     batchSize: 32, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
@@ -1528,7 +1522,7 @@ test("Gemini Flash Lite disables automatic speculative runway at high speed", ()
 
   assert.equal(requests.length, 1);
   assert.equal(requests[0].endpointKind, "gemini");
-  assert.equal(requests[0].items.length, 192);
+  assert.equal(requests[0].items.length, 320);
 });
 
 test("3x compatible playback keeps a provider-safe speculative lane", () => {
