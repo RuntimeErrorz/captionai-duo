@@ -39,7 +39,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     clearDebugLogs().then(() => sendResponse({ ok: true }));
     return true;
   }
-  if (msg && msg.type === "cancelDeepSeek") {
+  if (msg && (msg.type === "cancelDeepSeek" || msg.type === "cancelAiTranslation")) {
     if (!isYoutubeSender(sender)) {
       sendResponse({ ok: false, error: "untrusted sender", errorCode: "AI_UNTRUSTED_SENDER" });
       return;
@@ -48,7 +48,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return;
   }
-  if (msg && msg.type === "cancelDeepSeekRequest") {
+  if (msg && (msg.type === "cancelDeepSeekRequest" || msg.type === "cancelAiTranslationRequest")) {
     const requestId = String(msg.requestId || "");
     if (!isYoutubeSender(sender) || !/^[A-Za-z0-9:_-]{1,128}$/.test(requestId) ||
         !YTDS_SHARED.videoIdMatchesPageUrls(msg.videoId, senderPageUrls(sender))) {

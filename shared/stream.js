@@ -49,5 +49,9 @@
     return { events, rest };
   }
 
-  Object.assign(internal, { causalCueGroups, deepSeekSseEvents });
+  Object.assign(internal, {
+    causalCueGroups,
+    deepSeekSseEvents,
+    aiSseEvents: deepSeekSseEvents
+  });
 })();

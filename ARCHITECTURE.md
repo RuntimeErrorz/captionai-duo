@@ -23,6 +23,8 @@ in `manifest.json` in order, and the service worker loads its modules through
   the MAIN world for both the source and an optional manual translation track.
 - `inject/translation-track.js` owns the optional manual translation-track
   loader and its selection validation in the MAIN world.
+- `inject/network-hooks.js` installs XHR, fetch, and Resource Timing observation
+  hooks in the MAIN world.
 - `inject.js` is the MAIN-world timedtext interceptor and caption source loader.
 - `popup/` contains local connection-profile/configuration logic;
   `popup.js` is the remaining popup controller.

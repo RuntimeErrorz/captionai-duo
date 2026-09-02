@@ -1,11 +1,29 @@
 // AI HTTP streaming, retry and cancellation transport.
 "use strict";
 
-// Gemini free-tier request quota must be shared across tabs, not managed by a
-// single YouTube tab. Space starts globally and leave a small margin below the
-// 15 RPM tier; larger content windows reduce the resulting latency.
+// Provider request quotas (e.g. Gemini free tier 15 RPM) must be shared across
+// tabs, not managed by a single YouTube tab. Space starts globally and leave a
+// small margin; larger content windows reduce the resulting latency.
 const GEMINI_MIN_REQUEST_INTERVAL_MS = 4200;
-const GEMINI_REQUEST_RATE_STATE = new Map();
+const AI_REQUEST_RATE_STATE = new Map();
+const GEMINI_REQUEST_RATE_STATE = AI_REQUEST_RATE_STATE;
+
+function aiProviderRequestIntervalMs(config) {
+  const custom = Number(
+    (config && config.rateLimitIntervalMs) ??
+    (config && config.extraBody && config.extraBody.rate_limit_interval_ms)
+  );
+  if (Number.isFinite(custom) && custom > 0) {
+    return Math.max(0, Math.ceil(custom));
+  }
+  const providerKind = config && config.endpointKind === "gemini"
+    ? "gemini"
+    : typeof YTDS_SHARED.aiProviderKind === "function"
+      ? YTDS_SHARED.aiProviderKind(config && config.baseUrl, config && config.model)
+      : "";
+  if (providerKind === "gemini") return GEMINI_MIN_REQUEST_INTERVAL_MS;
+  return 0;
+}
 
 function aiRequestCancelledError() {
   const error = new Error("AI request cancelled");
@@ -47,45 +65,41 @@ function aiRequestRateKey(config) {
 }
 
 function waitForAiRequestSlot(config, signal) {
-  const providerKind = config && config.endpointKind === "gemini"
-    ? "gemini"
-    : typeof YTDS_SHARED.aiProviderKind === "function"
-      ? YTDS_SHARED.aiProviderKind(config && config.baseUrl, config && config.model)
-      : "";
-  if (providerKind !== "gemini") return Promise.resolve(0);
+  const intervalMs = aiProviderRequestIntervalMs(config);
+  if (intervalMs <= 0) return Promise.resolve(0);
 
   const key = aiRequestRateKey(config);
-  const state = GEMINI_REQUEST_RATE_STATE.get(key) || {
+  const state = AI_REQUEST_RATE_STATE.get(key) || {
     lastStartedAt: null, tail: Promise.resolve(), cleanupTimer: null
   };
   if (state.cleanupTimer != null) {
     clearTimeout(state.cleanupTimer);
     state.cleanupTimer = null;
   }
-  GEMINI_REQUEST_RATE_STATE.set(key, state);
+  AI_REQUEST_RATE_STATE.set(key, state);
   const predecessor = state.tail;
   let release;
   const mine = new Promise((resolve) => { release = resolve; });
   state.tail = mine;
   return predecessor.then(async () => {
     const waitMs = Number.isFinite(state.lastStartedAt)
-      ? Math.max(0, state.lastStartedAt + GEMINI_MIN_REQUEST_INTERVAL_MS - Date.now()) : 0;
+      ? Math.max(0, state.lastStartedAt + intervalMs - Date.now()) : 0;
     await waitForAiRateDelay(waitMs, signal);
     if (signal && signal.aborted) throw aiRequestCancelledError();
     state.lastStartedAt = Date.now();
     return waitMs;
   }).finally(() => {
     release();
-    if (GEMINI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine) {
+    if (AI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine) {
       // Keep the last start timestamp alive for one quota interval. Deleting
       // it immediately would let sequential calls bypass the global gate.
       state.cleanupTimer = setTimeout(() => {
         state.cleanupTimer = null;
-        if (GEMINI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine &&
-            Date.now() - state.lastStartedAt >= GEMINI_MIN_REQUEST_INTERVAL_MS) {
-          GEMINI_REQUEST_RATE_STATE.delete(key);
+        if (AI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine &&
+            Date.now() - state.lastStartedAt >= intervalMs) {
+          AI_REQUEST_RATE_STATE.delete(key);
         }
-      }, GEMINI_MIN_REQUEST_INTERVAL_MS);
+      }, intervalMs);
     }
   });
 }

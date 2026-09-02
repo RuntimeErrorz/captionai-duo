@@ -11,6 +11,7 @@ const injectSource = [
   fs.readFileSync(path.join(root, "inject/caption-tracks.js"), "utf8"),
   fs.readFileSync(path.join(root, "inject/track-transport.js"), "utf8"),
   fs.readFileSync(path.join(root, "inject/translation-track.js"), "utf8"),
+  fs.readFileSync(path.join(root, "inject/network-hooks.js"), "utf8"),
   fs.readFileSync(path.join(root, "inject.js"), "utf8")
 ].join("\n");
 

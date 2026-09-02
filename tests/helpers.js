@@ -25,6 +25,7 @@ const CONTENT_FILES = Object.freeze([
   "content/display.js",
   "content/semantic-requests.js",
   "content/semantic.js",
+  "content/cue-indicator.js",
   "content/export.js",
   "content/bridge.js",
   "content/lifecycle.js"
@@ -48,6 +49,7 @@ const MAIN_FILES = Object.freeze([
   "inject/caption-tracks.js",
   "inject/track-transport.js",
   "inject/translation-track.js",
+  "inject/network-hooks.js",
   "inject.js"
 ]);
 

@@ -34,6 +34,7 @@
         "inject/caption-tracks.js",
         "inject/track-transport.js",
         "inject/translation-track.js",
+        "inject/network-hooks.js",
         "inject.js"
       ],
       "run_at": "document_start",
@@ -62,6 +63,7 @@
         "content/display.js",
         "content/semantic-requests.js",
         "content/semantic.js",
+        "content/cue-indicator.js",
         "content/export.js",
         "content/bridge.js",
         "content/lifecycle.js"

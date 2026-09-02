@@ -10,7 +10,8 @@ const { loadShared } = require("./helpers");
 const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
 const semanticSource = [
-  "content/semantic-policy.js", "content/semantic-requests.js", "content/semantic.js"
+  "content/semantic-policy.js", "content/semantic-requests.js", "content/semantic.js",
+  "content/cue-indicator.js"
 ].map((file) =>
   fs.readFileSync(path.join(root, file), "utf8")).join("\n");
 const displaySource = fs.readFileSync(path.join(root, "content/display.js"), "utf8");
@@ -434,6 +435,37 @@ test("Gemini request slots leave a 4.2 second global start interval", async () =
   assert.equal(rateTimer.delay, 4200);
   rateTimer.callback();
   assert.equal(await second, 4200);
+});
+
+test("custom provider rate policy enforces configured request interval", async () => {
+  const timers = [];
+  const cleared = new Set();
+  const context = loadHttpContext(async () => {
+    throw new Error("network should not be reached");
+  }, {
+    Date: { now: () => 0 },
+    setTimeout: (callback, delay) => {
+      const id = timers.length + 1;
+      timers.push({ id, callback, delay });
+      return id;
+    },
+    clearTimeout: (timerId) => { cleared.add(timerId); }
+  });
+  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
+  const config = {
+    endpointKind: "compatible",
+    baseUrl: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile",
+    rateLimitIntervalMs: 2000
+  };
+  assert.equal(await waitForSlot(config, null), 0);
+  const second = waitForSlot(config, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  const rateTimer = timers.find((timer) => !cleared.has(timer.id));
+  assert.ok(rateTimer);
+  assert.equal(rateTimer.delay, 2000);
+  rateTimer.callback();
+  assert.equal(await second, 2000);
 });
 
 test("promoting a live prefetch reuses it instead of cancelling it", () => {

@@ -10,7 +10,7 @@ const DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 4;
 const COMPATIBLE_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 2;
 const COMPATIBLE_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 3;
 
-function deepseekEndpointKind() {
+function aiEndpointKind() {
   const baseUrl = typeof settings === "object" && settings ? settings.aiBaseUrl : "";
   const model = typeof settings === "object" && settings ? settings.aiModel : "";
   const shared = typeof YTDS_SHARED === "object" && YTDS_SHARED ? YTDS_SHARED : null;
@@ -21,32 +21,36 @@ function deepseekEndpointKind() {
     ? shared.aiEndpointKind(baseUrl) : "deepseek";
 }
 
-function deepseekIsGemini() {
-  return deepseekEndpointKind() === "gemini";
+function isGeminiProvider() {
+  return aiEndpointKind() === "gemini";
 }
 
-function deepseekInitialRequestItems() {
-  return deepseekIsGemini() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_INITIAL_REQUEST_ITEMS;
+const deepseekEndpointKind = aiEndpointKind;
+const deepseekIsGemini = isGeminiProvider;
+const aiIsGemini = isGeminiProvider;
+
+function aiInitialRequestItems() {
+  return isGeminiProvider() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_INITIAL_REQUEST_ITEMS;
 }
 
-function deepseekSteadyRequestItems() {
-  return deepseekIsGemini() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_REQUEST_ITEMS;
+function aiSteadyRequestItems() {
+  return isGeminiProvider() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_REQUEST_ITEMS;
 }
 
-function deepseekUrgentRequestItems() {
-  return deepseekIsGemini() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_URGENT_REQUEST_ITEMS;
+function aiUrgentRequestItems() {
+  return isGeminiProvider() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_URGENT_REQUEST_ITEMS;
 }
 
-function deepseekNormalMaxRequestItems() {
-  return deepseekIsGemini()
+function aiNormalMaxRequestItems() {
+  return isGeminiProvider()
     ? GEMINI_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
 }
 
-function deepseekMaxSpeculativeRequests() {
-  if (deepseekIsGemini()) return GEMINI_MAX_SPECULATIVE_REQUESTS;
+function aiMaxSpeculativeRequests() {
+  if (isGeminiProvider()) return GEMINI_MAX_SPECULATIVE_REQUESTS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  const deepseek = deepseekEndpointKind() === "deepseek";
+  const deepseek = aiEndpointKind() === "deepseek";
   if (Number.isFinite(rate) && rate >= 2.5) {
     return deepseek
       ? DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS
@@ -60,11 +64,11 @@ function deepseekMaxSpeculativeRequests() {
   return deepseek ? DEEPSEEK_MAX_SPECULATIVE_REQUESTS : 1;
 }
 
-function deepseekAcceleratedUrgentRequestItems() {
-  if (deepseekIsGemini()) return GEMINI_REQUEST_ITEMS;
+function aiAcceleratedUrgentRequestItems() {
+  if (isGeminiProvider()) return GEMINI_REQUEST_ITEMS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  const deepseek = deepseekEndpointKind() === "deepseek";
+  const deepseek = aiEndpointKind() === "deepseek";
   if (Number.isFinite(rate) && rate >= 2.5) {
     return deepseek
       ? DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS
@@ -75,8 +79,8 @@ function deepseekAcceleratedUrgentRequestItems() {
     : COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS;
 }
 
-function deepseekMaxRequestItems() {
-  if (deepseekIsGemini()) return GEMINI_MAX_REQUEST_ITEMS;
+function aiMaxRequestItems() {
+  if (isGeminiProvider()) return GEMINI_MAX_REQUEST_ITEMS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
   if (Number.isFinite(rate) && rate >= 2.5) {
@@ -87,3 +91,11 @@ function deepseekMaxRequestItems() {
   return Number.isFinite(rate) && rate >= 1.75
     ? DEEPSEEK_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
 }
+
+const deepseekInitialRequestItems = aiInitialRequestItems;
+const deepseekSteadyRequestItems = aiSteadyRequestItems;
+const deepseekUrgentRequestItems = aiUrgentRequestItems;
+const deepseekNormalMaxRequestItems = aiNormalMaxRequestItems;
+const deepseekMaxSpeculativeRequests = aiMaxSpeculativeRequests;
+const deepseekAcceleratedUrgentRequestItems = aiAcceleratedUrgentRequestItems;
+const deepseekMaxRequestItems = aiMaxRequestItems;

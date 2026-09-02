@@ -779,121 +779,15 @@
     } catch (_e) { /* never throw */ }
   }, false);
 
-  // ---- hook XMLHttpRequest --------------------------------------------------
-  try {
-    const XHR = XMLHttpRequest.prototype;
-    const origOpen = XHR.open;
-    const origSend = XHR.send;
-
-    XHR.open = function (method, url) {
-      try {
-        this.__ytdsUrl = url;
-        this.__ytdsMethod = String(method || "GET").toUpperCase();
-      } catch (_e) { /* ignore */ }
-      return origOpen.apply(this, arguments);
-    };
-
-    XHR.send = function () {
-      try {
-        const url = this.__ytdsUrl;
-        if (isTimedtext(url) && !isInternalTimedtext(url)) {
-          const method = this.__ytdsMethod || "GET";
-          const startedAt = Date.now();
-          const watchesPlayerResponse = noteTimedtext(url, true, { transport: "xhr", method });
-          const revision = sourceRevision;
-          if (watchesPlayerResponse && typeof this.addEventListener === "function") {
-            this.addEventListener("loadend", () => {
-              try {
-                const responseMeta = {
-                  transport: "xhr",
-                  method,
-                  status: Number(this.status) || 0,
-                  contentType: typeof this.getResponseHeader === "function"
-                    ? this.getResponseHeader("content-type") || "" : "",
-                  elapsedMs: Date.now() - startedAt
-                };
-                Promise.resolve(trackTransport.xhrResponseText(this)).then(
-                  (text) => consumePlayerTimedtext(String(url), text, revision, responseMeta),
-                  () => playerResponseUnavailable(String(url), revision)
-                );
-              } catch (_e) { playerResponseUnavailable(String(url), revision); }
-            }, { once: true });
-          } else if (watchesPlayerResponse) {
-            playerResponseUnavailable(String(url), revision);
-          }
-        }
-      } catch (_e) { /* ignore */ }
-      return origSend.apply(this, arguments);
-    };
-  } catch (_e) { /* never throw */ }
-
-  // ---- hook fetch -----------------------------------------------------------
-  try {
-    const origFetch = window.fetch;
-    if (typeof origFetch === "function") {
-      window.fetch = function (input, init) {
-        let url = "";
-        let watchesPlayerResponse = false;
-        let revision = 0;
-        let method = "GET";
-        const startedAt = Date.now();
-        try {
-          if (typeof input === "string") url = input;
-          else if (input && typeof input.url === "string") {
-            url = input.url;
-            if (input.method) method = String(input.method).toUpperCase();
-          }
-          if (init && init.method) method = String(init.method).toUpperCase();
-          watchesPlayerResponse = noteTimedtext(url, true, { transport: "fetch", method });
-          revision = sourceRevision;
-        } catch (_e) { /* ignore */ }
-        const result = origFetch.apply(this, arguments);
-        if (watchesPlayerResponse) {
-          Promise.resolve(result).then((response) => {
-            try {
-              if (!response || typeof response.clone !== "function") {
-                playerResponseUnavailable(String(url), revision);
-                return;
-              }
-              response.clone().text().then(
-                (text) => consumePlayerTimedtext(String(url), text, revision, {
-                  transport: "fetch",
-                  method,
-                  status: Number(response.status) || 0,
-                  contentType: response.headers && typeof response.headers.get === "function"
-                    ? response.headers.get("content-type") || "" : "",
-                  elapsedMs: Date.now() - startedAt
-                }),
-                () => playerResponseUnavailable(String(url), revision)
-              );
-            } catch (_e) { playerResponseUnavailable(String(url), revision); }
-          }, () => playerResponseUnavailable(String(url), revision));
-        }
-        return result;
-      };
-    }
-  } catch (_e) { /* never throw */ }
-
-  // ---- robust capture via Resource Timing ----------------------------------
-  // Hook-independent fallback: the player's /api/timedtext request shows up in
-  // Resource Timing with its FULL url (incl. pot) regardless of whether it used
-  // XHR or fetch — and even if another extension (e.g. an older dual-subtitles
-  // build) has locked XMLHttpRequest.prototype.open so our XHR hook never
-  // installs. This is the mechanism the rewrite was validated against.
-  try {
-    const scan = (entries) => {
-      for (const e of entries) {
-        if (e && typeof e.name === "string" && isTimedtext(e.name)) {
-          noteTimedtext(e.name, false, { transport: "resource", method: "GET" });
-        }
-      }
-    };
-    try { scan(performance.getEntriesByType("resource")); } catch (_e) { /* ignore */ }
-    if (typeof PerformanceObserver === "function") {
-      const po = new PerformanceObserver((list) => {
-        try { scan(list.getEntries()); } catch (_e) { /* ignore */ }
-      });
-      po.observe({ type: "resource", buffered: true });
-    }
-  } catch (_e) { /* never throw */ }
+  // ---- install player network hooks ----------------------------------------
+  if (window.__ytdsNetworkHooks && typeof window.__ytdsNetworkHooks.install === "function") {
+    window.__ytdsNetworkHooks.install({
+      isTimedtext,
+      isInternalTimedtext,
+      noteTimedtext,
+      getSourceRevision: () => sourceRevision,
+      consumePlayerTimedtext,
+      playerResponseUnavailable
+    });
+  }
 })();
