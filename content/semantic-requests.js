@@ -38,9 +38,15 @@ function deepseekRequestIsStaleForTarget(request, targetGroup) {
 }
 function deepseekRequestIsPlaybackLagging(request, state, targetGroup) {
   if (!request || !request.urgent || !state || typeof getVideo !== "function") return false;
+  if (typeof captionSession === "object" && captionSession && captionSession.transCache &&
+      typeof groupKey === "function" && captionSession.transCache.has(groupKey(targetGroup))) {
+    return false;
+  }
   const rate = Number(getVideo() && getVideo().playbackRate);
   const highSpeed = rate >= 2.5;
-  const lagThreshold = highSpeed ? 24 : rate >= 1.75 ? 48 : 0;
+  const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
+    : typeof deepseekIsGemini === "function" ? deepseekIsGemini() : false;
+  const lagThreshold = isGemini ? 48 : (highSpeed ? 24 : (rate >= 1.75 ? 48 : 0));
   const target = Number(targetGroup);
   const cursor = Number(state.cursor);
   const requestStart = Number(request.requestStart);
@@ -51,9 +57,13 @@ function deepseekRequestIsPlaybackLagging(request, state, targetGroup) {
     Number.isInteger(progressCursor) && progressCursor > requestStart &&
     Number.isFinite(lastProgressAt) && lastProgressAt > startedAt;
   const referenceAt = hasStreamProgress ? lastProgressAt : startedAt;
-  const graceMs = hasStreamProgress
-    ? highSpeed ? DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS : DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS
-    : highSpeed ? DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS : DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS;
+  const startupGraceMs = isGemini
+    ? DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS
+    : (highSpeed ? DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS : DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS);
+  const progressGraceMs = isGemini
+    ? DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS
+    : (highSpeed ? DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS : DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS);
+  const graceMs = hasStreamProgress ? progressGraceMs : startupGraceMs;
   return lagThreshold > 0 && Number.isInteger(target) && Number.isInteger(cursor) &&
     target - cursor >= lagThreshold && Number.isFinite(referenceAt) &&
     Date.now() - referenceAt >= graceMs;
@@ -394,12 +404,16 @@ function pumpDeepseekSpeculativeRequests(regionIndex, stateValue) {
         state.prefetchResponses.has(start)) continue;
     start = deepseekSpeculativeStartAfterActive(regionIndex, start);
     if (start <= state.cursor || start > state.limitEnd) continue;
-    const itemCount = Math.min(
-      deepseekMaxRequestItems(),
-      Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
-          Number(getVideo() && getVideo().playbackRate) >= 1.75
-        ? DEEPSEEK_SPECULATIVE_REQUEST_ITEMS : deepseekSteadyRequestItems()
-    );
+    const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
+      : typeof deepseekIsGemini === "function" ? deepseekIsGemini() : false;
+    const itemCount = isGemini
+      ? GEMINI_REQUEST_ITEMS
+      : Math.min(
+          deepseekMaxRequestItems(),
+          Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
+              Number(getVideo() && getVideo().playbackRate) >= 1.75
+            ? DEEPSEEK_SPECULATIVE_REQUEST_ITEMS : deepseekSteadyRequestItems()
+        );
     const end = Math.min(state.limitEnd, start + Math.max(1, itemCount) - 1);
     if (deepseekSpeculativeRangeOverlaps(regionIndex, start, end)) continue;
     if (!launchDeepseekSpeculativeRequest(regionIndex, state, start, end)) continue;

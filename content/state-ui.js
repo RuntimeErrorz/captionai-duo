@@ -99,7 +99,7 @@ const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
 // separate from generic compatible endpoints, whose trade-offs differ.
 const GEMINI_REQUEST_ITEMS = 320; // spend one quota slot on a full runway
 const GEMINI_MAX_REQUEST_ITEMS = 320;
-const GEMINI_MAX_SPECULATIVE_REQUESTS = 0;
+const GEMINI_MAX_SPECULATIVE_REQUESTS = 1;
 const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
 const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
 const DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x

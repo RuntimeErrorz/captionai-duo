@@ -187,7 +187,7 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80,
     GEMINI_REQUEST_ITEMS: 320,
     GEMINI_MAX_REQUEST_ITEMS: 320,
-    GEMINI_MAX_SPECULATIVE_REQUESTS: 0,
+    GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
     DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
     DEEPSEEK_MAX_REQUEST_ITEMS: 320,
     DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
@@ -466,6 +466,37 @@ test("custom provider rate policy enforces configured request interval", async (
   assert.equal(rateTimer.delay, 2000);
   rateTimer.callback();
   assert.equal(await second, 2000);
+});
+
+test("custom provider rate policy supports rate_limit_rpm in extraBody", async () => {
+  const timers = [];
+  const cleared = new Set();
+  const context = loadHttpContext(async () => {
+    throw new Error("network should not be reached");
+  }, {
+    Date: { now: () => 0 },
+    setTimeout: (callback, delay) => {
+      const id = timers.length + 1;
+      timers.push({ id, callback, delay });
+      return id;
+    },
+    clearTimeout: (timerId) => { cleared.add(timerId); }
+  });
+  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
+  const config = {
+    endpointKind: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-2.5-flash",
+    extraBody: { rate_limit_rpm: 20 }
+  };
+  assert.equal(await waitForSlot(config, null), 0);
+  const second = waitForSlot(config, null);
+  await new Promise((resolve) => setImmediate(resolve));
+  const rateTimer = timers.find((timer) => !cleared.has(timer.id));
+  assert.ok(rateTimer);
+  assert.equal(rateTimer.delay, 3000);
+  rateTimer.callback();
+  assert.equal(await second, 3000);
 });
 
 test("promoting a live prefetch reuses it instead of cancelling it", () => {
@@ -759,6 +790,65 @@ test("accelerated playback rebuilds a live urgent request after its safe cursor 
   assert.equal(isLagging(request, { cursor: 96 }, 128), false);
   request.lastProgressAt = Date.now() - 5000;
   assert.equal(isLagging(request, { cursor: 96 }, 128), true);
+});
+
+test("Gemini playback lag preserves full startup grace and accounts for cached targets", () => {
+  const request = {
+    urgent: true,
+    requestStart: 0,
+    requestEnd: 319,
+    startedAt: Date.now() - 4000,
+    progressCursor: -1,
+    lastProgressAt: 0
+  };
+  const context = {
+    YTDS_SHARED: loadShared(),
+    getVideo: () => ({ playbackRate: 2.6 }),
+    captionSession: {
+      transCache: new Map(),
+      cueVideoId: "video",
+      cueEpoch: 1
+    },
+    settings: {
+      aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      aiModel: "gemini-2.5-flash"
+    },
+    DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
+    DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS: 4000,
+    DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
+    DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS: 6000
+  };
+  vm.createContext(context);
+  vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
+  const groupKey = context.groupKey;
+  context.captionSession.transCache.set(groupKey(128), "cached translation");
+  const isLagging = vm.runInContext("deepseekRequestIsPlaybackLagging", context);
+
+  // At 4000ms with rate 2.6, Gemini has 6000ms startup grace so it is not lagging yet:
+  assert.equal(isLagging(request, { cursor: 0 }, 100), false);
+
+  // If targetGroup 128 is already cached, it is never lagging:
+  request.startedAt = Date.now() - 7000;
+  assert.equal(isLagging(request, { cursor: 0 }, 128), false);
+
+  // But if targetGroup is uncached and past 6000ms, it is lagging:
+  assert.equal(isLagging(request, { cursor: 0 }, 100), true);
+});
+
+test("reseedDeepseekCommitState advances past already cached items", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 160, targetThrough: 128, urgentTarget: 128, playbackRate: 1
+  });
+  const groupKey = harness.context.groupKey;
+  // Simulate item 100 and 101 being already cached
+  harness.context.captionSession.transCache.set(groupKey(100), "already translated");
+  harness.context.captionSession.transCache.set(groupKey(101), "already translated");
+  const reseed = vm.runInContext("reseedDeepseekCommitState", harness.context);
+
+  // Reseeding with targetGroup 100 should advance effectiveTarget to 102
+  const state = reseed(0, 100);
+  assert.ok(state.cursor >= 102);
+  assert.ok(state.commitFloor >= 102);
 });
 
 test("playback-lag reseed cancels the old urgent writer before rebuilding", () => {
@@ -1543,7 +1633,7 @@ test("Gemini Flash Lite uses the full request window at ordinary playback", () =
   assert.equal(requests[0].items.length, 320);
 });
 
-test("Gemini Flash Lite uses a full single-request runway at high speed", () => {
+test("Gemini Flash Lite uses a full urgent runway and speculative lookahead at high speed", () => {
   const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
     batchSize: 32, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
@@ -1552,9 +1642,13 @@ test("Gemini Flash Lite uses a full single-request runway at high speed", () => 
     aiModel: "gemini-3.5-flash-lite-preview"
   });
 
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);
   assert.equal(requests[0].endpointKind, "gemini");
   assert.equal(requests[0].items.length, 320);
+  assert.equal(requests[0].urgent, true);
+  assert.equal(requests[1].endpointKind, "gemini");
+  assert.equal(requests[1].requestStart, 320);
+  assert.equal(requests[1].urgent, false);
 });
 
 test("3x compatible playback keeps a provider-safe speculative lane", () => {

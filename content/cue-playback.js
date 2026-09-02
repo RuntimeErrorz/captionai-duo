@@ -402,10 +402,18 @@ function deepseekPrefetchBatchCount() {
     DEEPSEEK_MAX_PREFETCH_BATCHES,
     Math.max(0, Math.floor(Number(settings.deepseekPrefetchBatches) || 0))
   );
-  // Gemini Flash Lite free-tier quotas are dominated by request count. Its
-  // writer uses a wider range, so speculative look-ahead spends the saved RPM
-  // and RPD on subtitles that playback may never reach.
-  if (typeof deepseekIsGemini === "function" && deepseekIsGemini()) return 0;
+  const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
+    : typeof deepseekIsGemini === "function" ? deepseekIsGemini() : false;
+  if (isGemini) {
+    const coreItems = typeof DEEPSEEK_CORE_ITEMS === "number" ? DEEPSEEK_CORE_ITEMS : 32;
+    const requestItems = typeof GEMINI_REQUEST_ITEMS === "number" ? GEMINI_REQUEST_ITEMS : 320;
+    const maxBatches = typeof DEEPSEEK_MAX_PREFETCH_BATCHES === "number" ? DEEPSEEK_MAX_PREFETCH_BATCHES : 12;
+    const defaultGeminiBatches = Math.min(
+      maxBatches,
+      Math.max(1, Math.ceil(requestItems / coreItems))
+    );
+    return Math.max(configured, defaultGeminiBatches);
+  }
   if (!isAcceleratedDeepseekPlayback()) return configured;
   const video = getVideo();
   const rate = Number(video && video.playbackRate);

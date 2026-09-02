@@ -9,6 +9,13 @@ const AI_REQUEST_RATE_STATE = new Map();
 const GEMINI_REQUEST_RATE_STATE = AI_REQUEST_RATE_STATE;
 
 function aiProviderRequestIntervalMs(config) {
+  const customRpm = Number(
+    (config && config.rateLimitRpm) ??
+    (config && config.extraBody && (config.extraBody.rate_limit_rpm || config.extraBody.rpm))
+  );
+  if (Number.isFinite(customRpm) && customRpm > 0) {
+    return Math.max(0, Math.ceil(60000 / customRpm));
+  }
   const custom = Number(
     (config && config.rateLimitIntervalMs) ??
     (config && config.extraBody && config.extraBody.rate_limit_interval_ms)

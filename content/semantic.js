@@ -310,17 +310,29 @@ function reseedDeepseekCommitState(regionIndex, targetGroup) {
   if (!region || !state) return state;
   captionSession.deepseekExhaustedRegions.delete(regionIndex);
   if (captionSession.deepseekVisibleErrors) captionSession.deepseekVisibleErrors.delete(regionIndex);
-  let requestStart = Math.max(region.start, targetGroup - deepseekSeekBacktrackItems());
+  let effectiveTarget = targetGroup;
+  while (effectiveTarget <= region.end && captionSession.transCache.has(groupKey(effectiveTarget))) {
+    effectiveTarget++;
+  }
+  if (effectiveTarget > region.end) {
+    state.cursor = region.end + 1;
+    state.commitFloor = region.end + 1;
+    state.limitEnd = region.end;
+    state.targetThrough = region.end;
+    state.urgentTarget = region.end;
+    return state;
+  }
+  let requestStart = Math.max(region.start, effectiveTarget - deepseekSeekBacktrackItems());
   // A previously committed unit immediately to the left is already a proven
   // semantic boundary. Start after it instead of inventing another guard.
-  for (let id = targetGroup - 1; id >= requestStart; id--) {
+  for (let id = effectiveTarget - 1; id >= requestStart; id--) {
     if (captionSession.transCache.has(groupKey(id))) {
       requestStart = id + 1;
       break;
     }
   }
   let limitEnd = region.end;
-  for (let id = targetGroup; id <= region.end; id++) {
+  for (let id = effectiveTarget; id <= region.end; id++) {
     if (captionSession.transCache.has(groupKey(id))) {
       limitEnd = id - 1;
       break;
@@ -333,15 +345,15 @@ function reseedDeepseekCommitState(regionIndex, targetGroup) {
   state.cursor = requestStart;
   state.commitFloor = provenLeftBoundary
     ? requestStart
-    : Math.min(targetGroup, requestStart + DEEPSEEK_SEEK_LEFT_GUARD_ITEMS);
-  state.limitEnd = Math.max(targetGroup, limitEnd);
+    : Math.min(effectiveTarget, requestStart + DEEPSEEK_SEEK_LEFT_GUARD_ITEMS);
+  state.limitEnd = Math.max(effectiveTarget, limitEnd);
   state.targetThrough = requestStart - 1;
   state.urgentTarget = requestStart - 1;
   state.windowItems = deepseekInitialRequestItems();
   state.recoveryWindowItems = false; state.noProgressRange = "";
   emitDebug("semantic-commit-reseeded", {
     regionIndex,
-    targetGroup,
+    targetGroup: effectiveTarget,
     requestStart,
     commitFloor: state.commitFloor,
     limitEnd: state.limitEnd,
