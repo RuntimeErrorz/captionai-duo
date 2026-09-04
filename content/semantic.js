@@ -5,23 +5,36 @@ function deepseekPauseAfter(list, index) {
   if (index >= list.length - 1) return Number.POSITIVE_INFINITY;
   return Math.max(0, Number(YTDS_SHARED.cuePauseMs(list[index], list[index + 1])) || 0);
 }
-function resetDeepseekCommitTimeline() {
-  captionSession.deepseekCommitRegions = [];
-  captionSession.deepseekGroupToCommitRegion = [];
-  captionSession.deepseekCommitStateByRegion.clear();
+function resetSemanticCommitTimeline() {
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  if (regions) regions.length = 0;
+  else captionSession.semanticCommitRegions = [];
+  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion;
+  if (groupToRegion) groupToRegion.length = 0;
+  else captionSession.semanticGroupToCommitRegion = [];
+  const stateByRegion = captionSession.semanticCommitStateByRegion || captionSession.deepseekCommitStateByRegion;
+  if (stateByRegion) stateByRegion.clear();
+  else captionSession.semanticCommitStateByRegion = new Map();
 }
-function buildDeepseekCommitRegions() {
-  resetDeepseekCommitTimeline();
+const resetDeepseekCommitTimeline = resetSemanticCommitTimeline;
+
+function buildSemanticCommitRegions() {
+  resetSemanticCommitTimeline();
   if (!captionSession.sentGroups || !captionSession.sentGroups.length) return;
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions || [];
+  captionSession.semanticCommitRegions = regions;
+  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion || [];
+  captionSession.semanticGroupToCommitRegion = groupToRegion;
   let start = 0;
   for (let end = 0; end < captionSession.sentGroups.length; end++) {
     if (!captionSession.sentGroups[end].hardAfter && end < captionSession.sentGroups.length - 1) continue;
-    const regionIndex = captionSession.deepseekCommitRegions.length;
-    captionSession.deepseekCommitRegions.push({ start, end });
-    for (let id = start; id <= end; id++) captionSession.deepseekGroupToCommitRegion[id] = regionIndex;
+    const regionIndex = regions.length;
+    regions.push({ start, end });
+    for (let id = start; id <= end; id++) groupToRegion[id] = regionIndex;
     start = end + 1;
   }
 }
+const buildDeepseekCommitRegions = buildSemanticCommitRegions;
 // Preserve the player's cue timeline while exposing addressable lexical
 // references. DeepSeek alone chooses semantic groups; local scopes only
 // control preloading distance and pending-indicator stability.
@@ -150,11 +163,13 @@ function deepseekContextsForRange(requestStart, requestEnd) {
   }
   return { contextBefore, contextAfter };
 }
-function deepseekCommitState(regionIndex) {
-  const region = captionSession.deepseekCommitRegions[regionIndex];
+function semanticCommitState(regionIndex) {
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const region = regions ? regions[regionIndex] : null;
   if (!region) return null;
-  let state = captionSession.deepseekCommitStateByRegion.get(regionIndex);
-  if (!state) {
+  const stateByRegion = captionSession.semanticCommitStateByRegion || captionSession.deepseekCommitStateByRegion;
+  let state = stateByRegion ? stateByRegion.get(regionIndex) : null;
+  if (!state && stateByRegion) {
     state = {
       cursor: region.start,
       commitFloor: region.start,
@@ -167,10 +182,11 @@ function deepseekCommitState(regionIndex) {
       prefetchQueued: new Set(),
       prefetchResponses: new Map()
     };
-    captionSession.deepseekCommitStateByRegion.set(regionIndex, state);
+    stateByRegion.set(regionIndex, state);
   }
   return state;
 }
+const deepseekCommitState = semanticCommitState;
 
 function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
   const cursor = Math.floor(Number(cursorValue));
@@ -304,12 +320,15 @@ function deepseekResponseWithBufferedProgress(request, response, state) {
   };
 }
 
-function reseedDeepseekCommitState(regionIndex, targetGroup) {
-  const region = captionSession.deepseekCommitRegions[regionIndex];
-  const state = deepseekCommitState(regionIndex);
+function reseedSemanticCommitState(regionIndex, targetGroup) {
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const region = regions ? regions[regionIndex] : null;
+  const state = semanticCommitState(regionIndex);
   if (!region || !state) return state;
-  captionSession.deepseekExhaustedRegions.delete(regionIndex);
-  if (captionSession.deepseekVisibleErrors) captionSession.deepseekVisibleErrors.delete(regionIndex);
+  const exhausted = captionSession.semanticExhaustedRegions || captionSession.deepseekExhaustedRegions;
+  if (exhausted) exhausted.delete(regionIndex);
+  const visibleErrors = captionSession.semanticVisibleErrors || captionSession.deepseekVisibleErrors;
+  if (visibleErrors) visibleErrors.delete(regionIndex);
   let effectiveTarget = targetGroup;
   while (effectiveTarget <= region.end && captionSession.transCache.has(groupKey(effectiveTarget))) {
     effectiveTarget++;
@@ -361,6 +380,7 @@ function reseedDeepseekCommitState(regionIndex, targetGroup) {
   });
   return state;
 }
+const reseedDeepseekCommitState = reseedSemanticCommitState;
 function canContinueDeepseekInflight(regionIndex, state, targetGroup) {
   const request = captionSession.deepseekRequestMeta.get(`dsb:${regionIndex}`);
   if (!request || !state || request.reqEpoch !== captionSession.cueEpoch ||
@@ -377,17 +397,23 @@ function canContinueDeepseekInflight(regionIndex, state, targetGroup) {
     targetGroup <= request.requestEnd + deepseekUrgentTargetTailItems();
 }
 
-function commitDeepseekResponsePrefix(
+function commitSemanticResponsePrefix(
   regionIndex, requestStart, requestEnd, commitFloor, limitEnd, translations, guardItems,
   minimumRunwayItems
 ) {
-  const region = captionSession.deepseekCommitRegions[regionIndex];
-  const state = deepseekCommitState(regionIndex);
-  if (!region || !state || state.cursor !== requestStart) return null;
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const region = regions ? regions[regionIndex] : null;
+  const state = semanticCommitState(regionIndex);
+  const runwayRequirement = minimumRunwayItems == null ? 0 : minimumRunwayItems;
+  if (requestEnd < limitEnd && requestEnd - requestStart + 1 <= runwayRequirement) {
+    emitDebug("semantic-commit-subrunway-request", {
+      regionIndex, requestStart, requestEnd, limitEnd, minimumRunwayItems: runwayRequirement
+    });
+  }
   const plan = YTDS_SHARED.monotonicSemanticCommitPlan(
     translations, requestStart, requestEnd, limitEnd,
     guardItems, commitFloor,
-    minimumRunwayItems == null ? 0 : minimumRunwayItems
+    runwayRequirement
   );
   if (!plan.units.length) return requestStart;
 
@@ -414,7 +440,8 @@ function commitDeepseekResponsePrefix(
     if (parts.length !== unit.members.length) return requestStart;
     unit.source = mergeCueTexts(parts);
     for (const id of unit.members) {
-      if (captionSession.transCache.has(groupKey(id)) || captionSession.deepseekUnitCache.has(groupKey(id))) {
+      const unitCache = captionSession.semanticUnitCache || captionSession.deepseekUnitCache;
+      if (captionSession.transCache.has(groupKey(id)) || (unitCache && unitCache.has(groupKey(id)))) {
         emitDebug("semantic-commit-invariant-violation", {
           regionIndex, requestStart, requestEnd, id, unitId: unit.unitId
         });
@@ -425,15 +452,27 @@ function commitDeepseekResponsePrefix(
   }
   if (expected - 1 !== plan.commitThrough) return requestStart;
 
+  const unitCache = captionSession.semanticUnitCache || captionSession.deepseekUnitCache;
+  const sourceCache = captionSession.semanticSourceCache || captionSession.deepseekSourceCache;
+  const chunkCache = captionSession.semanticAlignedChunksCache || captionSession.deepseekAlignedChunksCache;
   for (const unit of units) {
     for (const id of unit.members) {
       const key = groupKey(id);
       captionSession.transCache.set(key, unit.translation);
-      captionSession.deepseekUnitCache.set(key, unit.unitId);
-      captionSession.deepseekSourceCache.set(key, unit.source);
+      if (unitCache) unitCache.set(key, unit.unitId);
+      if (sourceCache) sourceCache.set(key, unit.source);
+      if (captionSession.deepseekUnitCache && captionSession.deepseekUnitCache !== unitCache) {
+        captionSession.deepseekUnitCache.set(key, unit.unitId);
+      }
+      if (captionSession.deepseekSourceCache && captionSession.deepseekSourceCache !== sourceCache) {
+        captionSession.deepseekSourceCache.set(key, unit.source);
+      }
     }
     if (unit.alignedChunks && unit.alignedChunks.length) {
-      captionSession.deepseekAlignedChunksCache.set(unit.unitId, unit.alignedChunks);
+      if (chunkCache) chunkCache.set(unit.unitId, unit.alignedChunks);
+      if (captionSession.deepseekAlignedChunksCache && captionSession.deepseekAlignedChunksCache !== chunkCache) {
+        captionSession.deepseekAlignedChunksCache.set(unit.unitId, unit.alignedChunks);
+      }
     }
   }
   cacheDeepseekDisplayNeighborhood(units.flatMap((unit) => unit.members), true);
@@ -449,6 +488,7 @@ function commitDeepseekResponsePrefix(
   });
   return plan.carryStart;
 }
+const commitDeepseekResponsePrefix = commitSemanticResponsePrefix;
 function handleDeepseekTranslationProgress(msg) {
   const found = deepseekRequestById(msg && msg.requestId);
   if (!found) {
@@ -602,8 +642,9 @@ function deepseekAcceleratedPrefetchItems(targetTailItems) {
   );
 }
 function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
-  const region = captionSession.deepseekCommitRegions[regionIndex];
-  const state = deepseekCommitState(regionIndex);
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const region = regions ? regions[regionIndex] : null;
+  const state = semanticCommitState(regionIndex);
   if (!region || !state || state.cursor > state.limitEnd || state.cursor > state.targetThrough) return;
   const prefetched = takeDeepseekPrefetchedResponse(state);
   if (prefetched) {
@@ -640,8 +681,10 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
     ? { ...state, windowItems: planningWindowItems } : state;
   const initialUrgentItems = acceleratedPlayback && requestUrgent && !recoveryWindow
     ? acceleratedUrgentItems : deepseekUrgentRequestItems();
+  const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
+    ? SEMANTIC_COMMIT_GUARD_ITEMS : DEEPSEEK_COMMIT_GUARD_ITEMS;
   const requestPlan = YTDS_SHARED.semanticCommitRequestPlan(
-    planningState, requestStart, DEEPSEEK_COMMIT_GUARD_ITEMS,
+    planningState, requestStart, guardItems,
     maxRequestItems, requestUrgent, initialUrgentItems,
     urgentRequestTailItems
   );
@@ -649,7 +692,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   let requestEnd = Math.min(limitEnd, requestStart + targetAwareItems - 1);
   const futureStart = deepseekNextFuturePrefetchStart(regionIndex, state, requestStart);
   if (!recoveryWindow && futureStart > requestStart && futureStart <= requestEnd) {
-    const bridgeItems = deepseekBridgeRequestItems(
+    const bridgeItems = semanticBridgeRequestItems(
       requestStart, futureStart, maxRequestItems, limitEnd
     );
     if (bridgeItems > 0) {
@@ -669,9 +712,8 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
     currentChars += nextChars;
   }
   requestEnd = requestStart + items.length - 1;
-  const effectiveGuardItems = Math.min(
-    DEEPSEEK_COMMIT_GUARD_ITEMS,
-    Math.max(0, Math.floor(items.length / 3))
+  const effectiveGuardItems = YTDS_SHARED.semanticEffectiveGuardItems(
+    items.length, DEEPSEEK_COMMIT_GUARD_ITEMS
   );
   const { contextBefore, contextAfter } = deepseekContextsForRange(requestStart, requestEnd);
   const requestId = beginDeepseekRequest(
@@ -735,9 +777,11 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
 function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, requestOptions) {
   if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) || captionSession.deepseekSeekSettling) return;
   if (!captionSession.sentGroups || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
-  const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
-  const region = captionSession.deepseekCommitRegions[regionIndex];
-  let state = deepseekCommitState(regionIndex);
+  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion;
+  const regionIndex = groupToRegion ? groupToRegion[gIdx] : undefined;
+  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const region = regions && regionIndex != null ? regions[regionIndex] : null;
+  let state = semanticCommitState(regionIndex);
   if (!region || !state) return;
   if (urgent) {
     cancelDeepseekRequestsBeforeRegion(regionIndex);

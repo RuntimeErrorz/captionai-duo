@@ -336,3 +336,76 @@ test("random aligned-chunk recovery preserves exact coverage and the trailing gu
     assert.ok(plan.commitThrough < plan.guardStart);
   }
 });
+
+test("semanticCommitGuardStart matches monotonicSemanticCommitPlan.guardStart across random inputs", () => {
+  let seed = 0x5a1f2b;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  for (let run = 0; run < 1000; run++) {
+    const cursor = Math.floor(random() * 5000);
+    const windowLength = 1 + Math.floor(random() * 200);
+    const requestEnd = cursor + windowLength - 1;
+    const regionEnd = random() < 0.2 ? requestEnd : requestEnd + Math.floor(random() * 500);
+    const guardLimit = Math.floor(random() * 32);
+    const minimumRunway = Math.floor(random() * 48);
+
+    const guardStart = shared.semanticCommitGuardStart(
+      cursor, requestEnd, regionEnd, guardLimit, minimumRunway
+    );
+    const plan = shared.monotonicSemanticCommitPlan(
+      [], cursor, requestEnd, regionEnd, guardLimit, cursor, minimumRunway
+    );
+    assert.equal(guardStart, plan.guardStart, `Mismatch at seed run ${run}`);
+
+    if (requestEnd < regionEnd) {
+      const runway = Math.max(guardLimit, minimumRunway);
+      if (windowLength <= runway) {
+        assert.equal(guardStart, cursor, `Sub-runway request must clamp guard to cursor at run ${run}`);
+      } else {
+        assert.equal(guardStart, requestEnd - runway + 1, `Positive runway must reserve exact guard at run ${run}`);
+        assert.ok(guardStart > cursor, `Must have non-zero commit capacity at run ${run}`);
+      }
+    } else {
+      assert.equal(guardStart, regionEnd + 1, `Region end must allow full commit at run ${run}`);
+    }
+  }
+});
+
+test("bridge hand-off commits the gap and eliminates adaptive-no-progress deadlocks (2.log scenario)", () => {
+  const requestStart = 7341;
+  const futureStart = 7361; // gap of 20 items
+  const gap = futureStart - requestStart;
+  const maxItems = 208;
+  const limitEnd = 10000;
+
+  // Bridge request size calculation using SSOT runway items
+  let count = Math.min(maxItems, limitEnd - requestStart + 1, gap + 1);
+  while (count < maxItems && count < limitEnd - requestStart + 1 &&
+      count - shared.semanticCommitRunwayItems(count, 16, 32) < gap) {
+    count++;
+  }
+  assert.equal(count, 52); // 52 items ensures guardStart (7341 + 52 - 32) = 7361 >= 7361
+  const requestEnd = requestStart + count - 1;
+
+  // When sentences complete before futureStart (gap boundary 7361):
+  const gapTranslations = [
+    ...unit(7341, 7345, "1995年夏天"),
+    ...unit(7346, 7360, "微软高管走进网景公司的办公室"),
+    ...unit(7361, 7392, "后续跨界句子")
+  ];
+
+  const plan = shared.monotonicSemanticCommitPlan(
+    gapTranslations, requestStart, requestEnd, limitEnd, 16, requestStart, 32
+  );
+
+  // Assertions proving that the gap was fully crossed and committed:
+  assert.equal(plan.commitStart, 7341);
+  assert.equal(plan.commitThrough, 7360);
+  assert.equal(plan.carryStart, 7361);
+  assert.equal(plan.carryStart, futureStart, "Commit cursor lands exactly on futureStart for seamless handoff");
+  assert.equal(plan.units.length, 2);
+  assert.deepEqual(Array.from(plan.units[0].members), [7341, 7342, 7343, 7344, 7345]);
+  assert.deepEqual(Array.from(plan.units[1].members), Array.from({ length: 15 }, (_v, i) => 7346 + i));
+});

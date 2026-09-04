@@ -86,7 +86,8 @@ const MAX_CUE_PARTS = 512;
 const MAX_CUE_TOTAL_CHARS = 4000000;
 const MAX_TRACK_TIME_MS = 7 * 24 * 60 * 60 * 1000;
 
-const DEEPSEEK_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
+const SEMANTIC_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
+const DEEPSEEK_CORE_ITEMS = SEMANTIC_CORE_ITEMS;
 const DEEPSEEK_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
 const DEEPSEEK_REQUEST_ITEMS = 80; // normal monotonic request window
 const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
@@ -104,8 +105,10 @@ const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
 const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
 const DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x
 const DEEPSEEK_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
-const DEEPSEEK_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
-const DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
+const SEMANTIC_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
+const DEEPSEEK_COMMIT_GUARD_ITEMS = SEMANTIC_COMMIT_GUARD_ITEMS;
+const SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
+const DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS = SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS;
 const DEEPSEEK_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
 const DEEPSEEK_FAST_TARGET_TAIL_ITEMS = 192; // extra runway at >=1.75x playback
 const DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS = 224; // extra runway at >=2.5x playback
@@ -116,9 +119,12 @@ const DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
 const DEEPSEEK_FAST_PREFETCH_BATCHES = 3; // keep a bounded runway at >=1.75x
 const DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 4; // keep a bounded runway at >=2.5x
 const DEEPSEEK_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
-const DEEPSEEK_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
-const DEEPSEEK_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross
-const DEEPSEEK_MIN_DISPLAY_UNIT_MS = 650; // co-display imperceptibly short units from one raw cue
+const SEMANTIC_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
+const DEEPSEEK_SOFT_PAUSE_MS = SEMANTIC_SOFT_PAUSE_MS;
+const SEMANTIC_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross
+const DEEPSEEK_HARD_PAUSE_MS = SEMANTIC_HARD_PAUSE_MS;
+const SEMANTIC_MIN_DISPLAY_UNIT_MS = 650; // co-display imperceptibly short units from one raw cue
+const DEEPSEEK_MIN_DISPLAY_UNIT_MS = SEMANTIC_MIN_DISPLAY_UNIT_MS;
 const DEEPSEEK_COLD_RETRY_DELAYS_MS = Object.freeze([400, 1200, 2500]);
 const DEEPSEEK_RATE_RETRY_LIMIT = 6;
 const PENDING_ELLIPSIS_MS = 400; // show "…" if the active group is still in flight

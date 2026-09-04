@@ -499,7 +499,7 @@ function deepseekNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
   }
   return Number.isFinite(next) ? next : -1;
 }
-function deepseekBridgeRequestItems(requestStartValue, futureStartValue, maxValue, limitEndValue) {
+function semanticBridgeRequestItems(requestStartValue, futureStartValue, maxValue, limitEndValue) {
   const requestStart = Math.floor(Number(requestStartValue));
   const futureStart = Math.floor(Number(futureStartValue));
   const maxItems = Math.max(1, Math.floor(Number(maxValue) || 1));
@@ -507,15 +507,24 @@ function deepseekBridgeRequestItems(requestStartValue, futureStartValue, maxValu
   if (![requestStart, futureStart, limitEnd].every(Number.isInteger) ||
       futureStart <= requestStart || requestStart > limitEnd) return 0;
   const gap = futureStart - requestStart;
-  let count = Math.min(maxItems, limitEnd - requestStart + 1, Math.max(1, gap));
-  const minimumJoinItems = Math.min(maxItems, limitEnd - requestStart + 1, Math.max(1, gap + 1));
-  while (count < minimumJoinItems) count++;
+  const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
+    ? SEMANTIC_COMMIT_GUARD_ITEMS : DEEPSEEK_COMMIT_GUARD_ITEMS;
+  const minRunwayItems = typeof SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS !== "undefined"
+    ? SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS : DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS;
+  let count = Math.min(maxItems, limitEnd - requestStart + 1, gap + 1);
   while (count < maxItems && count < limitEnd - requestStart + 1 &&
-      count - Math.min(DEEPSEEK_COMMIT_GUARD_ITEMS, Math.floor(count / 3)) < gap) {
+      count - YTDS_SHARED.semanticCommitRunwayItems(count, guardItems, minRunwayItems) < gap) {
     count++;
   }
+  const reachesEnd = requestStart + count - 1 >= limitEnd;
+  const runway = reachesEnd ? 0 : YTDS_SHARED.semanticCommitRunwayItems(
+    count, guardItems, minRunwayItems
+  );
+  if (!reachesEnd && count - runway < gap) return 0;
   return count;
 }
+const deepseekBridgeRequestItems = semanticBridgeRequestItems;
+
 
 function handleDeepseekBatchResult(request, resp, runtimeError) {
   if (!request || !Number.isInteger(request.regionIndex)) return;
@@ -736,8 +745,9 @@ function launchDeepseekSpeculativeRequest(regionIndex, state, startValue, endVal
   const requestMeta = {
     prefetch: true, regionIndex, requestStart: start, requestEnd,
     commitFloor: state.commitFloor, limitEnd: state.limitEnd,
-    effectiveGuardItems: Math.min(DEEPSEEK_COMMIT_GUARD_ITEMS,
-      Math.max(0, Math.floor(items.length / 3))),
+    effectiveGuardItems: YTDS_SHARED.semanticEffectiveGuardItems(
+      items.length, DEEPSEEK_COMMIT_GUARD_ITEMS
+    ),
     reqVid: captionSession.cueVideoId, reqEpoch: captionSession.cueEpoch,
     sessionToken: requestSessionToken, focusGeneration: captionSession.deepseekFocusGeneration,
     fastPath: true,

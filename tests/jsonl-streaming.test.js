@@ -508,6 +508,31 @@ test("JSONL still rejects an oversized monolithic unit without alignment boundar
   assert.equal(state.cursor, 0);
 });
 
+test("JSONL state heals half-open boundary coordinate overlap", () => {
+  const items = sampleItems();
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const result = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [
+      rangeChunk(0, 1, "前半"),
+      rangeChunk(1, 2, "后半")
+    ]
+  });
+  assert.equal(result.ok, true);
+  assert.equal(state.cursor, 3);
+  assert.equal(result.translations.length, 3);
+
+  const invalidState = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const rejected = shared.pushAiJsonlTranslationRecord(invalidState, {
+    type: "unit",
+    chunks: [
+      rangeChunk(0, 1, "前半"),
+      rangeChunk(1, 1, "重复且不延伸")
+    ]
+  });
+  assert.equal(rejected.ok, false);
+});
+
 test("JSONL state rejects reordered ids, hard-boundary crossings and records after done", () => {
   const reordered = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
   assert.match(shared.pushAiJsonlTranslationRecord(reordered, {

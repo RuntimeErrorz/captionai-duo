@@ -144,26 +144,45 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       cueToGroup: [0],
       cueToGroups: [[0]],
       sentGroups: groups,
+      semanticCommitRegions: [{ start: 0, end: limitEnd }],
       deepseekCommitRegions: [{ start: 0, end: limitEnd }],
+      semanticGroupToCommitRegion: new Array(groupCount).fill(0),
       deepseekGroupToCommitRegion: new Array(groupCount).fill(0),
+      semanticCommitStateByRegion: new Map([[0, state]]),
       deepseekCommitStateByRegion: new Map([[0, state]]),
+      semanticGroupToBatch: batchSize
+        ? groups.map((_group, id) => Math.floor(id / batchSize))
+        : new Array(groupCount).fill(0),
       deepseekGroupToBatch: batchSize
         ? groups.map((_group, id) => Math.floor(id / batchSize))
         : new Array(groupCount).fill(0),
+      semanticBatchWindows: batchWindows,
       deepseekBatchWindows: batchWindows,
+      semanticRequestMeta: new Map(),
       deepseekRequestMeta: new Map(),
       transInflight: new Set(),
+      semanticRetryCounts: new Map([[retryKey, retryAttempt]]),
       deepseekRetryCounts: new Map([[retryKey, retryAttempt]]),
+      semanticExhaustedRegions: new Map(),
       deepseekExhaustedRegions: new Map(),
+      semanticVisibleErrors: new Map(),
       deepseekVisibleErrors: new Map(),
       transCache: new Map(),
+      semanticUnitCache: new Map(),
       deepseekUnitCache: new Map(),
+      semanticSourceCache: new Map(),
       deepseekSourceCache: new Map(),
+      semanticAlignedChunksCache: new Map(),
       deepseekAlignedChunksCache: new Map(),
+      semanticDisplayCache: new Map(),
       deepseekDisplayCache: new Map(),
+      semanticRequestSerial: 0,
       deepseekRequestSerial: 0,
+      semanticFocusGeneration: 0,
       deepseekFocusGeneration: 0,
+      semanticFocusedBatchIndex: -1,
       deepseekFocusedBatchIndex: -1,
+      semanticSeekSettling: false,
       deepseekSeekSettling: false,
       semanticLayoutWidth: 0,
       pendingTimer: null,
@@ -178,6 +197,8 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       ...(options.prefetchBatches == null
         ? {} : { deepseekPrefetchBatches: options.prefetchBatches })
     },
+    SEMANTIC_CORE_ITEMS: 16,
+    DEEPSEEK_CORE_ITEMS: 16,
     DEEPSEEK_INITIAL_REQUEST_ITEMS: 48,
     DEEPSEEK_REQUEST_ITEMS: 80,
     DEEPSEEK_URGENT_REQUEST_ITEMS: 96,
@@ -192,7 +213,9 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     DEEPSEEK_MAX_REQUEST_ITEMS: 320,
     DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
     DEEPSEEK_MAX_CURRENT_CHARS: 18000,
+    SEMANTIC_COMMIT_GUARD_ITEMS: 16,
     DEEPSEEK_COMMIT_GUARD_ITEMS: 16,
+    SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS: 32,
     DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS: 32,
     DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
     DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
@@ -1980,7 +2003,7 @@ test("a future response bridge keeps only the boundary overlap", () => {
   const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
   pump(0, true);
   assert.equal(harness.messages[0].requestStart, 64);
-  assert.equal(harness.messages[0].requestEnd, 86);
+  assert.equal(harness.messages[0].requestEnd, 111);
   assert.equal(harness.debug.some((entry) => entry.event === "semantic-prefetch-bridge"), true);
 
   harness.messages.length = 0;
@@ -1997,7 +2020,54 @@ test("a bridge overlaps an adjacent future start so a cross-join unit can resolv
     playbackRate: 3
   });
   const bridge = vm.runInContext("deepseekBridgeRequestItems", harness.context);
-  assert.equal(bridge(80, 81, 160, 500), 2);
+  assert.equal(bridge(80, 81, 160, 500), 33);
+});
+
+test("bridge sizing mathematically guarantees positive commit progress and crosses gap across random intervals", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    playbackRate: 3
+  });
+  const bridge = vm.runInContext("deepseekBridgeRequestItems", harness.context);
+  const guardStartHelper = vm.runInContext("YTDS_SHARED.semanticCommitGuardStart", harness.context);
+  const minRunway = vm.runInContext("DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS", harness.context);
+  const guardLimit = vm.runInContext("DEEPSEEK_COMMIT_GUARD_ITEMS", harness.context);
+
+  let seed = 0x7c3a91;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+
+  for (let run = 0; run < 500; run++) {
+    const requestStart = Math.floor(random() * 5000);
+    const gap = 1 + Math.floor(random() * 100);
+    const futureStart = requestStart + gap;
+    const maxItems = 64 + Math.floor(random() * 144); // 64..208
+    const limitEnd = futureStart + 100 + Math.floor(random() * 500);
+
+    const count = bridge(requestStart, futureStart, maxItems, limitEnd);
+    if (count > 0) {
+      assert.ok(count >= gap + 1, `Bridge count ${count} must overlap futureStart (gap ${gap}) at run ${run}`);
+      assert.ok(count <= maxItems, `Bridge count ${count} must not exceed maxItems ${maxItems} at run ${run}`);
+
+      const requestEnd = requestStart + count - 1;
+      const guardStart = guardStartHelper(requestStart, requestEnd, limitEnd, guardLimit, minRunway);
+
+      // Invariant 1: guardStart must reach or cross futureStart, guaranteeing the gap can be committed without deadlock
+      assert.ok(guardStart >= futureStart,
+        `Bridge guardStart ${guardStart} must reach or exceed futureStart ${futureStart} (gap ${gap}, count ${count}) at run ${run}`);
+
+      // Invariant 2: guardStart must exceed requestStart, guaranteeing non-zero commit capacity
+      assert.ok(guardStart > requestStart,
+        `Bridge must have positive commit capacity at run ${run}`);
+    } else {
+      // If bridge returned 0, it must be because maxItems cannot satisfy both gap and minimum runway
+      const runwayHelper = vm.runInContext("YTDS_SHARED.semanticCommitRunwayItems", harness.context);
+      const minRunwayItems = runwayHelper(maxItems, guardLimit, minRunway);
+      assert.ok(maxItems - minRunwayItems < gap,
+        `Bridge returned 0 but maxItems ${maxItems} could satisfy gap ${gap} with runway ${minRunwayItems}`);
+    }
+  }
 });
 
 test("a max-planned short bridge recovers past its future join instead of exhausting retries", async () => {

@@ -15,13 +15,20 @@ const semanticSource = fs.readFileSync(
 function buildSemanticGroups(cues) {
   const context = {
     YTDS_SHARED: shared,
+    SEMANTIC_CORE_ITEMS: 32,
     DEEPSEEK_CORE_ITEMS: 32,
+    SEMANTIC_SOFT_PAUSE_MS: 900,
     DEEPSEEK_SOFT_PAUSE_MS: 900,
+    SEMANTIC_HARD_PAUSE_MS: 4000,
     DEEPSEEK_HARD_PAUSE_MS: 4000,
     captionSession: {
-      sentGroups: [], deepseekBatchWindows: [], deepseekGroupToBatch: [],
-      deepseekCommitRegions: [], deepseekGroupToCommitRegion: [],
-      deepseekCommitStateByRegion: new Map(), cueToGroups: [], cueToGroup: []
+      sentGroups: [],
+      semanticBatchWindows: [], deepseekBatchWindows: [],
+      semanticGroupToBatch: [], deepseekGroupToBatch: [],
+      semanticCommitRegions: [], deepseekCommitRegions: [],
+      semanticGroupToCommitRegion: [], deepseekGroupToCommitRegion: [],
+      semanticCommitStateByRegion: new Map(), deepseekCommitStateByRegion: new Map(),
+      cueToGroups: [], cueToGroup: []
     },
     resetCaptionSessionState: () => {}
   };

@@ -381,18 +381,26 @@
     let hasVisibleTranslation = false;
     for (const chunk of chunks) {
       let chunkOffset = chunkBaseOffset + ids.length;
-      let chunkResult = aiJsonlChunkIds(state, chunk, chunkOffset);
+      let effectiveChunk = chunk;
+      let chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
       if (chunkResult.error) {
-        const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], chunkOffset);
-        if (omittedIds && omittedIds.length) {
-          alignedChunks.push({ ids: omittedIds, translation: "" });
-          ids.push(...omittedIds);
-          chunkOffset += omittedIds.length;
-          chunkResult = aiJsonlChunkIds(state, chunk, chunkOffset);
+        if (Array.isArray(chunk) && compactJsonlCoordinate(chunk[0]) === chunkOffset - 1 &&
+            compactJsonlCoordinate(chunk[1]) >= chunkOffset) {
+          effectiveChunk = [chunkOffset, chunk[1], chunk[2]];
+          chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
+        }
+        if (chunkResult.error) {
+          const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], chunkOffset);
+          if (omittedIds && omittedIds.length) {
+            alignedChunks.push({ ids: omittedIds, translation: "" });
+            ids.push(...omittedIds);
+            chunkOffset += omittedIds.length;
+            chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
+          }
         }
       }
       const chunkIds = chunkResult.ids;
-      const translation = aiJsonlChunkTranslation(chunk);
+      const translation = aiJsonlChunkTranslation(effectiveChunk);
       const markerOnly = !translation && aiJsonlChunkMayBeEmpty(
         state, chunkIds, chunkOffset
       );
@@ -415,7 +423,7 @@
       alignedChunks.push({
         ids: chunkIds,
         translation,
-        ...(aiJsonlChunkHasSentenceBoundary(chunk) ? { sentenceBoundaryAfter: true } : {})
+        ...(aiJsonlChunkHasSentenceBoundary(effectiveChunk) ? { sentenceBoundaryAfter: true } : {})
       });
     }
     if (!ids.length) return reject(`empty JSONL unit at offset ${state.cursor}`);
@@ -483,17 +491,25 @@
     let offset = state.cursor + pendingMarkerIds.length;
     let stopped = false;
     for (const chunk of record.chunks) {
-      let chunkResult = aiJsonlChunkIds(state, chunk, offset);
-      const omittedIds = chunkResult.error
-        ? aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], offset)
-        : null;
-      if (omittedIds && omittedIds.length) {
-        chunks.push([offset, offset + omittedIds.length - 1, ""]);
-        offset += omittedIds.length;
-        chunkResult = aiJsonlChunkIds(state, chunk, offset);
+      let effectiveChunk = chunk;
+      let chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
+      if (chunkResult.error) {
+        if (Array.isArray(chunk) && compactJsonlCoordinate(chunk[0]) === offset - 1 &&
+            compactJsonlCoordinate(chunk[1]) >= offset) {
+          effectiveChunk = [offset, chunk[1], chunk[2]];
+          chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
+        }
+        if (chunkResult.error) {
+          const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], offset);
+          if (omittedIds && omittedIds.length) {
+            chunks.push([offset, offset + omittedIds.length - 1, ""]);
+            offset += omittedIds.length;
+            chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
+          }
+        }
       }
       const ids = chunkResult.ids;
-      const translation = aiJsonlChunkTranslation(chunk);
+      const translation = aiJsonlChunkTranslation(effectiveChunk);
       const markerOnly = !translation && aiJsonlChunkMayBeEmpty(state, ids, offset);
       const untranslated = translation && untranslatedRangeReason(
         state.items, offset, ids.length, translation,

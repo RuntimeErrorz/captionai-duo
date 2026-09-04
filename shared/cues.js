@@ -324,6 +324,36 @@
     return windows;
   }
 
+  function semanticEffectiveGuardItems(itemCountValue, guardLimitValue) {
+    const count = Math.max(0, Math.floor(Number(itemCountValue) || 0));
+    const limit = Math.max(0, Math.floor(Number(guardLimitValue) || 0));
+    return Math.min(limit, Math.floor(count / 3));
+  }
+
+  function semanticCommitRunwayItems(itemCountValue, guardLimitValue, minimumRunwayValue) {
+    const effectiveGuard = semanticEffectiveGuardItems(itemCountValue, guardLimitValue);
+    const minimumRunway = Math.max(0, Math.floor(Number(minimumRunwayValue) || 0));
+    return Math.max(effectiveGuard, minimumRunway);
+  }
+
+  function semanticCommitGuardStart(
+    cursorValue, requestEndValue, regionEndValue, guardItemsValue, minimumRunwayValue
+  ) {
+    const cursor = Math.floor(Number(cursorValue));
+    const requestEnd = Math.floor(Number(requestEndValue));
+    const regionEnd = Math.floor(Number(regionEndValue));
+    const guardItems = Math.max(0, Math.floor(Number(guardItemsValue) || 0));
+    const minimumRunway = Math.max(0, Math.floor(Number(minimumRunwayValue) || 0));
+    if (!Number.isInteger(cursor) || !Number.isInteger(requestEnd) ||
+        !Number.isInteger(regionEnd) || cursor < 0 || requestEnd < cursor ||
+        regionEnd < requestEnd) {
+      return cursor;
+    }
+    if (requestEnd >= regionEnd) return regionEnd + 1;
+    const runway = Math.max(guardItems, minimumRunway);
+    return Math.max(cursor, requestEnd - runway + 1);
+  }
+
   // Select the immutable prefix that a rolling semantic request may commit.
   // The caller deliberately derives any deferred suffix from validated
   // coverage: every complete unit touching the trailing guard is carried to
@@ -348,9 +378,8 @@
       return { translations: [], units: [], commitStart: cursor, commitThrough: cursor - 1,
         carryStart: cursor, guardStart: cursor };
     }
-    const guardStart = requestEnd >= regionEnd ? regionEnd + 1 : Math.min(
-      Math.max(cursor, requestEnd - guardItems + 1),
-      Math.max(cursor, requestEnd - minimumRunwayItems + 1)
+    const guardStart = semanticCommitGuardStart(
+      cursor, requestEnd, regionEnd, guardItems, minimumRunwayItems
     );
     const ordered = Array.isArray(translations) ? translations : [];
     const units = [];
@@ -510,5 +539,5 @@
       : { allowed: false, reason: "local-concurrency", retryAfterMs: 1500 };
   }
 
-  Object.assign(internal, { videoIdFromUrl, isYoutubePageUrl, videoIdMatchesPageUrls, isAllowedTimedtextUrl, cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, deepSeekConcurrencyStatus });
+  Object.assign(internal, { videoIdFromUrl, isYoutubePageUrl, videoIdMatchesPageUrls, isAllowedTimedtextUrl, cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, deepSeekConcurrencyStatus });
 })();
