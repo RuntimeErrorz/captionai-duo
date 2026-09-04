@@ -223,6 +223,7 @@
       translations: [],
       // Hold marker-only units until a spoken unit can carry their coverage.
       pendingMarkerChunks: [],
+      pendingTrimmedCount: 0,
       done: false,
       error: "",
       recoverableError: ""
@@ -299,6 +300,59 @@
     return Array.isArray(chunkValue) && endsWithChineseFullStop(chunkValue[2]);
   }
 
+  function aiJsonlIsSentenceBoundaryOverrun(itemsValue, endValue) {
+    const items = Array.isArray(itemsValue) ? itemsValue : [];
+    const end = compactJsonlCoordinate(endValue);
+    if (end == null || end <= 0 || end >= items.length) return false;
+    const prev = items[end - 1];
+    const curr = items[end];
+    const prevText = String(prev && prev.text || "").trim();
+    const currText = String(curr && curr.text || "").trim();
+    if (!prevText || !currText || /\.{2,}|…/.test(prevText)) return false;
+    if (!/[.!?…。！？]["'”’」』》】)）\]]*$/u.test(prevText)) return false;
+    if (/^(?:dr|mr|mrs|ms|prof|sr|jr|vs|etc|e\.g|i\.e)\.?$/i.test(prevText) ||
+        /(?:\p{L}\.){2,}/u.test(prevText)) return false;
+    if (/\s/u.test(currText) || !/^\p{Lu}/u.test(currText)) return false;
+    if (/[.!?…。！？]["'”’」』》】)）\]]*$/u.test(currText)) return false;
+    return true;
+  }
+
+  function aiJsonlAdjustUnitChunks(stateValue, chunksValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const chunks = (Array.isArray(chunksValue) ? chunksValue : [])
+      .map((chunk) => Array.isArray(chunk) ? chunk.slice() : chunk);
+    if (!state || !chunks.length) return { chunks, trimmedCount: 0 };
+    const pendingMarkerChunks = Array.isArray(state.pendingMarkerChunks)
+      ? state.pendingMarkerChunks : [];
+    const pendingMarkerIds = pendingMarkerChunks.flatMap((chunk) =>
+      Array.isArray(chunk && chunk.ids) ? chunk.ids : []);
+    const chunkBaseOffset = state.cursor + pendingMarkerIds.length;
+    let trimmedCount = 0;
+    if (state.pendingTrimmedCount > 0 &&
+        compactJsonlCoordinate(chunks[0][0]) === chunkBaseOffset + state.pendingTrimmedCount) {
+      chunks[0][0] = chunkBaseOffset;
+    }
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (!Array.isArray(chunk) || chunk.length < 2) continue;
+      const start = compactJsonlCoordinate(chunk[0]);
+      const end = compactJsonlCoordinate(chunk[1]);
+      if (start != null && end != null && end > start &&
+          aiJsonlIsSentenceBoundaryOverrun(state.items, end)) {
+        chunk[1] = end - 1;
+        if (i + 1 < chunks.length) {
+          if (Array.isArray(chunks[i + 1]) &&
+              compactJsonlCoordinate(chunks[i + 1][0]) === end + 1) {
+            chunks[i + 1][0] = end;
+          }
+        } else {
+          trimmedCount = 1;
+        }
+      }
+    }
+    return { chunks, trimmedCount };
+  }
+
   function mergeEmptyAlignedChunks(chunksValue) {
     const chunks = Array.isArray(chunksValue) ? chunksValue : [];
     const merged = [];
@@ -361,6 +415,7 @@
     }
 
     if (record.type === "done") {
+      state.pendingTrimmedCount = 0;
       const remaining = state.expected.slice(state.cursor);
       state.done = true;
       // The stream cursor is the source of truth; a done record never supplies
@@ -369,13 +424,14 @@
     }
 
     if (record.type !== "unit") return reject("unknown JSONL record type");
-    const chunks = Array.isArray(record.chunks) ? record.chunks : [];
-    if (!chunks.length) return reject(`missing JSONL unit chunks at offset ${state.cursor}`);
+    const rawChunks = Array.isArray(record.chunks) ? record.chunks : [];
+    if (!rawChunks.length) return reject(`missing JSONL unit chunks at offset ${state.cursor}`);
     const pendingMarkerChunks = Array.isArray(state.pendingMarkerChunks)
       ? state.pendingMarkerChunks : [];
     const pendingMarkerIds = pendingMarkerChunks.flatMap((chunk) =>
       Array.isArray(chunk && chunk.ids) ? chunk.ids : []);
     const chunkBaseOffset = state.cursor + pendingMarkerIds.length;
+    const { chunks, trimmedCount } = aiJsonlAdjustUnitChunks(state, rawChunks);
     const alignedChunks = [];
     const ids = [];
     let hasVisibleTranslation = false;
@@ -469,6 +525,7 @@
       : { id, translation, unitId });
     state.translations.push(...translations);
     state.cursor = chunkBaseOffset + ids.length;
+    state.pendingTrimmedCount = trimmedCount;
     state.pendingMarkerChunks = [];
     return { ok: true, type: "unit", unitId, ids: allIds, translations };
   }
@@ -487,10 +544,11 @@
       ? state.pendingMarkerChunks : [];
     const pendingMarkerIds = pendingMarkerChunks.flatMap((chunk) =>
       Array.isArray(chunk && chunk.ids) ? chunk.ids : []);
+    const { chunks: recordChunks } = aiJsonlAdjustUnitChunks(state, record.chunks);
     const chunks = [];
     let offset = state.cursor + pendingMarkerIds.length;
     let stopped = false;
-    for (const chunk of record.chunks) {
+    for (const chunk of recordChunks) {
       let effectiveChunk = chunk;
       let chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
       if (chunkResult.error) {
@@ -572,6 +630,7 @@
     const previousCursor = state.cursor;
     state.translations.splice(unitStart);
     state.cursor = unitStart;
+    state.pendingTrimmedCount = 0;
     return { unitId, previousCursor, nextCursor: unitStart };
   }
 
@@ -750,12 +809,15 @@
     }
     const translations = [];
     let cursor = 0;
+    let pendingTrimmedCount = 0;
 
     for (const segment of segments) {
-      const chunks = segment && Array.isArray(segment.chunks) ? segment.chunks : [];
-      if (!chunks.length) {
-        return reject(`invalid aligned segment at cue offset ${cursor}`);
-      }
+      const rawChunks = segment && Array.isArray(segment.chunks) ? segment.chunks : [];
+      if (!rawChunks.length) return reject(`invalid aligned segment at cue offset ${cursor}`);
+      const { chunks, trimmedCount } = aiJsonlAdjustUnitChunks(
+        { items, cursor, pendingTrimmedCount }, rawChunks
+      );
+      pendingTrimmedCount = trimmedCount;
       const ids = [];
       let alignedChunks = [];
       let hasVisibleTranslation = false;

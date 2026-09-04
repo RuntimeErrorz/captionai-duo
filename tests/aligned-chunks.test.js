@@ -429,3 +429,31 @@ test("an oversized middle chunk does not discard neighboring alignment boundarie
   assert.equal(plan.pages.at(-1).source, "Short ending.");
   assert.ok(plan.pages.slice(1, -1).every((page) => page.splitChunk === true));
 });
+
+test("aligned response adjusts internal boundary overruns across adjacent chunks", () => {
+  const items = [
+    { id: "10", text: "America", startMs: 0, endMs: 500, hardAfter: false },
+    { id: "11", text: "is.", startMs: 500, endMs: 1000, hardAfter: false },
+    { id: "12", text: "This", startMs: 1000, endMs: 1500, hardAfter: false },
+    { id: "13", text: "is", startMs: 1500, endMs: 2000, hardAfter: false },
+    { id: "14", text: "it.", startMs: 2000, endMs: 2500, hardAfter: false },
+    { id: "15", text: "This", startMs: 2500, endMs: 3000, hardAfter: false },
+    { id: "16", text: "hits.", startMs: 3000, endMs: 3500, hardAfter: false }
+  ];
+  const json = JSON.stringify({
+    chunks: [
+      [0, 2, "这就是美国。"],
+      [3, 5, "这就是真实故事。"],
+      [6, 6, "这就是精选辑。"]
+    ]
+  });
+  const res = shared.alignedTranslationsFromJsonText(json, items, "zh-CN");
+  assert.ok(res);
+  assert.equal(res.length, 7);
+  const aligned = res[0].alignedChunks;
+  assert.equal(aligned.length, 3);
+  assert.deepEqual(Array.from(aligned[0].ids), ["10", "11"]);
+  assert.deepEqual(Array.from(aligned[1].ids), ["12", "13", "14"]);
+  assert.deepEqual(Array.from(aligned[2].ids), ["15", "16"]);
+});
+

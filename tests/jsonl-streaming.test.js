@@ -769,3 +769,85 @@ test("JSONL structural validation does not reject natural numeric wording", () =
   assert.equal(shared.pushAiJsonlTranslationRecord(state, { type: "done" }).ok, true);
   assert.equal(shared.aiJsonlTranslationResult(state, false).length, 2);
 });
+
+test("a trailing boundary overrun across a period trims the chunk and prepends it to the next unit", () => {
+  const items = [
+    { id: "198", text: "threatens", startMs: 1000, endMs: 1500, hardAfter: false },
+    { id: "199", text: "civilization.", startMs: 1500, endMs: 2000, hardAfter: false },
+    { id: "200", text: "This", startMs: 2000, endMs: 2500, hardAfter: false },
+    { id: "201", text: "is", startMs: 2500, endMs: 3000, hardAfter: false },
+    { id: "202", text: "Gates.", startMs: 3000, endMs: 3500, hardAfter: false }
+  ];
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+
+  // Model emitted unit 1 with an off-by-one overrun including "This" (index 2)
+  const unit1 = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [rangeChunk(0, 2, "这就是威胁文明的问题。")]
+  });
+  assert.equal(unit1.ok, true);
+  assert.deepEqual(Array.from(unit1.ids), ["198", "199"]);
+  assert.equal(state.cursor, 2);
+
+  // Model emitted unit 2 starting after its own overrun (index 3), skipping "This"
+  const unit2 = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [rangeChunk(3, 4, "这就是盖茨的问题。")]
+  });
+  assert.equal(unit2.ok, true);
+  // Unit 2 prepended the trimmed "This" (index 2 / id "200")
+  assert.deepEqual(Array.from(unit2.ids), ["200", "201", "202"]);
+  assert.equal(state.cursor, 5);
+
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, { type: "done" }).ok, true);
+  const result = shared.aiJsonlTranslationResult(state, false);
+  assert.equal(result.length, 5);
+  assert.deepEqual(Array.from(result.deferredIds), []);
+});
+
+test("an abbreviation like Dr. Smith is preserved and not trimmed as a boundary overrun", () => {
+  const items = [
+    { id: "0", text: "I", startMs: 0, endMs: 500, hardAfter: false },
+    { id: "1", text: "saw", startMs: 500, endMs: 1000, hardAfter: false },
+    { id: "2", text: "Dr.", startMs: 1000, endMs: 1500, hardAfter: false },
+    { id: "3", text: "Smith", startMs: 1500, endMs: 2000, hardAfter: false }
+  ];
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [rangeChunk(0, 3, "我见到了史密斯医生")]
+  });
+  assert.equal(accepted.ok, true);
+  assert.deepEqual(Array.from(accepted.ids), ["0", "1", "2", "3"]);
+  assert.equal(state.cursor, 4);
+});
+
+test("internal boundary overruns across adjacent chunks in one unit are trimmed and shifted", () => {
+  const items = [
+    { id: "10", text: "America", startMs: 0, endMs: 500, hardAfter: false },
+    { id: "11", text: "is.", startMs: 500, endMs: 1000, hardAfter: false },
+    { id: "12", text: "This", startMs: 1000, endMs: 1500, hardAfter: false },
+    { id: "13", text: "is", startMs: 1500, endMs: 2000, hardAfter: false },
+    { id: "14", text: "it.", startMs: 2000, endMs: 2500, hardAfter: false },
+    { id: "15", text: "This", startMs: 2500, endMs: 3000, hardAfter: false },
+    { id: "16", text: "hits.", startMs: 3000, endMs: 3500, hardAfter: false }
+  ];
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+
+  const unit = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit",
+    chunks: [
+      rangeChunk(0, 2, "这就是美国。"),
+      rangeChunk(3, 5, "这就是真实故事。"),
+      rangeChunk(6, 6, "这就是精选辑。")
+    ]
+  });
+  assert.equal(unit.ok, true);
+  const aligned = unit.translations[0].alignedChunks;
+  assert.equal(aligned.length, 3);
+  assert.deepEqual(Array.from(aligned[0].ids), ["10", "11"]);
+  assert.deepEqual(Array.from(aligned[1].ids), ["12", "13", "14"]);
+  assert.deepEqual(Array.from(aligned[2].ids), ["15", "16"]);
+  assert.equal(state.cursor, 7);
+});
+
