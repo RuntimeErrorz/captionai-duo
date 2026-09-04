@@ -48,6 +48,9 @@ function createCaptionSessionState(initialVideoId) {
     semanticSpeculativeBackoffUntil: 0,
     get deepseekSpeculativeBackoffUntil() { return this.semanticSpeculativeBackoffUntil; },
     set deepseekSpeculativeBackoffUntil(v) { this.semanticSpeculativeBackoffUntil = v; },
+    semanticSpeculativeBackoffReason: "",
+    get deepseekSpeculativeBackoffReason() { return this.semanticSpeculativeBackoffReason; },
+    set deepseekSpeculativeBackoffReason(v) { this.semanticSpeculativeBackoffReason = v; },
     semanticSpeculativeResumeTimer: null,
     get deepseekSpeculativeResumeTimer() { return this.semanticSpeculativeResumeTimer; },
     set deepseekSpeculativeResumeTimer(v) { this.semanticSpeculativeResumeTimer = v; },
@@ -197,6 +200,7 @@ function resetCaptionSessionState(reason, options) {
     captionSession.semanticSpeculativeResumeTimer = null;
   }
   captionSession.semanticSpeculativeBackoffUntil = 0;
+  captionSession.semanticSpeculativeBackoffReason = "";
   if (typeof resetSemanticCommitTimeline === "function") resetSemanticCommitTimeline();
   else if (typeof resetDeepseekCommitTimeline === "function") resetDeepseekCommitTimeline();
   clearDeepseekSeekSettle();

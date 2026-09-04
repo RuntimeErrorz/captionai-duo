@@ -835,6 +835,11 @@ function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, 
     queueDeepseekSpeculativeRequest(regionIndex, gIdx);
     return;
   }
+  if (!urgent && (captionSession.activeGroupIdx >= 0
+      ? groupToRegion && groupToRegion[captionSession.activeGroupIdx] !== regionIndex
+      : regionIndex !== 0)) {
+    return;
+  }
   pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions);
 }
 

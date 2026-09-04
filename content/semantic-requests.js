@@ -317,6 +317,15 @@ function deepseekActiveSpeculativeRequestCount() {
   return Array.from(captionSession.deepseekRequestMeta.values())
     .filter((request) => request && request.prefetch).length;
 }
+function clearDeepseekSpeculativeBackoff(reasonFilter) {
+  if (reasonFilter && captionSession.deepseekSpeculativeBackoffReason !== reasonFilter) return;
+  captionSession.deepseekSpeculativeBackoffUntil = 0;
+  captionSession.deepseekSpeculativeBackoffReason = "";
+  if (captionSession.deepseekSpeculativeResumeTimer) {
+    clearTimeout(captionSession.deepseekSpeculativeResumeTimer);
+    captionSession.deepseekSpeculativeResumeTimer = null;
+  }
+}
 function scheduleDeepseekSpeculativeResume() {
   const until = Number(captionSession.deepseekSpeculativeBackoffUntil);
   if (!Number.isFinite(until) || until <= Date.now() ||
@@ -328,7 +337,7 @@ function scheduleDeepseekSpeculativeResume() {
       scheduleDeepseekSpeculativeResume();
       return;
     }
-    captionSession.deepseekSpeculativeBackoffUntil = 0;
+    clearDeepseekSpeculativeBackoff();
     for (const [regionIndex, state] of captionSession.deepseekCommitStateByRegion.entries()) {
       pumpDeepseekSpeculativeRequests(regionIndex, state);
     }
@@ -337,7 +346,7 @@ function scheduleDeepseekSpeculativeResume() {
 function deepseekSpeculativeBackoffActive() {
   const until = Number(captionSession.deepseekSpeculativeBackoffUntil);
   if (!Number.isFinite(until) || until <= Date.now()) {
-    captionSession.deepseekSpeculativeBackoffUntil = 0;
+    clearDeepseekSpeculativeBackoff();
     return false;
   }
   scheduleDeepseekSpeculativeResume();
@@ -349,7 +358,7 @@ function noteDeepseekSpeculativeRateLimit(response, runtimeError) {
   if (!responseLimited && !errorLimited) return false;
   const reason = String(response && response.limitReason ||
     runtimeError && runtimeError.limitReason || "");
-  if (reason === "local-concurrency") return false;
+  captionSession.deepseekSpeculativeBackoffReason = reason;
   const retryAfter = Number(response && response.retryAfterMs) ||
     Number(runtimeError && runtimeError.retryAfterMs) || 1500;
   const delay = Math.max(500, Math.min(10000, retryAfter));
@@ -544,6 +553,9 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   }
   const originalRuntimeError = runtimeError; const bufferedResponse = deepseekResponseWithBufferedProgress(request, resp, state);
   if (bufferedResponse && bufferedResponse !== resp) { resp = bufferedResponse; runtimeError = null; }
+  const isLocalConcurrency = (resp && resp.limitReason === "local-concurrency") ||
+    (runtimeError && runtimeError.limitReason === "local-concurrency");
+  if (!isLocalConcurrency) clearDeepseekSpeculativeBackoff("local-concurrency");
   const cancelled = (typeof deepseekUpdateDisplayError === "function" && deepseekUpdateDisplayError(regionIndex, request, originalRuntimeError, resp), !!(runtimeError && (runtimeError.cancelled || YTDS_SHARED.aiErrorDescriptor(runtimeError).code === "AI_CANCELLED")) || !!(resp && resp.cancelled) || YTDS_SHARED.aiErrorDescriptor(resp).code === "AI_CANCELLED");
   if (cancelled) {
     emitCaptionStateTransition("semantic-response", "cancelled", { requestId, requestStart, requestEnd });

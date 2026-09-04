@@ -427,11 +427,16 @@ function prefetchDeepseekBatches(gIdx, includeCurrent, currentUrgent = false) {
   if (!captionSession.sentGroups || !captionSession.deepseekBatchWindows.length) return;
   if (!Number.isInteger(gIdx) || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
   if (includeCurrent) deepseekRequestBatch(gIdx, true, !!currentUrgent);
+  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion;
+  const currentRegion = groupToRegion ? groupToRegion[gIdx] : undefined;
   const starts = YTDS_SHARED.semanticPrefetchBatchStarts(
     gIdx, captionSession.deepseekGroupToBatch, captionSession.deepseekBatchWindows,
     deepseekPrefetchBatchCount()
   );
-  for (const start of starts) deepseekRequestBatch(start);
+  for (const start of starts) {
+    if (groupToRegion && currentRegion !== undefined && groupToRegion[start] !== currentRegion) continue;
+    deepseekRequestBatch(start);
+  }
 }
 
 function prefetchDeepseekAtTime(timeMs) {

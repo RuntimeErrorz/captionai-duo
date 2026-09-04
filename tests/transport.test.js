@@ -1934,6 +1934,140 @@ test("a speculative provider 429 backs off and requeues the same range", () => {
   ), true);
 });
 
+test("speculative local concurrency backoff requeues and pauses further speculative requests", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 80, targetThrough: 200, urgentTarget: 0, playbackRate: 3,
+    groupCount: 401, limitEnd: 400
+  });
+  const sessionToken = harness.context.captureCaptionSession();
+  const request = {
+    requestId: "prefetch:0:1:80-175",
+    prefetch: true,
+    regionIndex: 0,
+    requestStart: 80,
+    requestEnd: 175,
+    reqEpoch: 1,
+    reqVid: "video",
+    sessionToken,
+    focusGeneration: 0,
+    progressTranslations: [],
+    progressRecoveryTranslations: []
+  };
+  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", request);
+  harness.context.captionSession.transInflight.add("dsp:0:80");
+  harness.context.captionSession.deepseekRequestMeta.delete("dsp:0:80");
+  harness.context.captionSession.transInflight.delete("dsp:0:80");
+
+  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  handle(request, {
+    ok: false,
+    rateLimited: true,
+    retryAfterMs: 1500,
+    limitReason: "local-concurrency"
+  }, null);
+
+  assert.equal(harness.state.prefetchQueued.has(80), true);
+  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffReason, "local-concurrency");
+  assert.ok(harness.context.captionSession.deepseekSpeculativeBackoffUntil > Date.now());
+  assert.equal(harness.messages.length, 0);
+
+  // While local-concurrency backoff is active, pumping speculative requests does not launch requests
+  const pump = vm.runInContext("pumpDeepseekSpeculativeRequests", harness.context);
+  pump(0, harness.state);
+  assert.equal(harness.messages.length, 0);
+});
+
+test("settling an active request clears local-concurrency backoff and pumps speculative queue", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 80, targetThrough: 200, urgentTarget: 0, playbackRate: 3,
+    groupCount: 401, limitEnd: 400, deferResponses: true
+  });
+
+  vm.runInContext("pumpDeepseekCommitRegion(0, true)", harness.context);
+  assert.equal(harness.pendingCallbacks.length, 1);
+
+  harness.context.captionSession.deepseekSpeculativeBackoffReason = "local-concurrency";
+  harness.context.captionSession.deepseekSpeculativeBackoffUntil = Date.now() + 5000;
+  vm.runInContext("deepseekPrefetchState", harness.context)(harness.state);
+  harness.state.prefetchQueued.add(80);
+  harness.state.prefetchQueue.push(80);
+
+  harness.messages.length = 0;
+
+  harness.pendingCallbacks.shift().callback({
+    ok: true,
+    translations: giantSemanticResponse(false)
+  });
+
+  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffReason, "");
+  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffUntil, 0);
+  assert.ok(harness.messages.some((msg) => msg.type === "translateBatch" && msg.requestStart === 80));
+});
+
+test("prefetchDeepseekBatches does not cross commit region boundary into inactive regions", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    groupCount: 64, limitEnd: 63, prefetchBatches: 4
+  });
+  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
+  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 6;
+  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 8;
+  harness.context.captionSession.semanticCommitRegions = [
+    { start: 0, end: 31 },
+    { start: 32, end: 63 }
+  ];
+  harness.context.captionSession.deepseekCommitRegions = harness.context.captionSession.semanticCommitRegions;
+  harness.context.captionSession.semanticGroupToCommitRegion = [
+    ...new Array(32).fill(0),
+    ...new Array(32).fill(1)
+  ];
+  harness.context.captionSession.deepseekGroupToCommitRegion = harness.context.captionSession.semanticGroupToCommitRegion;
+  harness.context.captionSession.semanticBatchWindows = [
+    { start: 0, end: 15 },
+    { start: 16, end: 31 },
+    { start: 32, end: 47 },
+    { start: 48, end: 63 }
+  ];
+  harness.context.captionSession.deepseekBatchWindows = harness.context.captionSession.semanticBatchWindows;
+  harness.context.captionSession.semanticGroupToBatch = [
+    ...new Array(16).fill(0),
+    ...new Array(16).fill(1),
+    ...new Array(16).fill(2),
+    ...new Array(16).fill(3)
+  ];
+  harness.context.captionSession.deepseekGroupToBatch = harness.context.captionSession.semanticGroupToBatch;
+
+  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
+  const prefetchBatches = vm.runInContext("prefetchDeepseekBatches", harness.context);
+  prefetchBatches(0, false);
+
+  assert.ok(harness.messages.some((msg) => msg.requestStart === 16));
+  assert.equal(harness.context.captionSession.deepseekCommitStateByRegion.has(1), false);
+  assert.equal(harness.messages.some((msg) => msg.requestStart >= 32), false);
+});
+
+test("non-urgent deepseekRequestBatch on an inactive region does not commit", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    groupCount: 64, limitEnd: 63
+  });
+  harness.context.captionSession.activeGroupIdx = 5;
+  harness.context.captionSession.semanticCommitRegions = [
+    { start: 0, end: 31 },
+    { start: 32, end: 63 }
+  ];
+  harness.context.captionSession.deepseekCommitRegions = harness.context.captionSession.semanticCommitRegions;
+  harness.context.captionSession.semanticGroupToCommitRegion = [
+    ...new Array(32).fill(0),
+    ...new Array(32).fill(1)
+  ];
+  harness.context.captionSession.deepseekGroupToCommitRegion = harness.context.captionSession.semanticGroupToCommitRegion;
+
+  const requestBatch = vm.runInContext("deepseekRequestBatch", harness.context);
+  requestBatch(32, true, false);
+
+  assert.equal(harness.messages.some((msg) => msg.requestStart === 32), false);
+  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsb:1"), false);
+});
+
 test("entering a new semantic region cancels obsolete old-region writers", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3

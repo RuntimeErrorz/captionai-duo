@@ -21,7 +21,7 @@ const DEEPSEEK_STREAM_COMPLETION_GRACE_MS = 750;
 const DEEPSEEK_MAX_ATTEMPTS = 3;
 const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 12;
 const COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB = 4;
-const GEMINI_MAX_ACTIVE_REQUESTS_PER_TAB = 1;
+const GEMINI_MAX_ACTIVE_REQUESTS_PER_TAB = 2;
 const MAX_TRANSLATE_CHARS = 4000;
 // Accelerated playback needs a longer semantic runway than ordinary playback.
 // Keep the normal planner cap at 160, while accepting the larger urgent window
