@@ -40,6 +40,15 @@ function aiRequestCancelledError() {
   return error;
 }
 
+function aiRequestPreemptedError() {
+  const error = new Error("AI request preempted by urgent request");
+  error.name = "AbortError";
+  error.cancelled = true;
+  error.preempted = true;
+  error.errorCode = "AI_CANCELLED";
+  return error;
+}
+
 function waitForAiRateDelay(delayValue, signal) {
   const delay = Math.max(0, Math.ceil(Number(delayValue) || 0));
   if (!delay) {
@@ -71,43 +80,147 @@ function aiRequestRateKey(config) {
     `${String(config && config.model || "")}`;
 }
 
-function waitForAiRequestSlot(config, signal) {
-  const intervalMs = aiProviderRequestIntervalMs(config);
-  if (intervalMs <= 0) return Promise.resolve(0);
-
-  const key = aiRequestRateKey(config);
-  const state = AI_REQUEST_RATE_STATE.get(key) || {
-    lastStartedAt: null, tail: Promise.resolve(), cleanupTimer: null
-  };
+function getOrCreateAiRateState(key) {
+  let state = AI_REQUEST_RATE_STATE.get(key);
+  if (!state) {
+    state = {
+      lastStartedAt: null,
+      active: null,
+      queue: [],
+      cleanupTimer: null
+    };
+    AI_REQUEST_RATE_STATE.set(key, state);
+  }
   if (state.cleanupTimer != null) {
     clearTimeout(state.cleanupTimer);
     state.cleanupTimer = null;
   }
-  AI_REQUEST_RATE_STATE.set(key, state);
-  const predecessor = state.tail;
-  let release;
-  const mine = new Promise((resolve) => { release = resolve; });
-  state.tail = mine;
-  return predecessor.then(async () => {
-    const waitMs = Number.isFinite(state.lastStartedAt)
-      ? Math.max(0, state.lastStartedAt + intervalMs - Date.now()) : 0;
-    await waitForAiRateDelay(waitMs, signal);
-    if (signal && signal.aborted) throw aiRequestCancelledError();
-    state.lastStartedAt = Date.now();
-    return waitMs;
-  }).finally(() => {
-    release();
-    if (AI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine) {
-      // Keep the last start timestamp alive for one quota interval. Deleting
-      // it immediately would let sequential calls bypass the global gate.
+  return state;
+}
+
+function pumpAiRateQueue(key, state, intervalMs) {
+  if (state.active) {
+    if (!state.active.isUrgent && state.queue.some((item) => item.isUrgent)) {
+      const preempted = state.active;
+      state.active = null;
+      if (preempted.timer != null) clearTimeout(preempted.timer);
+      if (preempted.cleanupSignal) preempted.cleanupSignal();
+      preempted.reject(aiRequestPreemptedError());
+    } else {
+      return;
+    }
+  }
+
+  if (state.queue.length === 0) {
+    if (state.cleanupTimer == null && Number.isFinite(state.lastStartedAt)) {
       state.cleanupTimer = setTimeout(() => {
         state.cleanupTimer = null;
-        if (AI_REQUEST_RATE_STATE.get(key) === state && state.tail === mine &&
+        if (state.active == null && state.queue.length === 0 &&
             Date.now() - state.lastStartedAt >= intervalMs) {
           AI_REQUEST_RATE_STATE.delete(key);
         }
       }, intervalMs);
     }
+    return;
+  }
+
+  const urgentIndex = state.queue.findIndex((item) => item.isUrgent);
+  const nextIndex = urgentIndex >= 0 ? urgentIndex : 0;
+  const next = state.queue.splice(nextIndex, 1)[0];
+  if (next.cleanupSignal) next.cleanupSignal();
+
+  if (next.signal && next.signal.aborted) {
+    next.reject(aiRequestCancelledError());
+    pumpAiRateQueue(key, state, intervalMs);
+    return;
+  }
+
+  const waitMs = Number.isFinite(state.lastStartedAt)
+    ? Math.max(0, state.lastStartedAt + intervalMs - Date.now()) : 0;
+
+  if (waitMs <= 0) {
+    state.lastStartedAt = Date.now();
+    next.resolve(0);
+    pumpAiRateQueue(key, state, intervalMs);
+    return;
+  }
+
+  const active = {
+    isUrgent: next.isUrgent,
+    timer: null,
+    cleanupSignal: null,
+    reject: next.reject
+  };
+  state.active = active;
+
+  const onAbort = () => {
+    if (state.active === active) {
+      state.active = null;
+      if (active.timer != null) clearTimeout(active.timer);
+      if (active.cleanupSignal) active.cleanupSignal();
+      next.reject(aiRequestCancelledError());
+      pumpAiRateQueue(key, state, intervalMs);
+    }
+  };
+
+  if (next.signal && typeof next.signal.addEventListener === "function") {
+    if (next.signal.aborted) {
+      onAbort();
+      return;
+    }
+    next.signal.addEventListener("abort", onAbort, { once: true });
+    active.cleanupSignal = () => {
+      if (typeof next.signal.removeEventListener === "function") {
+        next.signal.removeEventListener("abort", onAbort);
+      }
+    };
+  }
+
+  active.timer = setTimeout(() => {
+    if (state.active === active) {
+      state.active = null;
+      if (active.cleanupSignal) active.cleanupSignal();
+      state.lastStartedAt = Date.now();
+      next.resolve(waitMs);
+      pumpAiRateQueue(key, state, intervalMs);
+    }
+  }, waitMs);
+}
+
+function waitForAiRequestSlot(config, signal, isUrgent = false) {
+  const intervalMs = aiProviderRequestIntervalMs(config);
+  if (intervalMs <= 0) return Promise.resolve(0);
+  if (signal && signal.aborted) return Promise.reject(aiRequestCancelledError());
+
+  const key = aiRequestRateKey(config);
+  const state = getOrCreateAiRateState(key);
+
+  return new Promise((resolve, reject) => {
+    const item = {
+      isUrgent: !!isUrgent,
+      signal,
+      resolve,
+      reject,
+      cleanupSignal: null
+    };
+    if (signal && typeof signal.addEventListener === "function") {
+      const onAbort = () => {
+        const idx = state.queue.indexOf(item);
+        if (idx >= 0) {
+          state.queue.splice(idx, 1);
+          if (item.cleanupSignal) item.cleanupSignal();
+          item.reject(aiRequestCancelledError());
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      item.cleanupSignal = () => {
+        if (typeof signal.removeEventListener === "function") {
+          signal.removeEventListener("abort", onAbort);
+        }
+      };
+    }
+    state.queue.push(item);
+    pumpAiRateQueue(key, state, intervalMs);
   });
 }
 
@@ -451,7 +564,13 @@ async function aiRawCompletion(
     const networkTraceId = aiNetworkAttemptTraceId(trace.requestId, attemptNumber);
     const attemptInfo = { attempt: attemptNumber, timeoutMs, connectTimeoutMs, networkTraceId };
     attempts.push(attemptInfo);
-    attemptInfo.rateWaitMs = await waitForAiRequestSlot(config, externalSignal);
+    const isUrgent = !!(trace.urgent || requestClass.startsWith("urgent"));
+    try {
+      attemptInfo.rateWaitMs = await waitForAiRequestSlot(config, externalSignal, isUrgent);
+    } catch (slotErr) {
+      slotErr.httpDiagnostics = { attempts };
+      throw slotErr;
+    }
     if (typeof trace.onAttemptStart === "function") trace.onAttemptStart(attemptNumber);
     if (trace.debug) appendDebug("background", "deepseek-http-attempt-start", {
       requestId: trace.requestId || "",
@@ -517,7 +636,7 @@ async function aiRawCompletion(
       await new Promise((resolve) => setTimeout(resolve, 0));
       const networkFailure = aiNetworkFailureForTrace(networkTraceId);
       if (networkFailure) attemptInfo.netError = networkFailure.error;
-      const cancelled = !!(externalSignal && externalSignal.aborted);
+      const cancelled = !!(externalSignal && externalSignal.aborted) || !!(cause && cause.cancelled);
       const hasStreamProgress = typeof trace.hasStreamProgress === "function" &&
         trace.hasStreamProgress();
       const willRetry = !cancelled && !hasStreamProgress &&
@@ -544,11 +663,10 @@ async function aiRawCompletion(
         continue;
       }
       const err = new Error((cause && (cause.name === "AbortError" || cause.timedOut))
-        ? (externalSignal && externalSignal.aborted
-            ? "AI request cancelled" : "AI request timed out")
+        ? (cancelled ? "AI request cancelled" : "AI request timed out")
         : "AI request failed");
       err.netfail = true;
-      err.cancelled = !!(externalSignal && externalSignal.aborted);
+      err.cancelled = cancelled;
       err.timeout = !!(cause && (cause.name === "AbortError" || cause.timedOut) && !err.cancelled);
       err.connectTimeout = !!(cause && cause.connectTimedOut && !err.cancelled);
       err.errorCode = err.cancelled ? "AI_CANCELLED" :

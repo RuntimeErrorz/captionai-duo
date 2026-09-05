@@ -522,6 +522,66 @@ test("custom provider rate policy supports rate_limit_rpm in extraBody", async (
   assert.equal(await second, 3000);
 });
 
+test("urgent request preempts speculative prefetch rate delay and claims the slot", async () => {
+  let currentTime = 0;
+  const timers = [];
+  const cleared = new Set();
+  const context = loadHttpContext(async () => {
+    throw new Error("network should not be reached");
+  }, {
+    Date: { now: () => currentTime },
+    setTimeout: (callback, delay) => {
+      const id = timers.length + 1;
+      timers.push({ id, callback, delay });
+      return id;
+    },
+    clearTimeout: (timerId) => { cleared.add(timerId); }
+  });
+  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
+  const config = {
+    endpointKind: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-3.1-flash-lite-preview"
+  };
+
+  // First request starts immediately at T = 0
+  assert.equal(await waitForSlot(config, null, true), 0);
+
+  // At T = 1000, a speculative prefetch requests a slot and enters 3200ms rate delay
+  currentTime = 1000;
+  let prefetchErr = null;
+  const prefetchPromise = waitForSlot(config, null, false).catch((err) => {
+    prefetchErr = err;
+    return err;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const prefetchTimer = timers.find((timer) => !cleared.has(timer.id));
+  assert.ok(prefetchTimer);
+  assert.equal(prefetchTimer.delay, 3200);
+
+  // At T = 1500, an urgent playback request arrives. It must preempt the prefetch.
+  currentTime = 1500;
+  const urgentPromise = waitForSlot(config, null, true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // The prefetch delay must have been cancelled/preempted
+  assert.ok(cleared.has(prefetchTimer.id));
+  await prefetchPromise;
+  assert.ok(prefetchErr);
+  assert.equal(prefetchErr.cancelled, true);
+  assert.equal(prefetchErr.preempted, true);
+
+  // The urgent request is now waiting for the remaining interval since T = 0 (4200 - 1500 = 2700ms)
+  const urgentTimer = timers.find((timer) => !cleared.has(timer.id));
+  assert.ok(urgentTimer);
+  assert.equal(urgentTimer.delay, 2700);
+
+  // When urgent timer fires, urgent request gets the slot
+  currentTime = 4200;
+  urgentTimer.callback();
+  assert.equal(await urgentPromise, 2700);
+});
+
 test("promoting a live prefetch reuses it instead of cancelling it", () => {
   const messages = [];
   const context = {
@@ -1344,6 +1404,52 @@ test("accelerated streamed progress hands off from a safe prefix before the long
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-stream-handoff"
   ), true);
+});
+
+test("Gemini ignores stream handoff even during accelerated playback", async () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 0, {
+    windowItems: 320, targetThrough: 255, urgentTarget: 40, playbackRate: 3,
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiModel: "gemini-3.1-flash-lite-preview"
+  });
+  const request = {
+    requestId: "commit:0:1:0-319",
+    urgent: true,
+    regionIndex: 0,
+    requestStart: 0,
+    requestEnd: 319,
+    commitFloor: 0,
+    limitEnd: 500,
+    effectiveGuardItems: 16,
+    reqVid: "video",
+    reqEpoch: 1,
+    sessionToken: harness.context.captureCaptionSession(),
+    focusGeneration: 0,
+    progressTranslations: [],
+    progressRecoveryTranslations: []
+  };
+  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", request);
+  harness.context.captionSession.transInflight.add("dsb:0");
+  const calls = [];
+  harness.context.sendRuntimeMessage = (message) => {
+    calls.push(message);
+    return true;
+  };
+
+  const handle = vm.runInContext("handleDeepseekTranslationProgress", harness.context);
+  assert.equal(handle({
+    type: "translationBatchProgress",
+    requestId: request.requestId,
+    videoId: "video",
+    focusGeneration: 0,
+    translations: giantSemanticResponse(true)
+  }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.debug.some((entry) =>
+    entry.event === "semantic-stream-handoff"
+  ), false);
+  assert.equal(calls.some((call) => call.type === "cancelDeepSeekRequest"), false);
 });
 
 test("accelerated prefetch starts with enough runway before urgent promotion", async () => {

@@ -443,7 +443,7 @@
   // A speculative look-ahead must never move the only commit cursor away from
   // the subtitle currently being watched. It may extend targetThrough and be
   // consumed sequentially by the existing island, but only an urgent playback
-  // request (or gap/intro prewarming with no active subtitle) may relocate it.
+  // request (or gap/intro prewarming with an idle safety island) may relocate it.
   function shouldReseedSemanticCommitState(
     currentMissing, targetGroup, state, maxDistance, urgent, playbackActive
   ) {
@@ -455,7 +455,9 @@
     const distance = Math.max(1, Math.floor(Number(maxDistance) || 1));
     if (![target, cursor, commitFloor, limitEnd].every(Number.isFinite)) return false;
     const outsideIsland = target < commitFloor || target >= cursor + distance || target > limitEnd;
-    return outsideIsland && (!!urgent || !playbackActive);
+    const targetThrough = Number(state.targetThrough);
+    const isIdle = !Number.isFinite(targetThrough) || targetThrough < cursor;
+    return outsideIsland && (!!urgent || (!playbackActive && isIdle));
   }
 
   // Urgent playback work is sized around the one subtitle currently needed.

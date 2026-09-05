@@ -159,6 +159,15 @@ test("gap prewarming can relocate an idle safety island", () => {
   ), true);
 });
 
+test("speculative prefetch in cue gap cannot steal an active safety island", () => {
+  const activeState = {
+    cursor: 2570, commitFloor: 2570, targetThrough: 2838, limitEnd: 22605
+  };
+  assert.equal(shared.shouldReseedSemanticCommitState(
+    true, 2880, activeState, 144, false, false
+  ), false);
+});
+
 test("urgent request sizing ignores a farther speculative target but preserves throughput", () => {
   const state = {
     cursor: 4416, windowItems: 80, urgentTarget: 4447, targetThrough: 4575

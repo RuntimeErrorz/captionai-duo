@@ -108,6 +108,8 @@ function deepseekStreamHandoffReady(request, state, maxRequestItems, normalMaxRe
   const rate = Number(video && video.playbackRate);
   const accelerated = Number.isFinite(rate) && rate >= 1.75;
   if (!request || !state || !request.urgent ||
+      (typeof isGeminiProvider === "function" && isGeminiProvider()) ||
+      (typeof deepseekIsGemini === "function" && deepseekIsGemini()) ||
       (!accelerated && Number(maxRequestItems) <= Number(normalMaxRequestItems))) return false;
   const requestStart = Number(request.requestStart);
   const requestEnd = Number(request.requestEnd);
