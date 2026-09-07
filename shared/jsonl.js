@@ -79,8 +79,15 @@
     if (!Array.isArray(value)) return false;
     if (value.length >= 3 && coordinateLike(value[0]) && coordinateLike(value[1]) &&
         typeof value[2] === "string") return true;
-    return value.length === 2 && typeof value[0] === "string" &&
-      /^\s*\d+\s*[,:-]\s*\d+\s*$/.test(value[0]) && typeof value[1] === "string";
+    if (value.length === 2 && typeof value[0] === "string" &&
+        /^\s*\[?\s*\d+\s*[,:-]\s*\d+\s*\]?\s*$/.test(value[0]) && typeof value[1] === "string") {
+      return true;
+    }
+    if (value.length === 2 && Array.isArray(value[0]) && value[0].length === 2 &&
+        coordinateLike(value[0][0]) && coordinateLike(value[0][1]) && typeof value[1] === "string") {
+      return true;
+    }
+    return false;
   }
 
   function parseArray(value) {
@@ -241,8 +248,13 @@
     if (!Array.isArray(value)) return null;
     if (value.length === 2 && typeof value[0] === "string" &&
         typeof value[1] === "string") {
-      const pair = value[0].match(/^\s*(\d+)\s*[,:-]\s*(\d+)\s*$/);
+      const pair = value[0].match(/^\s*\[?\s*(\d+)\s*[,:-]\s*(\d+)\s*\]?\s*$/);
       if (pair) return [[pair[1], pair[2], value[1]]];
+    }
+    if (value.length === 2 && Array.isArray(value[0]) && value[0].length === 2 &&
+        compactJsonlCoordinate(value[0][0]) != null && compactJsonlCoordinate(value[0][1]) != null &&
+        typeof value[1] === "string") {
+      return [[value[0][0], value[0][1], value[1]]];
     }
     if (value.length < 3 || compactJsonlCoordinate(value[0]) == null ||
         compactJsonlCoordinate(value[1]) == null || typeof value[2] !== "string") {

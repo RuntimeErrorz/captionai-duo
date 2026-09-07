@@ -186,7 +186,17 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
             }
             state.error = "";
             const rewound = YTDS_SHARED.rewindAiJsonlOverlappingUnit(state, record);
-            if (rewound) pendingProgress = [];
+            if (rewound) {
+              pendingProgress = [];
+              const retryAccepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, record);
+              if (retryAccepted && retryAccepted.ok) {
+                if (retryAccepted.type === "unit") {
+                  pendingProgress = retryAccepted.translations;
+                  if (publishUnitsImmediately) publishPending();
+                }
+                continue;
+              }
+            }
             // An overlapping correction is not a disposable tail: it may
             // revise content that was already accepted. Keep the strict
             // protocol error so the whole affected unit is retried.

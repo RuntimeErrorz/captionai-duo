@@ -339,6 +339,8 @@ function scheduleDeepseekSpeculativeResume() {
       scheduleDeepseekSpeculativeResume();
       return;
     }
+    if (captionSession.deepseekSpeculativeBackoffReason === "local-concurrency" &&
+        captionSession.deepseekRequestMeta.size > 0) return;
     clearDeepseekSpeculativeBackoff();
     for (const [regionIndex, state] of captionSession.deepseekCommitStateByRegion.entries()) {
       pumpDeepseekSpeculativeRequests(regionIndex, state);
@@ -417,14 +419,12 @@ function pumpDeepseekSpeculativeRequests(regionIndex, stateValue) {
     if (start <= state.cursor || start > state.limitEnd) continue;
     const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
       : typeof deepseekIsGemini === "function" ? deepseekIsGemini() : false;
-    const itemCount = isGemini
-      ? GEMINI_REQUEST_ITEMS
-      : Math.min(
-          deepseekMaxRequestItems(),
-          Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
-              Number(getVideo() && getVideo().playbackRate) >= 1.75
-            ? DEEPSEEK_SPECULATIVE_REQUEST_ITEMS : deepseekSteadyRequestItems()
-        );
+    const itemCount = isGemini ? GEMINI_REQUEST_ITEMS : Math.min(
+      deepseekMaxRequestItems(),
+      Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
+          Number(getVideo() && getVideo().playbackRate) >= 1.75
+        ? DEEPSEEK_SPECULATIVE_REQUEST_ITEMS : deepseekSteadyRequestItems()
+    );
     const end = Math.min(state.limitEnd, start + Math.max(1, itemCount) - 1);
     if (deepseekSpeculativeRangeOverlaps(regionIndex, start, end)) continue;
     if (!launchDeepseekSpeculativeRequest(regionIndex, state, start, end)) continue;
@@ -561,7 +561,8 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
   const cancelled = (typeof deepseekUpdateDisplayError === "function" && deepseekUpdateDisplayError(regionIndex, request, originalRuntimeError, resp), !!(runtimeError && (runtimeError.cancelled || YTDS_SHARED.aiErrorDescriptor(runtimeError).code === "AI_CANCELLED")) || !!(resp && resp.cancelled) || YTDS_SHARED.aiErrorDescriptor(resp).code === "AI_CANCELLED");
   if (cancelled) {
     emitCaptionStateTransition("semantic-response", "cancelled", { requestId, requestStart, requestEnd });
-    if (request.prefetch) pumpDeepseekSpeculativeRequests(regionIndex, state);
+    const hasActiveCommit = Array.from(captionSession.deepseekRequestMeta.values()).some((r) => r && !r.prefetch);
+    if (request.prefetch && !hasActiveCommit) pumpDeepseekSpeculativeRequests(regionIndex, state);
     else { clearPendingTimer(); repaintActiveDeepseekTranslation(); }
     if (state.cursor <= state.targetThrough && state.cursor <= state.limitEnd &&
         (!request.prefetch || state.cursor === requestStart)) {
@@ -689,7 +690,10 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     if (request.promotedFromPrefetch) {
       storeDeepseekPrefetchCandidate(state, request, resp);
     }
-    state.windowItems = deepseekSteadyRequestItems();
+    const hadDeferrals = Array.isArray(resp && resp.deferredIds) && resp.deferredIds.length > 0;
+    state.windowItems = hadDeferrals
+      ? Math.min(deepseekUrgentRequestItems(), 96)
+      : deepseekSteadyRequestItems();
     state.recoveryWindowItems = false; state.noProgressRange = "";
   }
   const madeProgress = state.cursor > requestStart;
@@ -724,9 +728,12 @@ function handleDeepseekBatchResult(request, resp, runtimeError) {
     repaintActiveDeepseekTranslation();
     return;
   }
-  pumpDeepseekSpeculativeRequests(regionIndex, state);
+  const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
+    : typeof deepseekIsGemini === "function" ? deepseekIsGemini() : false;
+  const urgentPending = state.cursor <= state.targetThrough && state.cursor <= state.limitEnd;
+  if (!isGemini || !urgentPending) pumpDeepseekSpeculativeRequests(regionIndex, state);
   repaintActiveDeepseekTranslation();
-  if (state.cursor <= state.targetThrough && state.cursor <= state.limitEnd) {
+  if (urgentPending) {
     queueMicrotask(() => pumpDeepseekCommitRegion(
       regionIndex, deepseekKeepAcceleratedUrgentLane(effectiveUrgent, state)
     ));
@@ -749,9 +756,7 @@ function launchDeepseekSpeculativeRequest(regionIndex, state, startValue, endVal
   }
   if (!items.length) return false;
   requestEnd = start + items.length - 1;
-  const requestId = beginDeepseekRequest(
-    inflightKey, "prefetch", start, requestEnd, false
-  );
+  const requestId = beginDeepseekRequest(inflightKey, "prefetch", start, requestEnd, false);
   if (!requestId) return false;
   const requestSessionToken = captureCaptionSession();
   const request = captionSession.deepseekRequestMeta.get(inflightKey);
@@ -759,13 +764,10 @@ function launchDeepseekSpeculativeRequest(regionIndex, state, startValue, endVal
   const requestMeta = {
     prefetch: true, regionIndex, requestStart: start, requestEnd,
     commitFloor: state.commitFloor, limitEnd: state.limitEnd,
-    effectiveGuardItems: YTDS_SHARED.semanticEffectiveGuardItems(
-      items.length, DEEPSEEK_COMMIT_GUARD_ITEMS
-    ),
+    effectiveGuardItems: YTDS_SHARED.semanticEffectiveGuardItems(items.length, DEEPSEEK_COMMIT_GUARD_ITEMS),
     reqVid: captionSession.cueVideoId, reqEpoch: captionSession.cueEpoch,
     sessionToken: requestSessionToken, focusGeneration: captionSession.deepseekFocusGeneration,
-    fastPath: true,
-    itemCount: items.length, targetAwareItems: items.length,
+    fastPath: true, itemCount: items.length, targetAwareItems: items.length,
     maxRequestItems: deepseekMaxRequestItems()
   };
   if (request && request.requestId === requestId) Object.assign(request, requestMeta);
@@ -852,8 +854,7 @@ function scheduleDeepSeekBatchRetry(
   }
   const requestedDelay = Number(retryOptions && retryOptions.retryAfterMs);
   const delayMs = rateLimited
-    ? Math.max(500, Math.min(61000,
-        Number.isFinite(requestedDelay) && requestedDelay > 0 ? Math.ceil(requestedDelay) : 1500))
+    ? Math.max(500, Math.min(61000, Number.isFinite(requestedDelay) && requestedDelay > 0 ? Math.ceil(requestedDelay) : 1500))
     : DEEPSEEK_COLD_RETRY_DELAYS_MS[attempt];
   const regionIndex = captionSession.deepseekGroupToCommitRegion[gIdx];
   const inflightKey = `dsb:${regionIndex}`;
@@ -865,31 +866,21 @@ function scheduleDeepSeekBatchRetry(
     start, end, attempt: attempt + 1, delayMs, rateLimited,
     reason: String(reason || "")
   });
-  emitCaptionStateTransition("semantic-retry", "scheduled", {
-    start, end, attempt: attempt + 1, delayMs, reason: String(reason || "")
-  });
+  emitCaptionStateTransition("semantic-retry", "scheduled", { start, end, attempt: attempt + 1, delayMs, reason: String(reason || "") });
   setTimeout(() => {
     captionSession.transInflight.delete(inflightKey);
     if (!isCaptionSessionCurrent(scheduledSessionToken) ||
         epoch !== captionSession.cueEpoch || videoId !== captionSession.cueVideoId) {
       captionSession.deepseekRetryCounts.delete(key);
-      emitCaptionStateTransition("semantic-retry", "discarded", {
-        start, end, attempt: attempt + 1, reason: "session-or-track-invalidated"
-      });
+      emitCaptionStateTransition("semantic-retry", "discarded", { start, end, attempt: attempt + 1, reason: "session-or-track-invalidated" });
       return;
     }
     if (scheduledFocusGeneration !== captionSession.deepseekFocusGeneration) {
       captionSession.deepseekRetryCounts.delete(key);
-      emitCaptionStateTransition("semantic-retry", "discarded", {
-        start, end, attempt: attempt + 1, reason: "focus-invalidated"
-      });
+      emitCaptionStateTransition("semantic-retry", "discarded", { start, end, attempt: attempt + 1, reason: "focus-invalidated" });
       return;
     }
-    emitCaptionStateTransition("semantic-retry", "resumed", {
-      start, end, attempt: attempt + 1
-    });
-    deepseekRequestBatch(gIdx, true, !!(retryOptions && retryOptions.urgent), {
-      bypassCache: !!(retryOptions && retryOptions.bypassCache)
-    });
+    emitCaptionStateTransition("semantic-retry", "resumed", { start, end, attempt: attempt + 1 });
+    deepseekRequestBatch(gIdx, true, !!(retryOptions && retryOptions.urgent), { bypassCache: !!(retryOptions && retryOptions.bypassCache) });
   }, delayMs);
 }
