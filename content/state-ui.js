@@ -667,7 +667,7 @@ function restoreCaptionsIfWeEnabled() {
 function syncCaptions(reason) {
   // 20 × 600ms ≈ 12s window: covers slow cold loads where the CC button
   // stays aria-disabled for several seconds while the track list loads.
-  if (settings.enabled) ensureCaptionsOn(20, reason || "sync");
+  if (settings.enabled && captionSession.currentVideoId) ensureCaptionsOn(20, reason || "sync");
   else restoreCaptionsIfWeEnabled();
 }
 
@@ -733,7 +733,7 @@ function forceCaptionReload(reason) {
 }
 
 function scheduleCueRecovery(delayOverride) {
-  if (captionSession.cueRecoveryTimer || !settings.enabled || captionSession.cueList) return;
+  if (captionSession.cueRecoveryTimer || !settings.enabled || captionSession.cueList || !captionSession.currentVideoId) return;
   const requestedDelay = Number(delayOverride);
   const delay = Number.isFinite(requestedDelay) && requestedDelay > 0
     ? Math.round(requestedDelay)
@@ -745,7 +745,7 @@ function scheduleCueRecovery(delayOverride) {
   });
   captionSession.cueRecoveryTimer = setTimeout(() => {
     captionSession.cueRecoveryTimer = null;
-    if (!settings.enabled || captionSession.cueList) { stopCueRecovery(); return; }
+    if (!settings.enabled || captionSession.cueList || !captionSession.currentVideoId) { stopCueRecovery(); return; }
     captionSession.cueRecoveryAttempt++;
     emitDebug("cue-recovery-attempt", {
       attempt: captionSession.cueRecoveryAttempt,

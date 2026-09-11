@@ -899,7 +899,8 @@ test("Gemini playback lag preserves full startup grace and accounts for cached t
     DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
     DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS: 4000,
     DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
-    DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS: 6000
+    DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS: 6000,
+    GEMINI_PLAYBACK_STARTUP_GRACE_MS: 14000
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
@@ -907,14 +908,19 @@ test("Gemini playback lag preserves full startup grace and accounts for cached t
   context.captionSession.transCache.set(groupKey(128), "cached translation");
   const isLagging = vm.runInContext("deepseekRequestIsPlaybackLagging", context);
 
-  // At 4000ms with rate 2.6, Gemini has 6000ms startup grace so it is not lagging yet:
+  // At 4000ms with rate 2.6, Gemini has 14000ms startup grace so it is not lagging yet:
   assert.equal(isLagging(request, { cursor: 0 }, 100), false);
 
   // If targetGroup 128 is already cached, it is never lagging:
-  request.startedAt = Date.now() - 7000;
+  request.startedAt = Date.now() - 15000;
   assert.equal(isLagging(request, { cursor: 0 }, 128), false);
 
-  // But if targetGroup is uncached and past 6000ms, it is lagging:
+  // At 7000ms (e.g. rate-limit queue + fallback attempt), it is protected from premature abort:
+  request.startedAt = Date.now() - 7000;
+  assert.equal(isLagging(request, { cursor: 0 }, 100), false);
+
+  // But if targetGroup is uncached and past 14000ms, it is lagging:
+  request.startedAt = Date.now() - 15000;
   assert.equal(isLagging(request, { cursor: 0 }, 100), true);
 });
 

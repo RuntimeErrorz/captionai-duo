@@ -3,6 +3,7 @@
 
 const DEEPSEEK_STALE_PREFETCH_GRACE_MS = 2500;
 const DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS = 6000;
+const GEMINI_PLAYBACK_STARTUP_GRACE_MS = 14000;
 const DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS = 4000;
 const DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS = 3500;
 const DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS = 2500;
@@ -58,7 +59,7 @@ function deepseekRequestIsPlaybackLagging(request, state, targetGroup) {
     Number.isFinite(lastProgressAt) && lastProgressAt > startedAt;
   const referenceAt = hasStreamProgress ? lastProgressAt : startedAt;
   const startupGraceMs = isGemini
-    ? DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS
+    ? GEMINI_PLAYBACK_STARTUP_GRACE_MS
     : (highSpeed ? DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS : DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS);
   const progressGraceMs = isGemini
     ? DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS
