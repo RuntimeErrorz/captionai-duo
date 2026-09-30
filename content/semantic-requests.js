@@ -420,7 +420,7 @@ function pumpDeepseekSpeculativeRequests(regionIndex, stateValue) {
     if (start <= state.cursor || start > state.limitEnd) continue;
     const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
       : typeof deepseekIsGemini === "function" ? deepseekIsGemini() : false;
-    const itemCount = isGemini ? GEMINI_REQUEST_ITEMS : Math.min(
+    const itemCount = isGemini ? deepseekSteadyRequestItems() : Math.min(
       deepseekMaxRequestItems(),
       Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
           Number(getVideo() && getVideo().playbackRate) >= 1.75

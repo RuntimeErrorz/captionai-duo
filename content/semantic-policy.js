@@ -29,21 +29,33 @@ const deepseekEndpointKind = aiEndpointKind;
 const deepseekIsGemini = isGeminiProvider;
 const aiIsGemini = isGeminiProvider;
 
+function aiConfiguredRequestItems(fallbackValue) {
+  const custom = typeof settings === "object" && settings && settings.aiRequestItems;
+  const fallback = Number.isFinite(Number(fallbackValue))
+    ? Number(fallbackValue)
+    : (typeof GEMINI_REQUEST_ITEMS === "number" ? GEMINI_REQUEST_ITEMS : 96);
+  const shared = typeof YTDS_SHARED === "object" && YTDS_SHARED ? YTDS_SHARED : null;
+  return shared && typeof shared.normalizeAiRequestItems === "function"
+    ? shared.normalizeAiRequestItems(custom, fallback)
+    : Math.max(32, Math.min(320, Math.round(Number(custom) || fallback)));
+}
+
 function aiInitialRequestItems() {
-  return isGeminiProvider() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_INITIAL_REQUEST_ITEMS;
+  return isGeminiProvider() ? aiConfiguredRequestItems(96) : DEEPSEEK_INITIAL_REQUEST_ITEMS;
 }
 
 function aiSteadyRequestItems() {
-  return isGeminiProvider() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_REQUEST_ITEMS;
+  return isGeminiProvider() ? aiConfiguredRequestItems(96) : DEEPSEEK_REQUEST_ITEMS;
 }
 
 function aiUrgentRequestItems() {
-  return isGeminiProvider() ? GEMINI_REQUEST_ITEMS : DEEPSEEK_URGENT_REQUEST_ITEMS;
+  return isGeminiProvider() ? aiConfiguredRequestItems(96) : DEEPSEEK_URGENT_REQUEST_ITEMS;
 }
 
 function aiNormalMaxRequestItems() {
   return isGeminiProvider()
-    ? GEMINI_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
+    ? Math.max(aiConfiguredRequestItems(96), GEMINI_MAX_REQUEST_ITEMS)
+    : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
 }
 
 function aiMaxSpeculativeRequests() {
@@ -65,7 +77,7 @@ function aiMaxSpeculativeRequests() {
 }
 
 function aiAcceleratedUrgentRequestItems() {
-  if (isGeminiProvider()) return GEMINI_REQUEST_ITEMS;
+  if (isGeminiProvider()) return aiConfiguredRequestItems(96);
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
   const deepseek = aiEndpointKind() === "deepseek";

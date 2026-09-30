@@ -95,10 +95,9 @@ const DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS = 64; // keep DeepSeek's visible
 const DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS = 48; // DeepSeek output is slower than playback at >=2.5x; hand off to the staged runway sooner
 const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // generic compatible streams can fill the wider visible runway
 const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
-// Gemini Flash Lite's free tier is request-limited. Always use one wider
-// sequential window at every playback rate, and keep its quota-saving policy
-// separate from generic compatible endpoints, whose trade-offs differ.
-const GEMINI_REQUEST_ITEMS = 320; // spend one quota slot on a full runway
+// Gemini Flash Lite's free tier is request-limited. The sequential window
+// is configurable via settings.aiRequestItems (default 96).
+const GEMINI_REQUEST_ITEMS = 96;
 const GEMINI_MAX_REQUEST_ITEMS = 320;
 const GEMINI_MAX_SPECULATIVE_REQUESTS = 1;
 const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
@@ -190,6 +189,8 @@ function loadSettings() {
         YTDS_SHARED.normalizeAiContextCount(settings.deepseekContextFuture, 1);
       settings.deepseekPrefetchBatches =
         YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
+      settings.aiRequestItems =
+        YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, 96);
       resolve();
     });
   });
@@ -229,6 +230,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
         settings.deepseekPrefetchBatches =
           YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
         prefetchChanged = oldV !== settings.deepseekPrefetchBatches;
+      }
+      if (k === "aiRequestItems") {
+        settings.aiRequestItems =
+          YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, 96);
+        prefetchChanged = prefetchChanged || oldV !== settings.aiRequestItems;
       }
       if (RECUE_KEYS.has(k) && oldV !== settings[k]) {
         needRecue = true;

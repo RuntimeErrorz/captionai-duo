@@ -49,6 +49,9 @@ function normalizeAiConfigProfile(value, index) {
     ),
     prefetchBatches: YTDS_SHARED.normalizeDeepseekPrefetchBatches(
       raw.prefetchBatches == null ? state.deepseekPrefetchBatches : raw.prefetchBatches
+    ),
+    requestItems: YTDS_SHARED.normalizeAiRequestItems(
+      raw.requestItems == null ? state.aiRequestItems : raw.requestItems
     )
   };
   if (!profile.name) profile.name = aiConfigProfileFallbackName(profile, index);
@@ -364,7 +367,8 @@ async function materializeAiConfigProfile(profile, forceRevision) {
     state.aiModel !== profile.model ||
     state.deepseekContextPast !== profile.contextPast ||
     state.deepseekContextFuture !== profile.contextFuture ||
-    state.deepseekPrefetchBatches !== profile.prefetchBatches;
+    state.deepseekPrefetchBatches !== profile.prefetchBatches ||
+    state.aiRequestItems !== profile.requestItems;
   const materialChanged = previousKey !== profile.apiKey || !previousExtra.ok ||
     previousExtra.canonical !== profile.extraBody;
   state.targetLang = profile.targetLang;
@@ -373,6 +377,7 @@ async function materializeAiConfigProfile(profile, forceRevision) {
   state.deepseekContextPast = profile.contextPast;
   state.deepseekContextFuture = profile.contextFuture;
   state.deepseekPrefetchBatches = profile.prefetchBatches;
+  state.aiRequestItems = profile.requestItems;
   if (changed || materialChanged || forceRevision) {
     state.aiExtraBodyRevision = Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1;
     await chrome.storage.sync.set({
@@ -382,6 +387,7 @@ async function materializeAiConfigProfile(profile, forceRevision) {
       deepseekContextPast: state.deepseekContextPast,
       deepseekContextFuture: state.deepseekContextFuture,
       deepseekPrefetchBatches: state.deepseekPrefetchBatches,
+      aiRequestItems: state.aiRequestItems,
       aiExtraBodyRevision: state.aiExtraBodyRevision
     });
   }
@@ -410,7 +416,8 @@ async function initializeAiConfigProfiles(localValue) {
       extraBody: extras[requestScope] || "{}",
       contextPast: state.deepseekContextPast,
       contextFuture: state.deepseekContextFuture,
-      prefetchBatches: state.deepseekPrefetchBatches
+      prefetchBatches: state.deepseekPrefetchBatches,
+      requestItems: state.aiRequestItems
     }, 0));
   }
   const wanted = String(rawStore && rawStore.activeId || "");

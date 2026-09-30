@@ -99,7 +99,7 @@ test("switching a profile materializes secrets locally and emits one unified rev
   assert.equal(local.aiExtraBodyProfiles[requestScope], '{"reasoning_effort":"low"}');
   assert.equal(syncWrites.length, 1);
   assert.deepEqual(Object.keys(syncWrites[0]).sort(), [
-    "aiBaseUrl", "aiExtraBodyRevision", "aiModel", "deepseekContextFuture",
+    "aiBaseUrl", "aiExtraBodyRevision", "aiModel", "aiRequestItems", "deepseekContextFuture",
     "deepseekContextPast", "deepseekPrefetchBatches", "targetLang"
   ]);
   assert.equal(syncWrites[0].aiExtraBodyRevision, 5);

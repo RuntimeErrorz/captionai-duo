@@ -613,6 +613,7 @@ function bindUI() {
   $("deepseekContextPast").value = String(state.deepseekContextPast);
   $("deepseekContextFuture").value = String(state.deepseekContextFuture);
   $("deepseekPrefetchBatches").value = String(state.deepseekPrefetchBatches);
+  $("aiRequestItems").value = String(state.aiRequestItems);
   $("rowGap").value = state.rowGap;
   $("rowGapV").textContent = state.rowGap + "px";
   paintSegs();
@@ -708,6 +709,12 @@ function wire() {
     e.target.value = String(value);
     setKey("deepseekPrefetchBatches", value);
     await updateActiveAiConfigProfile({ prefetchBatches: value });
+  });
+  $("aiRequestItems").addEventListener("change", async (e) => {
+    const value = YTDS_SHARED.normalizeAiRequestItems(e.target.value, state.aiRequestItems);
+    e.target.value = String(value);
+    setKey("aiRequestItems", value);
+    await updateActiveAiConfigProfile({ requestItems: value });
   });
 
   $("debugEnabled").addEventListener("change", (e) => {
@@ -822,6 +829,8 @@ chrome.storage.sync.get(null, (got) => {
     YTDS_SHARED.normalizeAiContextCount(state.deepseekContextFuture, DEFAULTS.deepseekContextFuture);
   state.deepseekPrefetchBatches =
     YTDS_SHARED.normalizeDeepseekPrefetchBatches(state.deepseekPrefetchBatches);
+  state.aiRequestItems =
+    YTDS_SHARED.normalizeAiRequestItems(state.aiRequestItems, DEFAULTS.aiRequestItems);
   chrome.storage.local.get({
     aiApiKeys: {}, aiExtraBodyProfiles: {},
     [AI_CONFIG_PROFILE_STORE_KEY]: null

@@ -37,6 +37,7 @@
     deepseekContextPast: 1,
     deepseekContextFuture: 1,
     deepseekPrefetchBatches: 1,
+    aiRequestItems: 96,
     debugEnabled: false,
     order: "trans-top",
     rowGap: 4,
@@ -457,6 +458,15 @@
       : DEFAULTS.deepseekPrefetchBatches;
   }
 
+  function normalizeAiRequestItems(value, fallbackValue) {
+    const items = Number(value);
+    const fallback = Number.isFinite(Number(fallbackValue))
+      ? Number(fallbackValue) : DEFAULTS.aiRequestItems;
+    return Number.isFinite(items)
+      ? Math.max(32, Math.min(320, Math.round(items)))
+      : Math.max(32, Math.min(320, Math.round(fallback)));
+  }
+
   function normalizeAiContextCount(value, fallbackValue) {
     const count = Number(value);
     const fallback = Number.isFinite(Number(fallbackValue))
@@ -554,7 +564,7 @@
     parseAiExtraBody, aiCompletionText, aiErrorDescriptor, aiErrorMessage,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
     aiExtraBodyUsesThinking,
-    aiChatCompletionBody, normalizeDeepseekPrefetchBatches, normalizeAiContextCount,
+    aiChatCompletionBody, normalizeDeepseekPrefetchBatches, normalizeAiRequestItems, normalizeAiContextCount,
     preparePromptContexts
   });
 })();

@@ -131,7 +131,7 @@
           </div>
         </details>
 
-        <div class="compact-grid grid-3">
+        <div class="compact-grid grid-2">
           <div class="field">
             <label for="deepseekContextPast" data-i18n="aiContextPast">上文条数</label>
             <input id="deepseekContextPast" type="number" min="0" max="20" step="1" inputmode="numeric" />
@@ -143,6 +143,10 @@
           <div class="field">
             <label for="deepseekPrefetchBatches" data-i18n="aiPrefetchBatches">预加载批数</label>
             <input id="deepseekPrefetchBatches" type="number" min="0" max="10" step="1" inputmode="numeric" />
+          </div>
+          <div class="field">
+            <label for="aiRequestItems" data-i18n="aiRequestItems">单次请求条数</label>
+            <input id="aiRequestItems" type="number" min="32" max="320" step="16" inputmode="numeric" />
           </div>
         </div>
       </div>

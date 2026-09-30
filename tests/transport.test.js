@@ -195,7 +195,9 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       aiBaseUrl: options.aiBaseUrl || "https://api.deepseek.com",
       aiModel: options.aiModel || "test-model",
       ...(options.prefetchBatches == null
-        ? {} : { deepseekPrefetchBatches: options.prefetchBatches })
+        ? {} : { deepseekPrefetchBatches: options.prefetchBatches }),
+      ...(options.aiRequestItems == null
+        ? {} : { aiRequestItems: options.aiRequestItems })
     },
     SEMANTIC_CORE_ITEMS: 16,
     DEEPSEEK_CORE_ITEMS: 16,
@@ -279,7 +281,8 @@ function loadPlaybackPrefetchHarness(options = {}) {
     limitEnd: options.limitEnd ?? 800,
     aiBaseUrl: options.aiBaseUrl,
     aiModel: options.aiModel,
-    prefetchBatches: options.prefetchBatches
+    prefetchBatches: options.prefetchBatches,
+    aiRequestItems: options.aiRequestItems
   });
   harness.context.settings.enabled = true;
   for (const [name, value] of Object.entries({
@@ -1754,7 +1757,7 @@ test("3x DeepSeek uses a short visible writer while Gemini keeps the wider lane"
   assert.equal(geminiRequests[0].items.length, 80);
 });
 
-test("Gemini Flash Lite uses the full request window at ordinary playback", () => {
+test("Gemini Flash Lite uses the configured request window at ordinary playback", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -1765,14 +1768,26 @@ test("Gemini Flash Lite uses the full request window at ordinary playback", () =
   const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(requests.length, 1);
   assert.equal(requests[0].endpointKind, "gemini");
-  assert.equal(requests[0].items.length, 320);
+  assert.equal(requests[0].items.length, 96);
+
+  const customHarness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
+    aiRequestItems: 160,
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiModel: "gemini-3.1-flash-lite-preview"
+  });
+  vm.runInContext("pumpDeepseekCommitRegion(0, true)", customHarness.context);
+  const customRequests = customHarness.messages.filter((message) => message.type === "translateBatch");
+  assert.equal(customRequests.length, 1);
+  assert.equal(customRequests[0].items.length, 160);
 });
 
-test("Gemini Flash Lite uses a full urgent runway and speculative lookahead at high speed", () => {
+test("Gemini Flash Lite uses configured urgent runway and speculative lookahead at high speed", () => {
   const { harness, requests } = loadPlaybackPrefetchHarness({
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
     batchSize: 32, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
     highSpeedPrefetchBatches: 12, prefetchBatches: 1,
+    aiRequestItems: 320,
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     aiModel: "gemini-3.5-flash-lite-preview"
   });

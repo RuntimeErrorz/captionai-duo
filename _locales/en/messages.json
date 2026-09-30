@@ -41,6 +41,7 @@
   "aiContextPast": { "message": "Previous context lines" },
   "aiContextFuture": { "message": "Future context lines" },
   "aiPrefetchBatches": { "message": "Prefetch batches" },
+  "aiRequestItems": { "message": "Request batch size" },
   "aiKeyMissing": { "message": "Enter an API Key to start translating." },
   "aiBaseMissing": { "message": "Enter a valid API Base URL." },
   "aiStatusTimeout": { "message": "The AI request timed out and was retried automatically." },

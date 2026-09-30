@@ -45,6 +45,8 @@ function normalizeBackupSettings(value) {
   );
   settings.deepseekPrefetchBatches =
     YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
+  settings.aiRequestItems =
+    YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, YTDS_SHARED.DEFAULTS.aiRequestItems);
 
   const enumValues = {
     order: new Set(["trans-top", "orig-top"]),
@@ -109,7 +111,9 @@ function normalizeBackupProfileStore(value, fallbackSettings = state) {
       contextFuture: source.contextFuture == null
         ? fallbackSettings.deepseekContextFuture : source.contextFuture,
       prefetchBatches: source.prefetchBatches == null
-        ? fallbackSettings.deepseekPrefetchBatches : source.prefetchBatches
+        ? fallbackSettings.deepseekPrefetchBatches : source.prefetchBatches,
+      requestItems: source.requestItems == null
+        ? fallbackSettings.aiRequestItems : source.requestItems
     }, index);
     if (usedIds.has(profile.id)) profile.id = newAiConfigProfileId();
     usedIds.add(profile.id);
@@ -145,6 +149,7 @@ function normalizeConfigBackup(value) {
   settings.deepseekContextPast = activeProfile.contextPast;
   settings.deepseekContextFuture = activeProfile.contextFuture;
   settings.deepseekPrefetchBatches = activeProfile.prefetchBatches;
+  settings.aiRequestItems = activeProfile.requestItems;
   const credentialScope = YTDS_SHARED.aiCredentialScope(activeProfile.baseUrl);
   const requestScope = YTDS_SHARED.aiRequestProfileScope(
     activeProfile.baseUrl, activeProfile.model

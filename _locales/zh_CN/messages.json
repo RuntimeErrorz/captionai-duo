@@ -41,6 +41,7 @@
   "aiContextPast": { "message": "上文条数" },
   "aiContextFuture": { "message": "下文条数" },
   "aiPrefetchBatches": { "message": "预加载批数" },
+  "aiRequestItems": { "message": "单次请求条数" },
   "aiKeyMissing": { "message": "请先填写 API Key。" },
   "aiBaseMissing": { "message": "请输入有效的 API Base URL。" },
   "aiStatusTimeout": { "message": "AI 请求超时，扩展已自动重试。" },
