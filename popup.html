@@ -119,18 +119,6 @@
           </div>
         </div>
 
-        <details class="settings-help ai-advanced-settings">
-          <summary data-i18n="aiExtraBodySummary">请求参数</summary>
-          <div class="field">
-            <label for="aiExtraBody" class="visually-hidden"
-                   data-i18n="aiExtraBody">请求参数（JSON）</label>
-            <textarea id="aiExtraBody" rows="3" autocomplete="off" spellcheck="false"
-                      placeholder='{"enable_thinking":false}'></textarea>
-            <p id="aiExtraBodyMsg" class="engine-hint" role="status"
-               aria-live="polite" hidden></p>
-          </div>
-        </details>
-
         <div class="compact-grid grid-2">
           <div class="field">
             <label for="deepseekContextPast" data-i18n="aiContextPast">上文条数</label>
@@ -148,6 +136,14 @@
             <label for="aiRequestItems" data-i18n="aiRequestItems">单次请求条数</label>
             <input id="aiRequestItems" type="number" min="32" max="320" step="16" inputmode="numeric" />
           </div>
+        </div>
+
+        <div class="field">
+          <label for="aiExtraBody" data-i18n="aiExtraBody">请求参数（JSON）</label>
+          <textarea id="aiExtraBody" rows="3" autocomplete="off" spellcheck="false"
+                    placeholder='{"enable_thinking":false}'></textarea>
+          <p id="aiExtraBodyMsg" class="engine-hint" role="status"
+             aria-live="polite" hidden></p>
         </div>
       </div>
       <p class="engine-msg" id="aiStatus" role="status" aria-live="polite" hidden></p>
