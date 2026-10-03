@@ -79,10 +79,10 @@ html.ytds-active .caption-window {
 /* Both rows share one grid track, whose width is determined by the longer
    subtitle. Only the four OUTER corners stay rounded; the joined inner edges
    are square, so the two backgrounds read as one clean panel. */
-#ytds-overlay.ytds-trans-top .ytds-trans,
-#ytds-overlay.ytds-orig-top .ytds-orig { grid-row: 1; }
-#ytds-overlay.ytds-trans-top .ytds-orig,
-#ytds-overlay.ytds-orig-top .ytds-trans { grid-row: 2; }
+#ytds-overlay.ytds-two-lines.ytds-trans-top .ytds-trans,
+#ytds-overlay.ytds-two-lines.ytds-orig-top .ytds-orig { grid-row: 1; }
+#ytds-overlay.ytds-two-lines.ytds-trans-top .ytds-orig,
+#ytds-overlay.ytds-two-lines.ytds-orig-top .ytds-trans { grid-row: 2; }
 
 #ytds-overlay.ytds-two-lines.ytds-trans-top .ytds-trans,
 #ytds-overlay.ytds-two-lines.ytds-orig-top .ytds-orig {
@@ -97,6 +97,7 @@ html.ytds-active .caption-window {
    continuous background. Separate translucent row backgrounds are what create
    the hairline at fractional grid boundaries. */
 #ytds-overlay.ytds-two-lines.ytds-shared-bg .ytds-panel {
+  background: var(--ytds-shared-bg, var(--ytds-bg));
   border-radius: 4px;
 }
 #ytds-overlay.ytds-two-lines.ytds-shared-bg .ytds-line {

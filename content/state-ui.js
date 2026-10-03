@@ -513,10 +513,8 @@ function styleOverlay() {
   // per-line visibility
   origEl.style.display = settings.showOriginal ? "" : "none";
   transEl.style.display = settings.showTranslation ? "" : "none";
-  // Identical row surfaces can be painted once by the content-sized panel. This
-  // removes the fractional boundary where two translucent backgrounds meet;
-  // different user-selected surfaces continue to render per row.
-  panelEl.style.backgroundColor = sharedBg ? origBg : "";
+  panelEl.style.backgroundColor = "";
+  panelEl.style.setProperty("--ytds-shared-bg", sharedBg ? origBg : "");
   overlay.classList.toggle("ytds-shared-bg", sharedBg);
 
   applyPosition();

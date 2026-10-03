@@ -34,3 +34,27 @@ test("subtitle drag handle has a large target without enlarging its visual grip"
     "the larger transparent target must only intercept input while visible or dragging"
   );
 });
+
+test("grid row ordering and continuous panel surface are gated by ytds-two-lines", () => {
+  // Grid row 2 placement must only apply when both lines are present,
+  // so single-line captions do not create an empty row 1 track or unwanted row gap.
+  assert.match(
+    contentCss,
+    /#ytds-overlay\.ytds-two-lines\.ytds-trans-top \.ytds-orig[\s\S]*?grid-row:\s*2/,
+    "trans-top orig row 2 must be gated by ytds-two-lines"
+  );
+  assert.match(
+    contentCss,
+    /#ytds-overlay\.ytds-two-lines\.ytds-orig-top \.ytds-trans[\s\S]*?grid-row:\s*2/,
+    "orig-top trans row 2 must be gated by ytds-two-lines"
+  );
+  assert.ok(
+    !/#ytds-overlay\.(?:ytds-trans-top|ytds-orig-top)\s+\.ytds-(?:orig|trans)\s*[,{]/.test(contentCss),
+    "single-line overlay must not assign children to grid-row 2"
+  );
+
+  const sharedPanel = rule(contentCss, "#ytds-overlay.ytds-two-lines.ytds-shared-bg .ytds-panel");
+  assert.match(sharedPanel, /background\s*:/, "shared-bg panel must paint background only for two-line overlay");
+  assert.match(sharedPanel, /border-radius\s*:/, "shared-bg panel must provide border radius");
+});
+
