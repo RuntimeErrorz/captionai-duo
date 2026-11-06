@@ -1499,3 +1499,88 @@ test("an empty catalog URL reuses a player session proof for an ASR track", asyn
   assert.equal(new URL(grafted).searchParams.get("pot"), "player-pot");
   assert.equal(new URL(grafted).searchParams.get("lang"), "en");
 });
+
+test("auto selection prefers video's original audio language over viewer-regional defaultCaptionTrackIndex", () => {
+  const context = {
+    URL,
+    location: {
+      href: "https://www.youtube.com/watch?v=abcdefghijk",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "abcdefghijk",
+      isAllowedTimedtextUrl: (url) => String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    ytInitialPlayerResponse: {
+      videoDetails: { defaultAudioLanguage: "en" },
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          defaultCaptionTrackIndex: 4,
+          captionTracks: [
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=ar", languageCode: "ar", kind: "asr", name: { simpleText: "Arabic" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=pl", languageCode: "pl", kind: "asr", name: { simpleText: "Polish" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=ru", languageCode: "ru", kind: "asr", name: { simpleText: "Russian" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=ko", languageCode: "ko", kind: "asr", name: { simpleText: "Korean" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=nl", languageCode: "nl", kind: "asr", name: { simpleText: "Dutch (auto-generated)" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en", languageCode: "en", kind: "asr", vssId: "a.en", name: { simpleText: "English (auto-generated)" } }
+          ]
+        }
+      }
+    },
+    window: null
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, "inject/caption-tracks.js"), "utf8"), context);
+
+  const catalog = vm.runInContext("window.__ytdsCaptionTrackCatalog.scan('abcdefghijk')", context);
+  assert.ok(catalog);
+  const preferred = catalog.tracks.find((t) => t.id === catalog.preferredTrackId);
+  assert.ok(preferred);
+  assert.equal(preferred.languageCode, "en");
+  assert.equal(preferred.label, "English (auto-generated)");
+});
+
+test("auto selection identifies original track in multi-audio videos without declared defaultAudioLanguage", () => {
+  const context = {
+    URL,
+    location: {
+      href: "https://www.youtube.com/watch?v=jNESiKXBkn4",
+      origin: "https://www.youtube.com"
+    },
+    YTDS_SHARED: {
+      videoIdFromUrl: () => "jNESiKXBkn4",
+      isAllowedTimedtextUrl: (url) => String(url).startsWith("https://www.youtube.com/api/timedtext")
+    },
+    ytInitialPlayerResponse: {
+      videoDetails: { title: "Geo-Strategy Update" },
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          audioTracks: [
+            { audioTrackId: "nl-NL.10", defaultCaptionTrackIndex: 3, hasDefaultTrack: true, captionsInitialState: "CAPTIONS_INITIAL_STATE_ON_RECOMMENDED" },
+            { audioTrackId: "ar.10", defaultCaptionTrackIndex: 3, hasDefaultTrack: true, captionsInitialState: "CAPTIONS_INITIAL_STATE_ON_RECOMMENDED" },
+            { audioTrackId: "en-US.4", defaultCaptionTrackIndex: 3, hasDefaultTrack: true, captionsInitialState: "CAPTIONS_INITIAL_STATE_OFF_RECOMMENDED" },
+            { audioTrackId: "ja.10", defaultCaptionTrackIndex: 3, hasDefaultTrack: true, captionsInitialState: "CAPTIONS_INITIAL_STATE_ON_RECOMMENDED" }
+          ],
+          captionTracks: [
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=jNESiKXBkn4&lang=ar", languageCode: "ar", kind: "asr", vssId: "a.ar", name: { simpleText: "Arabic (auto-generated)" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=jNESiKXBkn4&lang=nl", languageCode: "nl", kind: "asr", vssId: "a.nl", name: { simpleText: "Dutch (auto-generated)" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=jNESiKXBkn4&lang=ja", languageCode: "ja", kind: "asr", vssId: "a.ja", name: { simpleText: "Japanese (auto-generated)" } },
+            { baseUrl: "https://www.youtube.com/api/timedtext?v=jNESiKXBkn4&lang=en", languageCode: "en", kind: "asr", vssId: "a.en", name: { simpleText: "English (auto-generated)" } }
+          ]
+        }
+      }
+    },
+    window: null
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, "inject/caption-tracks.js"), "utf8"), context);
+
+  const catalog = vm.runInContext("window.__ytdsCaptionTrackCatalog.scan('jNESiKXBkn4')", context);
+  assert.ok(catalog);
+  const preferred = catalog.tracks.find((t) => t.id === catalog.preferredTrackId);
+  assert.ok(preferred);
+  assert.equal(preferred.languageCode, "en");
+  assert.equal(preferred.label, "English (auto-generated)");
+});

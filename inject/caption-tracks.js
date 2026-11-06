@@ -204,6 +204,25 @@
     return !!a[0] && a[0] === b[0];
   }
 
+  function originalAudioTrack(response) {
+    const renderer = captionTrackRenderer(response);
+    const audioTracks = Array.isArray(renderer && renderer.audioTracks) ? renderer.audioTracks : [];
+    if (!audioTracks.length) return null;
+    const offRecommended = audioTracks.find((a) => a &&
+      a.captionsInitialState === "CAPTIONS_INITIAL_STATE_OFF_RECOMMENDED"
+    );
+    if (offRecommended) return offRecommended;
+    const explicitDefault = audioTracks.find((a) => a &&
+      (a.isDefault === true || a.audioIsDefault === true || a.visibility === "DEFAULT")
+    );
+    if (explicitDefault) return explicitDefault;
+    const primaryStream = audioTracks.find((a) => a &&
+      typeof a.audioTrackId === "string" && !a.audioTrackId.endsWith(".10")
+    );
+    if (primaryStream) return primaryStream;
+    return audioTracks[0];
+  }
+
   function audioLanguageCandidates(response) {
     const out = [];
     const add = (value) => {
@@ -215,48 +234,92 @@
     const microPlayer = asObject(microformat && microformat.playerMicroformatRenderer);
     add(details && (details.defaultAudioLanguage || details.audioLanguage));
     add(microPlayer && (microPlayer.defaultAudioLanguage || microPlayer.audioLanguage));
+    const origAudio = originalAudioTrack(response);
+    if (origAudio) {
+      const rawId = typeof origAudio.audioTrackId === "string" ? origAudio.audioTrackId.split(".")[0] : "";
+      add(origAudio.languageCode || origAudio.language || rawId);
+    }
     const renderer = captionTrackRenderer(response);
-    for (const audio of Array.isArray(renderer && renderer.audioTracks) ? renderer.audioTracks : []) {
-      add(audio && (audio.languageCode || audio.language));
+    const audioTracks = Array.isArray(renderer && renderer.audioTracks) ? renderer.audioTracks : [];
+    for (const audio of audioTracks) {
+      const rawId = typeof audio.audioTrackId === "string" ? audio.audioTrackId.split(".")[0] : (typeof audio.id === "string" ? audio.id.split(".")[0] : "");
+      add(audio && (audio.languageCode || audio.language || rawId));
     }
     const streaming = asObject(response && response.streamingData);
     for (const format of Array.isArray(streaming && streaming.adaptiveFormats)
       ? streaming.adaptiveFormats : []) {
       const audio = asObject(format && format.audioTrack);
-      add(audio && (audio.languageCode || audio.language));
+      const rawId = typeof audio && typeof audio.id === "string" ? audio.id.split(".")[0] : "";
+      add(audio && (audio.languageCode || audio.language || rawId));
     }
     return out;
   }
 
   function preferredRawTrackIndex(response, rawTracks, allTracks) {
     const renderer = captionTrackRenderer(response);
-    const indices = [];
-    const addIndex = (value) => {
-      const index = Number(value);
-      if (Number.isInteger(index) && index >= 0 && index < allTracks.length &&
-          !indices.includes(index)) indices.push(index);
-    };
-    addIndex(renderer && renderer.defaultCaptionTrackIndex);
-    for (const audio of Array.isArray(renderer && renderer.audioTracks) ? renderer.audioTracks : []) {
-      addIndex(audio && audio.defaultCaptionTrackIndex);
-      const captionIndices = audio && audio.captionTrackIndices;
-      if (!indices.length && Array.isArray(captionIndices)) addIndex(captionIndices[0]);
+
+    // 1. YouTube explicitly marked this track as the original-language transcription
+    const explicitOriginal = rawTracks.findIndex((track) => track && track.isOriginal === true);
+    if (explicitOriginal >= 0) return explicitOriginal;
+
+    // 2. Original audio track's assigned default caption (for multi-audio / AI-dubbed videos)
+    const origAudio = originalAudioTrack(response);
+    if (origAudio) {
+      const origIndex = Number(origAudio.defaultCaptionTrackIndex != null
+        ? origAudio.defaultCaptionTrackIndex
+        : (Array.isArray(origAudio.captionTrackIndices) ? origAudio.captionTrackIndices[0] : null));
+      if (Number.isInteger(origIndex) && origIndex >= 0 && origIndex < allTracks.length) {
+        const filteredIndex = rawTracks.indexOf(allTracks[origIndex]);
+        if (filteredIndex >= 0) return filteredIndex;
+      }
     }
-    for (const index of indices) {
-      const filteredIndex = rawTracks.indexOf(allTracks[index]);
-      if (filteredIndex >= 0) return filteredIndex;
-    }
-    const explicit = rawTracks.findIndex((track) => track &&
-      (track.isDefault === true || track.isOriginal === true));
-    if (explicit >= 0) return explicit;
-    for (const language of audioLanguageCandidates(response)) {
-      const exact = rawTracks.findIndex((track) =>
-        languageCode(track && track.languageCode).toLowerCase() === language.toLowerCase());
-      if (exact >= 0) return exact;
-      const primary = rawTracks.findIndex((track) => sameAudioLanguage(track && track.languageCode, language));
+
+    // 3. Video audio language (declared by creator / player response / original audio track)
+    const audioCandidates = audioLanguageCandidates(response);
+    for (const language of audioCandidates) {
+      const exactLang = language.toLowerCase();
+      // First prefer manual or default in this audio language
+      const bestExact = rawTracks.findIndex((track) => track &&
+        languageCode(track.languageCode).toLowerCase() === exactLang &&
+        (track.kind !== "asr" || track.isDefault === true || track.isOriginal === true));
+      if (bestExact >= 0) return bestExact;
+      // Any exact match (e.g. ASR in the original audio language)
+      const anyExact = rawTracks.findIndex((track) => track &&
+        languageCode(track.languageCode).toLowerCase() === exactLang);
+      if (anyExact >= 0) return anyExact;
+      // Primary language match (e.g. "en" matching "en-US")
+      const primary = rawTracks.findIndex((track) => track &&
+        sameAudioLanguage(track.languageCode, language));
       if (primary >= 0) return primary;
     }
-    return rawTracks.length === 1 ? 0 : -1;
+
+    // 4. Default audio track's caption track indices across any audio track
+    for (const audio of Array.isArray(renderer && renderer.audioTracks) ? renderer.audioTracks : []) {
+      const index = Number(audio.defaultCaptionTrackIndex != null
+        ? audio.defaultCaptionTrackIndex
+        : (Array.isArray(audio.captionTrackIndices) ? audio.captionTrackIndices[0] : null));
+      if (Number.isInteger(index) && index >= 0 && index < allTracks.length) {
+        const filteredIndex = rawTracks.indexOf(allTracks[index]);
+        if (filteredIndex >= 0) return filteredIndex;
+      }
+    }
+
+    // 5. Creator-specified default subtitle track
+    const explicitDefault = rawTracks.findIndex((track) => track && track.isDefault === true);
+    if (explicitDefault >= 0) return explicitDefault;
+
+    // 6. Only a single caption track exists
+    if (rawTracks.length === 1) return 0;
+
+    // 7. Regional viewer recommendation from YouTube (defaultCaptionTrackIndex)
+    // Only used as a last resort when the video declares no audio language
+    const defaultIndex = Number(renderer && renderer.defaultCaptionTrackIndex);
+    if (Number.isInteger(defaultIndex) && defaultIndex >= 0 && defaultIndex < allTracks.length) {
+      const filteredIndex = rawTracks.indexOf(allTracks[defaultIndex]);
+      if (filteredIndex >= 0) return filteredIndex;
+    }
+
+    return -1;
   }
 
   function createCatalog(videoId) {
