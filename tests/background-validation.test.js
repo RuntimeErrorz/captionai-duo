@@ -155,7 +155,7 @@ test("all segmentation lanes use compact alignment ranges", async () => {
         requestClass: trace.requestClass,
         maxTokens
       });
-      const unit = '[[0,"译文"]]\n';
+      const unit = '[[0,0,"译文"]]\n';
       trace.onTextDelta(
         unit +
         '[]\n', true
@@ -202,21 +202,14 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   assert.match(prompts[0].content, /Punctuation carries meaning/);
   assert.match(prompts[0].content, /never silently concatenate two completed source sentences/);
   assert.match(prompts[0].content, /must not force a new display page/);
-  assert.match(prompts[0].content, /\[\[4,\\?"\.\.\.\\?"\],\[9,/);
-  assert.match(prompts[0].content, /exactly \[end,translation\]/);
+  assert.match(prompts[0].content, /\[\[0,1,"\.\.\."\]\]/);
   assert.match(prompts[0].content, /zero-based and local to this request/);
   assert.match(prompts[0].content, /\[position,text\]/);
   assert.match(prompts[0].request, /CURRENT_CUES:\n\[\[0,"source"\]\]/);
   assert.doesNotMatch(prompts[0].request, /CURRENT_CUES:\n\[\[500/);
   assert.match(prompts[2].content, /never enumerate an ids array/i);
   assert.match(prompts[3].content, /Punctuation carries meaning/);
-  // Non-DeepSeek full prompt: end-only chunks.
-  assert.match(prompts[1].content, /\[\[1,"\.\.\."\],\[2,"\.\.\."\]\]/);
-  assert.match(prompts[1].content, /exactly \[end,translation\]/);
-  assert.match(prompts[1].content, /starts at local position 0/);
-  // DeepSeek keeps explicit ranges (its malformed-line rate was lower).
-  assert.match(prompts[3].content, /\[\[0,1,"\.\.\."\],\[2,2,"\.\.\."\]\]/);
-  assert.match(prompts[3].content, /exactly \[start,end,translation\]/);
+  assert.match(prompts[3].content, /\[\[0,1,"\.\.\."\]/);
   assert.match(prompts[3].content, /zero-based and local to this request/);
   assert.match(prompts[3].content, /never enumerate an ids array/i);
   assert.match(prompts[5].content, /never translate it as a period/);

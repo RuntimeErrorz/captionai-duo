@@ -14,7 +14,7 @@
   const AI_DEFAULT_MODEL = "deepseek-v4-flash";
   // Identity of the translation prompt and output protocol. Response caches
   // and the per-video ledger are invalidated whenever it changes.
-  const AI_PROMPT_CACHE_VERSION = "prompt-v36-end-only-jsonl";
+  const AI_PROMPT_CACHE_VERSION = "prompt-v35-line-discipline-jsonl";
   const AI_EXTRA_BODY_MAX_CHARS = 4096;
   const AI_EXTRA_BODY_MAX_DEPTH = 8;
   const AI_EXTRA_BODY_MAX_KEYS = 128;

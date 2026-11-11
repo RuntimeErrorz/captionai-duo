@@ -26,10 +26,12 @@ in `manifest.json` in order, and the service worker loads its modules through
 
 ## Translation pipeline invariants
 
-- **Output protocol.** The model streams one JSONL line per sentence; each
-  chunk is `[end,"translation"]` and starts right after the previous chunk
-  (`[start,end,"translation"]` is still accepted). Closed sentences are
-  accepted while their line is still streaming.
+- **Output protocol.** Every provider gets the same prompt: one JSONL line
+  per sentence, each chunk `[start,end,"translation"]`. The parser also
+  tolerates end-only `[end,"translation"]` chunks (start implied by the
+  previous chunk) and accepts closed sentences while their line is still
+  streaming. End-only prompting was benchmarked and showed no significant
+  difference, so the prompt stays provider-independent.
 - **Window decision.** `YTDS_SHARED.semanticCommitWindowPlan` decides each
   commit-lane request window from plain numbers. The content scheduler, the
   simulator (`scripts/simulate-scheduling.js`) and the tests all run it, so a
