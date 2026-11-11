@@ -3,7 +3,9 @@
 //
 //   node scripts/benchmark-providers.js --config <settings-backup.json> --log <debug-log.json> [--log ...]
 //        [--windows 64,96,160,320] [--prompt-append "candidate rule"] [--repeat 2]
-//        [--profiles name1,name2] [--samples 3] [--dry-run]
+//        [--profiles name1,name2] [--samples 3] [--span] [--dry-run]
+// --span joins two unrelated samples at a hard 4 s pause, as a request that
+// spans hard-pause regions does; units must not cross that boundary.
 //
 // --config is the file exported from the popup (Tools > Export settings); API
 // keys are read from it and used only for requests from this machine. --log
@@ -38,6 +40,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === "--samples") args.samples = Math.max(1, Number(next()) || 1);
   else if (flag === "--profiles") args.profiles = next().split(",");
   else if (flag === "--dry-run") args.dryRun = true;
+  else if (flag === "--span") args.span = true;
   else throw new Error(`unknown argument ${flag}`);
 }
 if (!args.config && !args.dryRun) throw new Error("--config <exported settings> is required");
@@ -87,6 +90,19 @@ function samplesFromLogs(files, count) {
     seen.add(key);
     return true;
   }).slice(0, count);
+}
+
+// Half of the window from one sample, cut after its last sentence end, then
+// a hard 4 s pause, then another sample.
+function spanItems(first, second, size) {
+  const firstRows = first.rows.slice(0, Math.floor(size / 2));
+  let cut = firstRows.length;
+  for (let index = firstRows.length - 1; index > 0; index--) {
+    if (/[.?!]["')\]]*$/.test(String(firstRows[index][1] || "").trim())) { cut = index + 1; break; }
+  }
+  const rows = firstRows.slice(0, cut).map((row, index) =>
+    index === cut - 1 ? [row[0], row[1], 4500, "h"] : row);
+  return sampleItems({ rows: rows.concat(second.rows.slice(0, size - cut)) }, size);
 }
 
 function sampleItems(sample, size) {
@@ -223,8 +239,8 @@ function lineStats(raw) {
   return { lines: lines.length, sentencesPerLine: lines.length ? +(sentences / lines.length).toFixed(2) : 0, maxLineItems: maxItems };
 }
 
-async function measure(runtime, sample, size, requestId) {
-  const items = sampleItems(sample, size);
+async function measure(runtime, sample, size, requestId, spanWith) {
+  const items = spanWith ? spanItems(sample, spanWith, size) : sampleItems(sample, size);
   const runway = 32;
   const guardLocal = items.length > runway * 2 ? items.length - runway : -1;
   const before = sample.contextBefore.map(([id, text]) => ({ id, text }));
@@ -330,9 +346,10 @@ const median = (values) => {
         for (const [sampleIndex, sample] of samples.entries()) {
           if (sample.rows.length < Math.min(size, 64)) continue;
           for (let repeat = 0; repeat < args.repeat; repeat++) {
-            const metrics = await measure(runtime, sample, size, `bench-${++serial}`);
+            const spanWith = args.span ? samples[(sampleIndex + 1) % samples.length] : null;
+            const metrics = await measure(runtime, sample, size, `bench-${++serial}`, spanWith);
             const run = { profile: profile.name, model: profile.model, rpm: profile.rateLimitRpm ?? 0,
-              variant, window: size, sample: sampleIndex, repeat, ...metrics };
+              variant, window: size, sample: sampleIndex, repeat, span: !!spanWith, ...metrics };
             runs.push(run);
             process.stdout.write(`${run.profile} ${variant} w${size} s${sampleIndex} r${repeat}: ` +
               `ttfb ${run.ttfbMs}ms first ${run.firstUnitMs}ms total ${run.totalMs}ms ` +

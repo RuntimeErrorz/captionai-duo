@@ -85,11 +85,12 @@ function aiCommitGuardLocal(requestStart, requestEnd, limitEnd, effectiveGuardIt
     ? guardStart - requestStart : -1;
 }
 
-// ---- request-limited span across hard-pause regions ----------------------
-// On a low-RPM profile every request is precious and many videos are cut
-// into short regions by 4 s pauses. A window that reaches its region end is
-// carried into the following regions nobody has started yet. Units never
-// cross the hard boundary, so each region still commits only its own units.
+// ---- span across hard-pause regions ---------------------------------------
+// Videos are often cut into short regions by 4 s pauses, and a request that
+// stops at every region end pays a cold first byte per region. A window that
+// reaches its region end is carried into the following regions nobody has
+// started yet. Units never cross the hard boundary, so each region still
+// commits only its own units, and every boundary is a free commit point.
 function aiPlanRegionSpan(regionIndex, requestStart, budgetValue) {
   const regions = captionSession.semanticCommitRegions;
   const budget = Math.max(1, Math.floor(Number(budgetValue) || 1));

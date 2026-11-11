@@ -2082,11 +2082,10 @@ test("lookahead crosses a hard pause by starting the next region at its true sta
   const prefetchBatches = vm.runInContext("prefetchAiBatches", harness.context);
   prefetchBatches(0, false);
 
-  const starts = harness.messages.filter((msg) => msg.type === "translateBatch")
-    .map((msg) => msg.requestStart);
-  // One writer per region, each at its region start; never a mid-region
-  // batch start such as 16 or 48 that would leave an uncovered gap.
-  assert.deepEqual(starts, [0, 32]);
+  const requests = harness.messages.filter((msg) => msg.type === "translateBatch");
+  // One request starts at region 0 and spans region 1 from its true start;
+  // never a mid-region start such as 16 or 48 that would leave a gap.
+  assert.deepEqual(requests.map((msg) => [msg.requestStart, msg.requestEnd]), [[0, 63]]);
   assert.equal(harness.context.captionSession.semanticCommitStateByRegion.get(1).lookaheadThrough, 63);
 });
 

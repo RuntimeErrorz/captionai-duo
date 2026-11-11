@@ -691,8 +691,9 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
       regionIndex, requestStart, futureStart: plan.futureStart, requestEnd, bridgeItems: plan.bridgeItems
     });
   }
-  const spanRegions = requestEnd === limitEnd && typeof aiRequestLimited === "function" &&
-    aiRequestLimited()
+  // A window that reaches its region end carries on into the following
+  // regions nobody has started yet, for every provider.
+  const spanRegions = requestEnd === limitEnd && typeof aiPlanRegionSpan === "function"
     ? aiPlanRegionSpan(regionIndex, requestStart, Math.max(targetAwareItems, aiSteadyRequestItems()))
     : [];
   if (spanRegions.length) requestEnd = spanRegions[spanRegions.length - 1].end;
