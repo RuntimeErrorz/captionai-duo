@@ -308,7 +308,7 @@ test("aligned display pages keep each source sentence with its translation", () 
 
 test("manifest metadata, permissions and icons", () => {
   assert.equal(manifest.minimum_chrome_version, "111");
-  assert.equal(manifest.version, "1.2.0");
+  assert.equal(manifest.version, "1.2.1");
   assert.equal(manifest.action.default_title, "__MSG_extName__");
   assert.deepEqual(manifest.permissions, ["storage", "webRequest"]);
   assert.deepEqual(manifest.host_permissions, ["https://api.deepseek.com/*"]);
