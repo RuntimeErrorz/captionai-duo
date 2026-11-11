@@ -2667,6 +2667,8 @@ test("a commit window is never shorter than twice the uncommitted runway, except
   vm.runInContext("pumpAiCommitRegion(0, false)", harness.context);
   const first = harness.messages.find((message) => message.type === "translateBatch");
   assert.equal(first.items.length, 64);
+  // The background may stop streaming where this request's runway begins.
+  assert.equal(first.commitGuardLocal, 32);
 
   const tail = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 48, targetThrough: 10, urgentTarget: -1, playbackRate: 1,
@@ -2675,4 +2677,64 @@ test("a commit window is never shorter than twice the uncommitted runway, except
   vm.runInContext("pumpAiCommitRegion(0, false)", tail.context);
   const short = tail.messages.find((message) => message.type === "translateBatch");
   assert.equal(short.items.length, 21, "a region end needs no runway");
+  assert.equal(short.commitGuardLocal, -1, "every unit can commit, so stream to the end");
+});
+
+test("a speculative window never overlaps a finished response still waiting for the cursor", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 96, targetThrough: 0, urgentTarget: -1, playbackRate: 1,
+    groupCount: 801, limitEnd: 800, deferResponses: true
+  });
+  const store = vm.runInContext("storeAiPrefetchCandidate", harness.context);
+  const sessionToken = harness.context.captureCaptionSession();
+  store(harness.state, {
+    requestId: "prefetch:0:1:352-447", prefetch: true, regionIndex: 0,
+    requestStart: 352, requestEnd: 447, commitFloor: 352, limitEnd: 800,
+    reqEpoch: 1, reqVid: "video", sessionToken, focusGeneration: 0
+  }, { ok: true, translations: rangeSemanticResponse(352, 447), deferredIds: [] });
+  harness.state.cursor = 331;
+
+  // The log showed 384-479 and 416-511 launched over a finished 352-447.
+  vm.runInContext("queueAiSpeculativeRequest(0, 384)", harness.context);
+  const launched = harness.messages.filter((message) => message.type === "translateBatch");
+  assert.equal(launched.length, 1);
+  assert.equal(launched[0].requestStart, 448);
+});
+
+test("a request-limited profile carries one request across short hard-pause regions", async () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 96, targetThrough: -1, urgentTarget: -1, playbackRate: 1,
+    groupCount: 300, limitEnd: 19, deferResponses: true, prefetchBatches: 4,
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
+    aiModel: "gemini-3.5-flash-lite-preview", aiRequestItems: 96
+  });
+  const session = harness.context.captionSession;
+  session.semanticCommitRegions = [{ start: 0, end: 19 }, { start: 20, end: 29 }, { start: 30, end: 299 }];
+  session.semanticGroupToCommitRegion = [
+    ...new Array(20).fill(0), ...new Array(10).fill(1), ...new Array(270).fill(2)
+  ];
+  harness.context.AI_MAX_PREFETCH_BATCHES = 12;
+  harness.context.AI_FAST_PREFETCH_BATCHES = 6;
+  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 8;
+  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
+  vm.runInContext("advanceAiLookahead(0)", harness.context);
+
+  const sent = () => harness.messages.filter((message) => message.type === "translateBatch");
+  assert.equal(sent().length, 1, "one request, not one per region");
+  assert.equal(sent()[0].requestStart, 0);
+  assert.equal(sent()[0].requestEnd, 95);
+  assert.equal(sent()[0].commitGuardLocal, 64, "only the last, partial region keeps a runway");
+
+  const pending = harness.pendingCallbacks[0];
+  pending.responded = true;
+  pending.callback({ ok: true, translations: rangeSemanticResponse(0, 95), deferredIds: [], httpDiagnostics: { attempts: [] } });
+  for (let tick = 0; tick < 6; tick++) await new Promise((resolve) => setImmediate(resolve));
+
+  const cursor = (index) => session.semanticCommitStateByRegion.get(index).cursor;
+  assert.equal(cursor(0), 20);
+  assert.equal(cursor(1), 30, "the second region commits from the shared response");
+  assert.equal(cursor(2), 64, "the third region commits up to its runway");
+  const next = sent().slice(1);
+  assert.equal(next.length, 1, "the lane continues with one request");
+  assert.equal(next[0].requestStart, 64);
 });

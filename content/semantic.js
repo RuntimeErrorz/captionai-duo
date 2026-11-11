@@ -555,8 +555,8 @@ function handleAiTranslationProgress(msg) {
   );
   const previousCursor = state.cursor;
   let nextCursor = commitAiResponsePrefix(
-    request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
-    request.limitEnd, pending, request.effectiveGuardItems,
+    request.regionIndex, previousCursor, Math.min(request.requestEnd, request.limitEnd),
+    state.commitFloor, request.limitEnd, pending, request.effectiveGuardItems,
     AI_MIN_COMMIT_RUNWAY_ITEMS
   );
   if ((!Number.isInteger(nextCursor) || nextCursor <= previousCursor) && request.urgent) {
@@ -564,8 +564,8 @@ function handleAiTranslationProgress(msg) {
       aiAlignedRecoveryInput(request.progressRecoveryTranslations, previousCursor)
     );
     const recoveredCursor = commitAiResponsePrefix(
-      request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
-      request.limitEnd, recoveredTranslations, request.effectiveGuardItems,
+      request.regionIndex, previousCursor, Math.min(request.requestEnd, request.limitEnd),
+      state.commitFloor, request.limitEnd, recoveredTranslations, request.effectiveGuardItems,
       AI_MIN_COMMIT_RUNWAY_ITEMS
     );
     if (Number.isInteger(recoveredCursor) && recoveredCursor > previousCursor) {
@@ -654,6 +654,7 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
     return;
   }
   const requestStart = state.cursor;
+  if (typeof aiSpanningRequestFor === "function" && aiSpanningRequestFor(regionIndex, requestStart)) return;
   // A live future response beginning at the cursor is already an acceptable
   // writer. Waiting for it avoids an urgent duplicate and preserves the
   // provider work that was started ahead of playback.
@@ -713,6 +714,11 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   if (requestEnd - requestStart + 1 < minUsefulItems) {
     requestEnd = Math.min(limitEnd, requestStart + minUsefulItems - 1);
   }
+  const spanRegions = requestEnd === limitEnd && typeof aiRequestLimited === "function" &&
+    aiRequestLimited()
+    ? aiPlanRegionSpan(regionIndex, requestStart, Math.max(targetAwareItems, aiSteadyRequestItems()))
+    : [];
+  if (spanRegions.length) requestEnd = spanRegions[spanRegions.length - 1].end;
   const items = [];
   let currentChars = 0;
   for (let id = requestStart; id <= requestEnd; id++) {
@@ -749,13 +755,19 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
       focusGeneration: captionSession.semanticFocusGeneration,
       itemCount: items.length,
       targetAwareItems,
-      maxRequestItems
+      maxRequestItems,
+      spanRegions
     });
   }
   sendRuntimeMessage({
     type: "translateBatch",
     endpointKind: aiEndpointKind(),
     requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
+    commitGuardLocal: typeof aiCommitGuardLocal === "function"
+      ? (spanRegions.length
+        ? aiSpanCommitGuardLocal(requestStart, spanRegions, effectiveGuardItems)
+        : aiCommitGuardLocal(requestStart, requestEnd, limitEnd, effectiveGuardItems))
+      : -1,
     debug: !!settings.debugEnabled,
     requestId,
     videoId: captionSession.cueVideoId,

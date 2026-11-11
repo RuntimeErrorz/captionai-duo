@@ -374,21 +374,36 @@ function noteAiSpeculativeRateLimit(response, runtimeError) {
   emitDebug("semantic-speculative-backoff", { delayMs: delay, reason });
   return true;
 }
+// Ranges a region already has a writer for: live requests and finished
+// speculative responses waiting for the cursor. Both are paid for, so a new
+// speculative window must never overlap either.
+function aiCoveredRequestRanges(regionIndex) {
+  const ranges = [];
+  for (const request of captionSession.semanticRequestMeta.values()) {
+    if (request && request.regionIndex === regionIndex) ranges.push(request);
+  }
+  const state = typeof aiCommitState === "function" ? aiCommitState(regionIndex) : null;
+  if (state && state.prefetchResponses) {
+    for (const stored of state.prefetchResponses.values()) {
+      if (stored && stored.request) ranges.push(stored.request);
+    }
+  }
+  return ranges;
+}
 function aiSpeculativeRangeOverlaps(regionIndex, start, end) {
-  return Array.from(captionSession.semanticRequestMeta.values()).some((request) =>
-    request && request.regionIndex === regionIndex && request.requestStart <= end &&
-    request.requestEnd >= start
+  return aiCoveredRequestRanges(regionIndex).some((request) =>
+    request.requestStart <= end && request.requestEnd >= start
   );
 }
 function aiSpeculativeStartAfterActive(regionIndex, startValue) {
   let start = Math.floor(Number(startValue));
   if (!Number.isInteger(start)) return start;
+  const ranges = aiCoveredRequestRanges(regionIndex);
   let changed = true;
   while (changed) {
     changed = false;
-    for (const request of captionSession.semanticRequestMeta.values()) {
-      if (!request || request.regionIndex !== regionIndex ||
-          request.requestStart > start || request.requestEnd < start) continue;
+    for (const request of ranges) {
+      if (request.requestStart > start || request.requestEnd < start) continue;
       const next = Number(request.requestEnd) + 1;
       if (next > start) { start = next; changed = true; }
     }
@@ -573,6 +588,8 @@ function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
   sendRuntimeMessage({
     type: "translateBatch", endpointKind: aiEndpointKind(),
     requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
+    commitGuardLocal: typeof aiCommitGuardLocal === "function"
+      ? aiCommitGuardLocal(start, requestEnd, state.limitEnd, requestMeta.effectiveGuardItems) : -1,
     debug: !!settings.debugEnabled, requestId,
     videoId: captionSession.cueVideoId,
     videoTimeMs: Math.round(((getVideo() && getVideo().currentTime) || 0) * 1000),

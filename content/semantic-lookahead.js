@@ -72,3 +72,87 @@ function advanceAiLookahead(groupIndex) {
   }
   return started;
 }
+
+// Local position (within a request) where the caller's uncommitted runway
+// begins, or -1 when the request reaches its region end and every unit can
+// commit. The background stops streaming once a unit reaches it.
+function aiCommitGuardLocal(requestStart, requestEnd, limitEnd, effectiveGuardItems) {
+  const guardStart = YTDS_SHARED.semanticCommitGuardStart(
+    requestStart, requestEnd, limitEnd, effectiveGuardItems, AI_MIN_COMMIT_RUNWAY_ITEMS
+  );
+  return Number.isInteger(guardStart) && guardStart > requestStart && guardStart <= requestEnd
+    ? guardStart - requestStart : -1;
+}
+
+// ---- request-limited span across hard-pause regions ----------------------
+// On a low-RPM profile every request is precious and many videos are cut
+// into short regions by 4 s pauses. A window that reaches its region end is
+// carried into the following regions nobody has started yet. Units never
+// cross the hard boundary, so each region still commits only its own units.
+function aiPlanRegionSpan(regionIndex, requestStart, budgetValue) {
+  const regions = captionSession.semanticCommitRegions;
+  const budget = Math.max(1, Math.floor(Number(budgetValue) || 1));
+  const spans = [];
+  if (!regions) return spans;
+  let requestEnd = regions[regionIndex] ? regions[regionIndex].end : requestStart - 1;
+  for (let next = regionIndex + 1; next < regions.length; next++) {
+    if (requestEnd - requestStart + 1 >= budget) break;
+    const region = regions[next];
+    const state = semanticCommitState(next);
+    if (!region || !state || state.cursor !== region.start || state.limitEnd !== region.end ||
+        captionSession.semanticExhaustedRegions.has(next) ||
+        captionSession.transInflight.has(`dsb:${next}`) ||
+        aiCoveredRequestRanges(next).length || aiSpanningRequestFor(next, region.start)) break;
+    const end = Math.min(region.end, requestStart + budget - 1);
+    spans.push({ regionIndex: next, start: region.start, end, regionEnd: region.end });
+    requestEnd = end;
+    if (end < region.end) break;
+  }
+  return spans;
+}
+
+// Early-stop position for a spanning request: only its last region can be
+// cut short by the window, so only that region has an uncommitted runway.
+function aiSpanCommitGuardLocal(requestStart, spans, effectiveGuardItems) {
+  const last = spans[spans.length - 1];
+  if (!last || last.end >= last.regionEnd) return -1;
+  const guardStart = YTDS_SHARED.semanticCommitGuardStart(
+    last.start, last.end, last.regionEnd, effectiveGuardItems, AI_MIN_COMMIT_RUNWAY_ITEMS
+  );
+  return Number.isInteger(guardStart) && guardStart > last.start && guardStart <= last.end
+    ? guardStart - requestStart : -1;
+}
+
+// A live spanning request already writes this region from its start.
+function aiSpanningRequestFor(regionIndex, cursor) {
+  for (const request of captionSession.semanticRequestMeta.values()) {
+    if (request && Array.isArray(request.spanRegions) && request.spanRegions.some((span) =>
+      span.regionIndex === regionIndex && span.start === cursor)) return request;
+  }
+  return null;
+}
+
+// Hand each spanned region its own slice of an accepted response, as a
+// finished speculative response waiting at that region's cursor.
+function distributeAiSpanResponse(request, resp) {
+  if (!request || !Array.isArray(request.spanRegions) || !request.spanRegions.length ||
+      !resp || !resp.ok || !Array.isArray(resp.translations)) return;
+  for (const span of request.spanRegions) {
+    const state = semanticCommitState(span.regionIndex);
+    if (!state || state.cursor !== span.start) continue;
+    const translations = resp.translations.filter((item) => {
+      const id = Number(item && item.id);
+      return id >= span.start && id <= span.end;
+    });
+    if (!translations.length) continue;
+    storeAiPrefetchCandidate(state, {
+      ...request,
+      prefetch: true, urgent: false, spanRegions: [],
+      regionIndex: span.regionIndex,
+      requestStart: span.start, requestEnd: span.end,
+      commitFloor: span.start, limitEnd: span.regionEnd,
+      progressTranslations: [], progressRecoveryTranslations: []
+    }, { ...resp, translations });
+    queueMicrotask(() => pumpAiCommitRegion(span.regionIndex, false));
+  }
+}

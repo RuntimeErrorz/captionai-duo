@@ -851,3 +851,34 @@ test("internal boundary overruns across adjacent chunks in one unit are trimmed 
   assert.equal(state.cursor, 7);
 });
 
+
+test("the stream stops once a unit reaches the caller's uncommitted runway", () => {
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  }, { requestClass: "prefetch", commitGuardLocal: 2 });
+
+  // Positions 0-1 end before the runway: keep streaming.
+  let status = observer.onTextDelta(wireUnit(rangeChunk(0, 1, "我遇到了美国士兵。")) + "\n", false);
+  assert.equal(status.stop, false);
+  // Position 2 is inside the runway: stop. No later record can revise the
+  // stream, so everything received is flushed; the caller's commit plan
+  // still keeps the runway unit uncommitted.
+  status = observer.onTextDelta(wireUnit(rangeChunk(2, 2, "他们帮助了我们。")) + "\n" +
+    wireUnit(rangeChunk(3, 3, "never parsed")) + "\n", false);
+  assert.equal(status.stop, true);
+  assert.equal(status.reason, "commit-guard-reached");
+  assert.deepEqual(progress, [["0", "1"], ["2"]]);
+  const partial = observer.result(true);
+  assert.equal(partial.streamPartial, true, "an early stop is never cached as complete");
+  assert.deepEqual(Array.from(partial, (item) => String(item.id)), ["0", "1", "2"]);
+});
+
+test("a request that reaches its region end streams to completion", () => {
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", () => {},
+    { requestClass: "prefetch", commitGuardLocal: -1 });
+  for (const line of [wireUnit(rangeChunk(0, 1, "a")), wireUnit(rangeChunk(2, 2, "b")),
+    wireUnit(rangeChunk(3, 3, "c"))]) {
+    assert.equal(observer.onTextDelta(`${line}\n`, false).stop, false);
+  }
+});

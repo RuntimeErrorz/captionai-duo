@@ -104,6 +104,9 @@ function parseTranslateBatch(msg, sender) {
     endpointKind: msg.endpointKind === "deepseek" || msg.endpointKind === "gemini"
       ? msg.endpointKind : "compatible",
     requestLimited: msg.requestLimited === true,
+    commitGuardLocal: Number.isInteger(msg.commitGuardLocal) &&
+      msg.commitGuardLocal > 0 && msg.commitGuardLocal < items.length
+      ? msg.commitGuardLocal : -1,
     focusGeneration: Math.max(0, Math.floor(Number(msg.focusGeneration) || 0))
   };
 }
@@ -255,6 +258,7 @@ function handleTranslateBatch(msg, sender, sendResponse) {
       urgent: batch.urgent,
       fastPath: !!msg.fastPath,
       bypassCache: !!msg.bypassCache,
+      commitGuardLocal: batch.commitGuardLocal,
       onProgress: (translations) => sendTranslationBatchProgress(sender, {
         type: "translationBatchProgress",
         requestId: batch.requestId,

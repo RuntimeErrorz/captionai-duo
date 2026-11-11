@@ -226,7 +226,10 @@ function handleAiBatchResult(request, resp, runtimeError) {
     regionIndex,
     requestId,
     requestStart: Number(request.requestStart),
-    requestEnd: Number(request.requestEnd),
+    // A request spanning later regions commits only inside its own region;
+    // the rest is handed to those regions below.
+    requestEnd: Math.min(Number(request.requestEnd),
+      Number.isInteger(request.limitEnd) ? request.limitEnd : Number(request.requestEnd)),
     reqVid: request.reqVid,
     reqEpoch: request.reqEpoch,
     urgent: !!request.urgent
@@ -252,6 +255,7 @@ function handleAiBatchResult(request, resp, runtimeError) {
     handleAiBatchRejected(ctx, resp, runtimeError);
     return;
   }
+  if (typeof distributeAiSpanResponse === "function") distributeAiSpanResponse(request, resp);
   if (request.prefetch) {
     const stored = storeAiPrefetchCandidate(state, request, resp);
     pumpAiSpeculativeRequests(regionIndex, state);

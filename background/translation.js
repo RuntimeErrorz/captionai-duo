@@ -82,6 +82,12 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
   let state = YTDS_SHARED.createAiJsonlTranslationState(items, targetLang, sourceLang);
   let recordBuffer = "";
   let pendingProgress = [];
+  // Units ending at or after this local position are never committed by the
+  // caller (its trailing runway). Once one arrives, nothing later can be
+  // used either, so stop paying for output. -1 disables the stop.
+  const commitGuardLocal = trace && Number.isInteger(trace.commitGuardLocal) &&
+    trace.commitGuardLocal > 0 && trace.commitGuardLocal < items.length
+    ? trace.commitGuardLocal : -1;
   const publishUnitsImmediately = !!(trace &&
     (String(trace.requestClass || "").startsWith("urgent") ||
       String(trace.requestClass || "") === "prefetch-fast"));
@@ -232,6 +238,13 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
               unitId: accepted.unitId,
               ids: accepted.ids
             });
+            if (commitGuardLocal >= 0 && state.cursor > commitGuardLocal) {
+              // This unit reaches the uncommitted runway. Everything before it
+              // is final; it and anything after are requested again from the
+              // new cursor, so the rest of this stream would be discarded.
+              publishPending();
+              return status(true, "commit-guard-reached");
+            }
           }
         }
         if (decoded.recovered && state.cursor < state.expected.length) {
@@ -513,7 +526,9 @@ async function aiTranslateBatch(
           debug,
           requestId: requestMeta && requestMeta.requestId || "",
           requestClass: priority,
-          onProgress: requestMeta && requestMeta.onProgress
+          onProgress: requestMeta && requestMeta.onProgress,
+          commitGuardLocal: requestMeta && Number.isInteger(requestMeta.commitGuardLocal)
+            ? requestMeta.commitGuardLocal : -1
         }
       );
       Object.defineProperty(result, "failures", { value: [] });
