@@ -515,19 +515,67 @@
         ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
       return reject(`oversized JSONL unit ${allIds[0]}-${allIds[allIds.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
     }
-    const speakerSwitches = speakerSwitchSeparators(
-      allChunks, state.items.slice(allStart, allEnd)
-    );
-    const translation = joinTranslatedParts(allChunks, state.targetLang, speakerSwitches);
-    const unitId = `semantic-${allIds[0]}-${allIds[allIds.length - 1]}`;
-    const translations = allIds.map((id, index) => index === 0
-      ? { id, translation, unitId, alignedChunks: allChunks }
-      : { id, translation, unitId });
+    // Some models put several complete sentences on one JSONL line. The
+    // protocol asks for one sentence per line; restore that granularity so
+    // finished sentences commit and display without waiting for the line's
+    // possibly unfinished last clause.
+    const translations = [];
+    let itemOffset = allStart;
+    for (const group of sentenceChunkGroups(allChunks, state.items, allStart)) {
+      const groupIds = group.flatMap((chunk) => chunk.ids);
+      const groupItems = state.items.slice(itemOffset, itemOffset + groupIds.length);
+      itemOffset += groupIds.length;
+      const translation = joinTranslatedParts(
+        group, state.targetLang, speakerSwitchSeparators(group, groupItems)
+      );
+      const unitId = `semantic-${groupIds[0]}-${groupIds[groupIds.length - 1]}`;
+      translations.push(...groupIds.map((id, index) => index === 0
+        ? { id, translation, unitId, alignedChunks: group }
+        : { id, translation, unitId }));
+    }
     state.translations.push(...translations);
     state.cursor = chunkBaseOffset + ids.length;
     state.pendingTrimmedCount = trimmedCount;
     state.pendingMarkerChunks = [];
-    return { ok: true, type: "unit", unitId, ids: allIds, translations };
+    return {
+      ok: true, type: "unit", unitId: translations[0].unitId, ids: allIds, translations,
+      unitCount: new Set(translations.map((item) => item.unitId)).size
+    };
+  }
+
+  const SOURCE_SENTENCE_END = /[.?!…](?:["'”’)\]]*)$/;
+  const TARGET_SENTENCE_END = /[。！？!?…](?:["'”’」』）)\]]*)(?:\s|>>)*$/;
+
+  // Split a line's ordered chunks after every chunk that closes a sentence
+  // in the source or the translation. A line holding one sentence stays one
+  // group; the last group may be an unfinished clause.
+  function sentenceChunkGroups(chunks, items, startIndex) {
+    const groups = [];
+    let current = [];
+    let index = startIndex;
+    for (const chunk of chunks) {
+      current.push(chunk);
+      index += chunk.ids.length;
+      const lastSource = String(items[index - 1] && items[index - 1].text || "").trim();
+      const translated = String(chunk.translation || "");
+      // A source period alone may be an abbreviation (Mr., U.S.); trust it
+      // only when the translation does not continue the clause.
+      const closes = chunk.sentenceBoundaryAfter === true ||
+        TARGET_SENTENCE_END.test(translated) ||
+        (SOURCE_SENTENCE_END.test(lastSource) && !/[，,、;；:：—–-]\s*$/.test(translated));
+      if (closes && chunk.translation) {
+        groups.push(current);
+        current = [];
+      }
+    }
+    if (current.length) {
+      if (groups.length && !current.some((chunk) => chunk.translation)) {
+        groups[groups.length - 1].push(...current); // trailing markers stay attached
+      } else {
+        groups.push(current);
+      }
+    }
+    return groups;
   }
 
   // When a provider puts several complete alignment chunks inside one outer

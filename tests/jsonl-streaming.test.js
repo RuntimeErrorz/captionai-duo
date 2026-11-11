@@ -33,6 +33,12 @@ function rangeChunk(start, end, translation) {
   return [Number(start), Number(end), translation];
 }
 
+// A line may hold several sentences; each becomes its own unit.
+function lineChunks(translations) {
+  return Array.from(translations).filter((item) => item.alignedChunks)
+    .flatMap((item) => Array.from(item.alignedChunks));
+}
+
 function wireUnit(...chunks) {
   return JSON.stringify(chunks);
 }
@@ -65,11 +71,13 @@ test("compact JSONL ranges expand into the same ordered alignment coverage", () 
 
   assert.equal(accepted.ok, true);
   assert.deepEqual(Array.from(accepted.ids), ["0", "1", "2"]);
-  assert.deepEqual(Array.from(accepted.translations[0].alignedChunks, (chunk) =>
-    Array.from(chunk.ids)), [
+  assert.deepEqual(lineChunks(accepted.translations).map((chunk) => Array.from(chunk.ids)), [
     ["0", "1"], ["2"]
   ]);
-  assert.equal(accepted.translations[0].translation, "我遇到了美国士兵 他们帮助了我们");
+  // Two completed sentences on one line become two units.
+  assert.equal(accepted.unitCount, 2);
+  assert.equal(accepted.translations[0].translation, "我遇到了美国士兵");
+  assert.equal(accepted.translations[2].translation, "他们帮助了我们");
   assert.equal(state.cursor, 3);
 });
 
@@ -273,11 +281,12 @@ test("JSONL folds validated empty markers into a neighboring aligned chunk", () 
   });
 
   assert.equal(accepted.ok, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(accepted.translations[0].alignedChunks)), [
+  assert.deepEqual(JSON.parse(JSON.stringify(lineChunks(accepted.translations))), [
     { ids: ["0", "1"], translation: "你好", sentenceBoundaryAfter: true },
     { ids: ["2"], translation: "世界", sentenceBoundaryAfter: true }
   ]);
-  assert.equal(accepted.translations[0].translation, "你好 世界");
+  assert.equal(accepted.translations[0].translation, "你好");
+  assert.equal(accepted.translations[2].translation, "世界");
 });
 
 test("JSONL fills an omitted standalone speaker marker but never an omitted word", () => {
@@ -293,7 +302,7 @@ test("JSONL fills an omitted standalone speaker marker but never an omitted word
 
   assert.equal(recovered.ok, true);
   assert.deepEqual(Array.from(recovered.ids), ["0", "1", "2"]);
-  assert.deepEqual(JSON.parse(JSON.stringify(recovered.translations[0].alignedChunks)), [
+  assert.deepEqual(JSON.parse(JSON.stringify(lineChunks(recovered.translations))), [
     { ids: ["0", "1"], translation: "你好", sentenceBoundaryAfter: true },
     { ids: ["2"], translation: "世界", sentenceBoundaryAfter: true }
   ]);
@@ -462,8 +471,10 @@ test("JSONL separates aligned Chinese chunks at an explicit speaker turn", () =>
   });
 
   assert.equal(accepted.ok, true);
-  assert.equal(accepted.translations[0].translation, "是吗？ 对，对的");
-  assert.equal(accepted.translations[0].alignedChunks[1].translation, "对，对的");
+  // Each speaker turn closes a sentence, so each becomes its own unit.
+  assert.equal(accepted.translations[0].translation, "是吗？");
+  assert.equal(accepted.translations[3].translation, "对，对的");
+  assert.equal(lineChunks(accepted.translations)[1].translation, "对，对的");
 });
 
 test("JSONL keeps oversized units when multiple aligned chunks provide recovery boundaries", () => {
@@ -843,7 +854,7 @@ test("internal boundary overruns across adjacent chunks in one unit are trimmed 
     ]
   });
   assert.equal(unit.ok, true);
-  const aligned = unit.translations[0].alignedChunks;
+  const aligned = lineChunks(unit.translations);
   assert.equal(aligned.length, 3);
   assert.deepEqual(Array.from(aligned[0].ids), ["10", "11"]);
   assert.deepEqual(Array.from(aligned[1].ids), ["12", "13", "14"]);
@@ -881,4 +892,34 @@ test("a request that reaches its region end streams to completion", () => {
     wireUnit(rangeChunk(3, 3, "c"))]) {
     assert.equal(observer.onTextDelta(`${line}\n`, false).stop, false);
   }
+});
+
+test("a whole window on one JSONL line still commits sentence by sentence", () => {
+  // Observed with deepseek-v4-flash: 23 sentences on one line, the last one
+  // unfinished. Without splitting, the line was one giant unit touching the
+  // window end, so nothing committed and the window was requested again.
+  const words = ["I", "enjoy", "this.", "[LAUGHTER]", "Let", "me", "prepare.", "Meanwhile", "he", "earned"];
+  const items = words.map((text, id) => ({ id: String(id), text, startMs: id * 400, endMs: id * 400 + 400, hardAfter: false }));
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN", "en");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, { type: "unit", chunks: [
+    rangeChunk(0, 2, "我喜欢这个。"), rangeChunk(3, 3, "[笑声]"),
+    rangeChunk(4, 6, "让我准备一下。"), rangeChunk(7, 9, "与此同时，他赚了，")
+  ] });
+  assert.equal(accepted.ok, true);
+  const units = [];
+  for (const item of accepted.translations) {
+    if (!units.length || units[units.length - 1].unitId !== item.unitId) units.push({ unitId: item.unitId, ids: [] });
+    units[units.length - 1].ids.push(item.id);
+  }
+  assert.deepEqual(units.map((unit) => unit.ids), [["0", "1", "2"], ["3", "4", "5", "6"], ["7", "8", "9"]]);
+});
+
+test("an abbreviation period does not split a sentence", () => {
+  const words = ["Mr.", "Smith", "said", "no."];
+  const items = words.map((text, id) => ({ id: String(id), text, startMs: id * 400, endMs: id * 400 + 400, hardAfter: false }));
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN", "en");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, { type: "unit", chunks: [
+    rangeChunk(0, 0, "史密斯先生，"), rangeChunk(1, 3, "说不。")
+  ] });
+  assert.equal(accepted.unitCount, 1);
 });
