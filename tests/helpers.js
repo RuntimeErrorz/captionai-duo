@@ -27,6 +27,7 @@ const CONTENT_FILES = Object.freeze([
   "content/display.js",
   "content/semantic-requests.js",
   "content/semantic-results.js",
+  "content/semantic-lookahead.js",
   "content/semantic.js",
   "content/cue-indicator.js",
   "content/export.js",

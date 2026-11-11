@@ -176,6 +176,7 @@ function semanticCommitState(regionIndex) {
       limitEnd: region.end,
       targetThrough: region.start - 1,
       urgentTarget: region.start - 1,
+      lookaheadThrough: region.start - 1,
       windowItems: aiInitialRequestItems(),
       recoveryWindowItems: false, noProgressRange: "",
       prefetchQueue: [],
@@ -368,6 +369,7 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
   state.limitEnd = Math.max(effectiveTarget, limitEnd);
   state.targetThrough = requestStart - 1;
   state.urgentTarget = requestStart - 1;
+  state.lookaheadThrough = requestStart - 1;
   state.windowItems = aiInitialRequestItems();
   state.recoveryWindowItems = false; state.noProgressRange = "";
   emitDebug("semantic-commit-reseeded", {
@@ -645,7 +647,7 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   const regions = captionSession.semanticCommitRegions;
   const region = regions ? regions[regionIndex] : null;
   const state = semanticCommitState(regionIndex);
-  if (!region || !state || state.cursor > state.limitEnd || state.cursor > state.targetThrough) return;
+  if (!region || !state || !aiCommitPending(state)) return;
   const prefetched = takeAiPrefetchedResponse(state);
   if (prefetched) {
     handleAiBatchResult(prefetched.request, prefetched.response, null);
@@ -701,6 +703,15 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
         regionIndex, requestStart, futureStart, requestEnd, bridgeItems
       });
     }
+  }
+  // The trailing runway is never committed, so a shorter window can only buy
+  // a no-progress round trip. Streaming shows the first unit just as early in
+  // a wider window; only the region's own end may cut a request shorter.
+  const minUsefulItems = Math.min(
+    maxRequestItems, 2 * Math.max(guardItems, AI_MIN_COMMIT_RUNWAY_ITEMS)
+  );
+  if (requestEnd - requestStart + 1 < minUsefulItems) {
+    requestEnd = Math.min(limitEnd, requestStart + minUsefulItems - 1);
   }
   const items = [];
   let currentChars = 0;

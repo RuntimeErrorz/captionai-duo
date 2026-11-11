@@ -12,6 +12,14 @@ function aiUrgentCommitPending(state) {
   return state.cursor <= state.targetThrough && state.cursor <= state.limitEnd;
 }
 
+// After a lane settles, keep lookahead moving: continue this region or start
+// the next one, measured from the playback position.
+function continueAiLookahead(fromGroup) {
+  const active = captionSession.activeGroupIdx;
+  const anchor = Number.isInteger(active) && active >= 0 ? active : fromGroup;
+  queueMicrotask(() => advanceAiLookahead(anchor));
+}
+
 function queueAiCommitPump(ctx) {
   queueMicrotask(() => pumpAiCommitRegion(
     ctx.regionIndex, aiKeepAcceleratedUrgentLane(ctx.urgent, ctx.state)
@@ -49,7 +57,7 @@ function handleAiPrefetchFailure(ctx, resp, runtimeError) {
 function continueOrRetryAiCommit(ctx, scheduleRetry) {
   if (ctx.state.cursor > ctx.requestStart) {
     repaintActiveAiTranslation();
-    if (aiUrgentCommitPending(ctx.state)) queueAiCommitPump(ctx);
+    if (aiCommitPending(ctx.state)) queueAiCommitPump(ctx);
     return;
   }
   if (scheduleRetry()) repaintActiveAiTranslation();
@@ -203,7 +211,8 @@ function handleAiBatchAccepted(ctx, resp) {
   const urgentPending = aiUrgentCommitPending(state);
   if (!isGemini || !urgentPending) pumpAiSpeculativeRequests(regionIndex, state);
   repaintActiveAiTranslation();
-  if (urgentPending) queueAiCommitPump(ctx);
+  if (aiCommitPending(state)) queueAiCommitPump(ctx);
+  else continueAiLookahead(state.cursor);
 }
 
 function handleAiBatchResult(request, resp, runtimeError) {

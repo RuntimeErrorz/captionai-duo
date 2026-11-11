@@ -14,6 +14,7 @@ const semanticSource = [
   "content/semantic-policy.js",
   "content/semantic-requests.js",
   "content/semantic-results.js",
+  "content/semantic-lookahead.js",
   "content/semantic.js",
   "content/cue-indicator.js"
 ].map((file) => fs.readFileSync(path.join(root, file), "utf8")).join("\n");

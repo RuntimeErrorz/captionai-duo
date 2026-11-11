@@ -11,7 +11,7 @@ const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
 const semanticSource = [
   "content/semantic-policy.js", "content/semantic-requests.js",
-  "content/semantic-results.js", "content/semantic.js",
+  "content/semantic-results.js", "content/semantic-lookahead.js", "content/semantic.js",
   "content/cue-indicator.js"
 ].map((file) =>
   fs.readFileSync(path.join(root, file), "utf8")).join("\n");
@@ -1077,7 +1077,8 @@ test("stale prefetch is cancelled before an urgent request is rebuilt", () => {
   assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[1].type, "translateBatch");
   assert.equal(harness.messages[1].urgent, true);
-  assert.equal(harness.messages[1].items.length, 48);
+  // Never below twice the uncommitted runway: a shorter window cannot commit.
+  assert.equal(harness.messages[1].items.length, 64);
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-stale-prefetch-reseed"
   ), true);
@@ -1271,7 +1272,7 @@ test("urgent giant units wait for a full runway before aligned-chunk recovery", 
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(harness.messages.map((message) => message.items.length), [57, 160]);
+  assert.deepEqual(harness.messages.map((message) => message.items.length), [64, 160]);
   assert.ok(harness.messages.every((message) => message.urgent));
   assert.ok(harness.state.cursor >= 120);
   assert.equal(harness.context.captionSession.transCache.get("video g10"), "分段1");
@@ -1722,42 +1723,6 @@ test("accelerated prefetch skips the live writer and uses the fast transport pat
   assert.equal(harness.messages[2].requestStart, 272);
 });
 
-test("3x DeepSeek playback keeps a cost-bounded future runway before any response", () => {
-  const { harness, requests } = loadPlaybackPrefetchHarness({
-    windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
-    batchSize: 64, groupCount: 1201, limitEnd: 1200,
-    maxPrefetchBatches: 12, fastPrefetchBatches: 6, highSpeedPrefetchBatches: 12
-  });
-
-  assert.deepEqual(requests.map((message) => message.requestStart), [
-    0, 64, 160, 256, 352
-  ]);
-  assert.equal(harness.pendingCallbacks.length, 5);
-  assert.ok(requests.slice(1).every((message) =>
-    message.urgent === false && message.fastPath === true
-  ));
-});
-
-test("3x DeepSeek uses a short visible writer while Gemini keeps the wider lane", () => {
-  const deepseek = loadPlaybackPrefetchHarness({
-    windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
-    batchSize: 32, maxPrefetchBatches: 12, highSpeedPrefetchBatches: 12
-  });
-  const aiRequests = deepseek.requests;
-  assert.equal(aiRequests[0].requestStart, 0);
-  assert.equal(aiRequests[0].items.length, 48);
-  assert.ok(aiRequests[1].requestStart > aiRequests[0].requestEnd);
-
-  const gemini = loadPlaybackPrefetchHarness({
-    windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
-    batchSize: 32, maxPrefetchBatches: 12, highSpeedPrefetchBatches: 12,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai"
-  });
-  const geminiRequests = gemini.requests;
-  assert.equal(geminiRequests[0].requestStart, 0);
-  assert.equal(geminiRequests[0].items.length, 80);
-});
-
 test("Gemini Flash Lite uses the configured request window at ordinary playback", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
@@ -1783,110 +1748,67 @@ test("Gemini Flash Lite uses the configured request window at ordinary playback"
   assert.equal(customRequests[0].items.length, 160);
 });
 
-test("Gemini Flash Lite uses configured urgent runway and speculative lookahead at high speed", () => {
-  const { harness, requests } = loadPlaybackPrefetchHarness({
-    windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
-    batchSize: 32, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
-    highSpeedPrefetchBatches: 12, prefetchBatches: 1,
-    aiRequestItems: 320,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    aiModel: "gemini-3.5-flash-lite-preview"
-  });
-
-  assert.equal(requests.length, 2);
-  assert.equal(requests[0].endpointKind, "gemini");
-  assert.equal(requests[0].items.length, 320);
-  assert.equal(requests[0].urgent, true);
-  assert.equal(requests[1].endpointKind, "gemini");
-  assert.equal(requests[1].requestStart, 320);
-  assert.equal(requests[1].urgent, false);
-});
-
-test("3x compatible playback keeps a provider-safe speculative lane", () => {
-  const { harness, requests } = loadPlaybackPrefetchHarness({
-    windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
-    batchSize: 64, maxPrefetchBatches: 12, fastPrefetchBatches: 6,
-    highSpeedPrefetchBatches: 12,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai"
-  });
-
-  assert.deepEqual(requests.map((message) => message.requestStart), [0, 80, 176, 272]);
-  assert.equal(harness.pendingCallbacks.length, 4);
-  assert.ok(requests.every((message) => message.endpointKind === "compatible"));
-});
-
-test("2x DeepSeek playback also fills an accelerated runway", () => {
-  const { harness, requests } = loadPlaybackPrefetchHarness({
-    windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 2,
-    batchSize: 64, maxPrefetchBatches: 8, fastPrefetchBatches: 8,
-    highSpeedPrefetchBatches: 12
-  });
-
-  assert.deepEqual(requests.map((message) => message.requestStart), [
-    0, 64, 160, 256
-  ]);
-  assert.equal(harness.pendingCallbacks.length, 4);
-  assert.ok(requests.every((message) => message.endpointKind === "deepseek"));
-});
-
-test("3x playback consumes staged future ranges while the current response is slow", async () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
-    windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
-    batchSize: 64, deferResponses: true
-  });
-  harness.context.settings.enabled = true;
-  harness.context.AI_MAX_PREFETCH_BATCHES = 10;
-  harness.context.AI_FAST_PREFETCH_BATCHES = 6;
-  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 10;
-  harness.context.captionSession.activeGroupIdx = 0;
-  vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
-  vm.runInContext("prefetchFrom(0)", harness.context);
-
-  const respond = async (requestStart, start, end) => {
-    const pending = harness.pendingCallbacks.find((entry) =>
-      !entry.responded && entry.message.requestStart === requestStart
-    );
-    assert.ok(pending, `missing pending response for ${requestStart}`);
-    pending.responded = true;
-    pending.callback({
+// Lookahead runs as one sequential writer per region. Each request starts
+// exactly at the committed cursor (a proven unit boundary), so playback never
+// meets an uncovered gap and no window re-translates a finished range.
+async function driveLookaheadLane(harness, maxSteps = 40) {
+  const starts = [];
+  for (let step = 0; step < maxSteps; step++) {
+    const pending = harness.pendingCallbacks.filter((entry) => !entry.responded);
+    if (!pending.length) break;
+    assert.equal(pending.length, 1, "one region must have exactly one writer");
+    const entry = pending[0];
+    assert.equal(entry.message.requestStart, harness.state.cursor,
+      "every request must start at the committed cursor");
+    starts.push(entry.message.requestStart);
+    entry.responded = true;
+    entry.callback({
       ok: true,
-      translations: rangeSemanticResponse(start, end),
+      translations: rangeSemanticResponse(entry.message.requestStart, entry.message.requestEnd),
       deferredIds: [],
       httpDiagnostics: { attempts: [] }
     });
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-  };
-
-  // Let the look-ahead finish before the visible writer. A slow current
-  // response must not make these already-paid-for ranges unusable.
-  await respond(64, 64, 159);
-  await respond(160, 160, 255);
-  await respond(256, 256, 351);
-  await respond(352, 352, 447);
-  assert.equal(harness.state.cursor, 0);
-  assert.equal(harness.state.prefetchResponses.has(64), true);
-  assert.equal(harness.state.prefetchResponses.has(160), true);
-
-  await respond(0, 0, 63);
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const continuation = harness.pendingCallbacks.find((entry) =>
-      !entry.responded && entry.message.type === "translateBatch" &&
-      entry.message.urgent && entry.message.requestStart === harness.state.cursor
-    );
-    if (!continuation) break;
-    await respond(
-      continuation.message.requestStart,
-      continuation.message.requestStart,
-      continuation.message.requestEnd
-    );
+    for (let tick = 0; tick < 4; tick++) await new Promise((resolve) => setImmediate(resolve));
   }
-  assert.ok(harness.state.cursor >= 128);
-  assert.equal(harness.state.prefetchResponses.has(64), false);
-  assert.ok(Array.from(harness.state.prefetchResponses.keys()).every((start) =>
-    Number(start) >= harness.state.cursor
-  ));
-});
+  return starts;
+}
+
+for (const [label, providerOptions] of [
+  ["DeepSeek", {}],
+  ["Gemini", {
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiModel: "gemini-3.5-flash-lite-preview", aiRequestItems: 320
+  }],
+  ["compatible", { aiBaseUrl: "https://gateway.example/v1", aiModel: "other-model" }]
+]) {
+  test(`3x ${label} playback keeps one gap-free lookahead writer within its prefetch budget`, async () => {
+    const { harness, requests } = loadPlaybackPrefetchHarness({
+      windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3,
+      batchSize: 64, groupCount: 1201, limitEnd: 1200,
+      maxPrefetchBatches: 12, fastPrefetchBatches: 6, highSpeedPrefetchBatches: 8,
+      ...providerOptions
+    });
+    assert.equal(requests.length, 1, "no parallel staged windows before the first response");
+    assert.equal(requests[0].requestStart, 0);
+    assert.equal(requests[0].urgent, true);
+
+    const starts = await driveLookaheadLane(harness);
+    const lookaheadEnd = 8 * 32;
+    // A wide window (Gemini) may cover the whole lookahead in one request;
+    // narrower windows must keep continuing from the cursor.
+    assert.ok(starts.length >= 2 || harness.state.cursor > 8 * 32,
+      "the lane must reach the lookahead");
+    assert.ok(harness.state.cursor > lookaheadEnd, "the lane must pass the lookahead end");
+    assert.ok(starts.every((start) => start <= lookaheadEnd),
+      "no request may start beyond the configured lookahead");
+    const visibleThrough = harness.state.targetThrough;
+    const sent = harness.messages.filter((message) => message.type === "translateBatch");
+    assert.ok(sent.filter((message) => message.requestStart > visibleThrough)
+      .every((message) => message.urgent === false),
+      `lookahead beyond the visible target (${visibleThrough}) must not be urgent: ` +
+      JSON.stringify(sent.map((m) => [m.requestStart, m.requestEnd, m.urgent])));
+  });
+}
 
 test("a commit supersedes only the overlapping provisional prefix and reuses the future suffix", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
@@ -2132,7 +2054,7 @@ test("settling an active request clears local-concurrency backoff and pumps spec
   assert.ok(harness.messages.some((msg) => msg.type === "translateBatch" && msg.requestStart === 80));
 });
 
-test("prefetchAiBatches does not cross commit region boundary into inactive regions", () => {
+test("lookahead crosses a hard pause by starting the next region at its true start", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     groupCount: 64, limitEnd: 63, prefetchBatches: 4
   });
@@ -2168,9 +2090,12 @@ test("prefetchAiBatches does not cross commit region boundary into inactive regi
   const prefetchBatches = vm.runInContext("prefetchAiBatches", harness.context);
   prefetchBatches(0, false);
 
-  assert.ok(harness.messages.some((msg) => msg.requestStart === 16));
-  assert.equal(harness.context.captionSession.semanticCommitStateByRegion.has(1), false);
-  assert.equal(harness.messages.some((msg) => msg.requestStart >= 32), false);
+  const starts = harness.messages.filter((msg) => msg.type === "translateBatch")
+    .map((msg) => msg.requestStart);
+  // One writer per region, each at its region start; never a mid-region
+  // batch start such as 16 or 48 that would leave an uncovered gap.
+  assert.deepEqual(starts, [0, 32]);
+  assert.equal(harness.context.captionSession.semanticCommitStateByRegion.get(1).lookaheadThrough, 63);
 });
 
 test("non-urgent aiRequestBatch on an inactive region does not commit", () => {
@@ -2265,7 +2190,9 @@ test("a future response bridge keeps only the boundary overlap", () => {
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   assert.equal(harness.messages[0].requestStart, 64);
-  assert.equal(harness.messages[0].requestEnd, 111);
+  // The bridge still targets the future response, but never below the
+  // minimum useful window (twice the uncommitted runway).
+  assert.equal(harness.messages[0].requestEnd, 127);
   assert.equal(harness.debug.some((entry) => entry.event === "semantic-prefetch-bridge"), true);
 
   harness.messages.length = 0;
@@ -2737,4 +2664,23 @@ test("webRequest diagnostics preserve Chromium's underlying net error", () => {
   for (const name of ["before", "error", "completed"]) {
     assert.equal(filters[name].tabId, -1, `${name} must not observe page traffic`);
   }
+});
+
+test("a commit window is never shorter than twice the uncommitted runway, except at a region end", () => {
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 48, targetThrough: 10, urgentTarget: -1, playbackRate: 1,
+    groupCount: 301, limitEnd: 300, deferResponses: true
+  });
+  // A non-urgent lane would otherwise use its 48-item window.
+  vm.runInContext("pumpAiCommitRegion(0, false)", harness.context);
+  const first = harness.messages.find((message) => message.type === "translateBatch");
+  assert.equal(first.items.length, 64);
+
+  const tail = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    windowItems: 48, targetThrough: 10, urgentTarget: -1, playbackRate: 1,
+    groupCount: 21, limitEnd: 20, deferResponses: true
+  });
+  vm.runInContext("pumpAiCommitRegion(0, false)", tail.context);
+  const short = tail.messages.find((message) => message.type === "translateBatch");
+  assert.equal(short.items.length, 21, "a region end needs no runway");
 });
