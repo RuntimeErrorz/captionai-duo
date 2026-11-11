@@ -20,8 +20,9 @@ in `manifest.json` in order, and the service worker loads its modules through
   `captionSession` owner for video/track/playback/request/display/fallback state,
   its opaque identity and reset boundary, versioned diagnostics, semantic
   request/retry ownership (`semantic-requests.js`), batch-result commit and
-  retry (`semantic-results.js`), semantic translation, export, bridge, and
-  lifecycle.
+  retry (`semantic-results.js`), commit-lane lookahead and request-limited
+  region spans (`semantic-lookahead.js`), semantic translation, export,
+  bridge, and lifecycle.
 - `background/` contains service-worker state, Chromium network diagnostics,
   HTTP transport, translation, and message routing. `background.js` only
   declares their deterministic order. Network diagnostics observe only

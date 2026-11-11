@@ -38,6 +38,20 @@ implementation condition.
 6. Inspect `git diff --check` and the final diff. Explain the root cause, why the
    fix is general, verification evidence, and remaining risk.
 
+## Scheduling replay
+
+Scheduler changes can be compared without a provider. The replay drives the
+real content scheduler through a deterministic pause-heavy (`short`) or
+monologue (`long`) timeline with a simulated DeepSeek-like or low-RPM
+Gemini-like provider, and reports caption wait time, request count and
+input/output amplification:
+
+```sh
+node scripts/simulate-scheduling.js . deepseek 2 short
+git archive <old-commit> | tar -x -C /tmp/old
+node scripts/simulate-scheduling.js /tmp/old deepseek 2 short
+```
+
 ## Manual Chrome smoke checks
 
 Perform the relevant checks whenever behavior crosses the browser boundary:
