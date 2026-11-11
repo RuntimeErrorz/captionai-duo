@@ -137,16 +137,12 @@ function advanceAiCommitCursor(ctx, resp, nextCursor) {
   const { request, state } = ctx;
   request.lastProgressAt = Date.now();
   request.progressCursor = nextCursor;
-  state.cursor = nextCursor;
-  state.commitFloor = nextCursor;
+  const hadDeferrals = Array.isArray(resp && resp.deferredIds) && resp.deferredIds.length > 0;
+  YTDS_SHARED.commitStateAdvance(state, nextCursor,
+    hadDeferrals ? Math.min(aiUrgentRequestItems(), 96) : aiSteadyRequestItems());
   if (typeof aiSkipCommittedBlock === "function") aiSkipCommittedBlock(ctx.regionIndex, state);
   reconcileAiPrefetchCandidates(state, state.cursor);
   if (request.promotedFromPrefetch) storeAiPrefetchCandidate(state, request, resp);
-  const hadDeferrals = Array.isArray(resp && resp.deferredIds) && resp.deferredIds.length > 0;
-  state.windowItems = hadDeferrals
-    ? Math.min(aiUrgentRequestItems(), 96)
-    : aiSteadyRequestItems();
-  state.recoveryWindowItems = false; state.noProgressRange = "";
 }
 
 function clearAiRegionRetryState(ctx) {
@@ -184,7 +180,7 @@ function handleAiBatchAccepted(ctx, resp) {
   const madeProgress = state.cursor > requestStart;
   const noProgressRange = `${finalStart}:${requestEnd}`;
   const repeatedNoProgress = !request.prefetch && !madeProgress && state.noProgressRange === noProgressRange;
-  if (!request.prefetch && !madeProgress) state.noProgressRange = noProgressRange;
+  if (!request.prefetch && !madeProgress) YTDS_SHARED.commitStateNoProgress(state, noProgressRange);
   if (madeProgress) {
     clearAiRegionRetryState(ctx);
   } else if (canExpand && !request.prefetch && !repeatedNoProgress) {
@@ -192,9 +188,8 @@ function handleAiBatchAccepted(ctx, resp) {
     const leadingUnitReachesEnd = aiLeadingUnitReachesRequestEnd(
       finalTranslations, finalStart, requestEnd
     );
-    state.windowItems = leadingUnitReachesEnd
-      ? maxRequestItems : Math.min(maxRequestItems, requestItems + 32);
-    state.recoveryWindowItems = true;
+    YTDS_SHARED.commitStateNoProgress(state, null, leadingUnitReachesEnd
+      ? maxRequestItems : Math.min(maxRequestItems, requestItems + 32));
     emitDebug("semantic-commit-window-expanded", {
       regionIndex, cursor: state.cursor, windowItems: state.windowItems,
       reason: leadingUnitReachesEnd ? "leading-unit-reaches-window-end" : "adaptive-no-progress"

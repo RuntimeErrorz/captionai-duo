@@ -597,5 +597,137 @@
       : { allowed: false, reason: "local-concurrency", retryAfterMs: 1500 };
   }
 
-  Object.assign(internal, { cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, semanticBridgeRequestItems, semanticCommitWindowPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, aiConcurrencyStatus });
+  // ---- region commit state ---------------------------------------------------
+  // Each hard-boundary region has one commit lane state. These are its only
+  // transitions; callers never assign its fields directly. They mutate in
+  // place (the lane keeps its identity) and return whether anything changed.
+  //   cursor          first uncommitted coordinate (monotonic between reseeds)
+  //   commitFloor     no unit starting below it may open a committed block
+  //   limitEnd        last coordinate this lane may request
+  //   targetThrough / urgentTarget   demand from the current playback focus
+  //   lookaheadThrough               demand from playback lookahead
+  const commitStateInt = (value, fallback) => {
+    const parsed = Math.floor(Number(value));
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  function commitStateCreate(region, windowItems) {
+    const start = commitStateInt(region && region.start, 0);
+    const end = commitStateInt(region && region.end, start);
+    return {
+      cursor: start, commitFloor: start, limitEnd: end,
+      targetThrough: start - 1, urgentTarget: start - 1, lookaheadThrough: start - 1,
+      windowItems: Math.max(1, commitStateInt(windowItems, 1)),
+      recoveryWindowItems: false, noProgressRange: ""
+    };
+  }
+
+  // Committed units moved the cursor forward; a later cursor never moves back.
+  function commitStateAdvance(state, nextCursor, windowItems) {
+    const next = commitStateInt(nextCursor, NaN);
+    if (!state || !Number.isInteger(next) || next <= state.cursor) return false;
+    state.cursor = next;
+    state.commitFloor = next;
+    if (windowItems != null) state.windowItems = Math.max(1, commitStateInt(windowItems, state.windowItems));
+    state.recoveryWindowItems = false;
+    state.noProgressRange = "";
+    return true;
+  }
+
+  // A new random-access lane around a target: all old demand is dropped.
+  function commitStateReseed(state, cursorValue, commitFloorValue, limitEndValue, windowItems) {
+    if (!state) return false;
+    const cursor = commitStateInt(cursorValue, state.cursor);
+    state.cursor = cursor;
+    state.commitFloor = Math.max(cursor, commitStateInt(commitFloorValue, cursor));
+    state.limitEnd = Math.max(cursor - 1, commitStateInt(limitEndValue, state.limitEnd));
+    state.targetThrough = cursor - 1;
+    state.urgentTarget = cursor - 1;
+    state.lookaheadThrough = cursor - 1;
+    state.windowItems = Math.max(1, commitStateInt(windowItems, state.windowItems));
+    state.recoveryWindowItems = false;
+    state.noProgressRange = "";
+    return true;
+  }
+
+  // Every coordinate of the region is already translated.
+  function commitStateComplete(state, region) {
+    if (!state || !region) return false;
+    const end = commitStateInt(region.end, state.limitEnd);
+    state.cursor = end + 1;
+    state.commitFloor = end + 1;
+    state.limitEnd = end;
+    state.targetThrough = end;
+    state.urgentTarget = end;
+    return true;
+  }
+
+  // The ledger supplied a block: skip it, stopping before the next gap.
+  function commitStateSkipCommitted(state, cursorValue, limitEndValue) {
+    const cursor = commitStateInt(cursorValue, NaN);
+    if (!state || !Number.isInteger(cursor) || cursor < state.cursor) return false;
+    state.cursor = cursor;
+    state.commitFloor = cursor;
+    state.limitEnd = commitStateInt(limitEndValue, state.limitEnd);
+    return true;
+  }
+
+  // Demand only grows within one focus; urgentTarget names the visible target.
+  function commitStateRaiseDemand(state, throughValue, urgentTargetValue) {
+    if (!state) return false;
+    const through = commitStateInt(throughValue, -Infinity);
+    const before = state.targetThrough;
+    state.targetThrough = Math.max(state.targetThrough, through);
+    if (urgentTargetValue != null) state.urgentTarget = commitStateInt(urgentTargetValue, state.urgentTarget);
+    return state.targetThrough !== before || urgentTargetValue != null;
+  }
+
+  function commitStateExtendLookahead(state, throughValue) {
+    const through = commitStateInt(throughValue, NaN);
+    if (!state || !Number.isInteger(through) ||
+        (Number.isInteger(state.lookaheadThrough) && state.lookaheadThrough >= through)) return false;
+    state.lookaheadThrough = through;
+    return true;
+  }
+
+  // Demand belongs to the focus that created it; a focus change drops it.
+  function commitStateDropDemand(state) {
+    if (!state) return false;
+    const idle = commitStateInt(state.cursor, 0) - 1;
+    state.targetThrough = Math.min(commitStateInt(state.targetThrough, idle), idle);
+    state.urgentTarget = Math.min(commitStateInt(state.urgentTarget, idle), idle);
+    if (Number.isInteger(state.lookaheadThrough)) state.lookaheadThrough = Math.min(state.lookaheadThrough, idle);
+    return true;
+  }
+
+  // A response that committed nothing: remember the range, and optionally
+  // widen the next window to recover past the unit that blocked it.
+  function commitStateNoProgress(state, rangeKey, recoveryWindowItems) {
+    if (!state) return false;
+    if (rangeKey != null) state.noProgressRange = String(rangeKey);
+    if (recoveryWindowItems != null) {
+      state.windowItems = Math.max(1, commitStateInt(recoveryWindowItems, state.windowItems));
+      state.recoveryWindowItems = true;
+    }
+    return true;
+  }
+
+  // Structural invariants of one lane, as a list of violated rule names.
+  function commitStateViolations(state, region) {
+    if (!state || !region) return [];
+    const problems = [];
+    const start = commitStateInt(region.start, 0);
+    const end = commitStateInt(region.end, start);
+    if (!(state.cursor >= start && state.cursor <= end + 1)) problems.push("cursor-outside-region");
+    if (state.commitFloor < state.cursor) problems.push("commit-floor-below-cursor");
+    if (state.limitEnd > end) problems.push("limit-beyond-region");
+    if (state.cursor <= end && state.commitFloor > state.limitEnd + 1) problems.push("commit-floor-beyond-limit");
+    if (!(state.windowItems >= 1)) problems.push("empty-window");
+    return problems;
+  }
+
+  Object.assign(internal, { cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, semanticBridgeRequestItems, semanticCommitWindowPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, aiConcurrencyStatus,
+    commitStateCreate, commitStateAdvance, commitStateReseed, commitStateComplete, commitStateSkipCommitted,
+    commitStateRaiseDemand, commitStateExtendLookahead, commitStateDropDemand, commitStateNoProgress,
+    commitStateViolations });
 })();

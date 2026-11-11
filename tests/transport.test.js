@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadShared } = require("./helpers");
+const { loadShared, contentConstants } = require("./helpers");
 
 const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
@@ -202,26 +202,12 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       ...(options.aiRequestItems == null
         ? {} : { aiRequestItems: options.aiRequestItems })
     },
+    ...contentConstants(),
+    // Scenario overrides: 16-item batch scopes keep the fixtures small, and a
+    // test may cap the window to recreate a geometry.
     SEMANTIC_CORE_ITEMS: 16,
     AI_CORE_ITEMS: 16,
-    AI_INITIAL_REQUEST_ITEMS: 48,
-    AI_REQUEST_ITEMS: 80,
-    AI_URGENT_REQUEST_ITEMS: 96,
-    ACCELERATED_URGENT_REQUEST_ITEMS: 128,
-    AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
-    AI_MAX_REQUEST_ITEMS: Number.isInteger(options.maxRequestItems) ? options.maxRequestItems : 320,
-    AI_MAX_CURRENT_CHARS: 18000,
-    SEMANTIC_COMMIT_GUARD_ITEMS: 16,
-    AI_COMMIT_GUARD_ITEMS: 16,
-    SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    AI_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_SEEK_BACKTRACK_ITEMS: 64,
-    AI_SEEK_LEFT_GUARD_ITEMS: 16,
-    AI_CONTEXT_GROUPS: 20,
-    AI_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
-    AI_RATE_RETRY_LIMIT: 6,
+    ...(Number.isInteger(options.maxRequestItems) ? { AI_MAX_REQUEST_ITEMS: options.maxRequestItems } : {}),
     emitDebug: (event, data) => debug.push({ event, data }),
     emitCaptionStateTransition: (machine, transition, data) =>
       debug.push({ event: "state-transition", data: { machine, transition, ...data } }),
@@ -596,7 +582,6 @@ test("nearby playback overrun defers reseeding until the live prefix commits", (
       semanticFocusGeneration: 4
     },
     AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => null,
     isCaptionSessionCurrent: (token) => token === sessionToken
@@ -630,7 +615,6 @@ test("3x playback keeps a nearby live request instead of reseeding at the old ta
       semanticFocusGeneration: 4
     },
     AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === request.sessionToken
@@ -666,7 +650,6 @@ test("an accelerated target abandons stale prefetch after its range has been pas
       semanticFocusGeneration: 4
     },
     AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === sessionToken
@@ -713,7 +696,6 @@ test("a future request with a buffered safe prefix is not discarded as stale", (
       semanticFocusGeneration: 4
     },
     AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === sessionToken
@@ -859,11 +841,8 @@ test("Gemini playback lag preserves full startup grace and accounts for cached t
       aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
       aiModel: "gemini-2.5-flash"
     },
-    AI_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
     AI_PLAYBACK_PROGRESS_GRACE_MS: 4000,
-    AI_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
     AI_PLAYBACK_STARTUP_GRACE_MS: 6000,
-    AI_REQUEST_LIMITED_STARTUP_GRACE_MS: 14000
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
@@ -1060,7 +1039,6 @@ test("the semantic runway is the same at every playback speed", () => {
       semanticFocusGeneration: 4
     },
     AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 2 }),
     isCaptionSessionCurrent: (token) => token === request.sessionToken
@@ -2530,6 +2508,46 @@ test("webRequest diagnostics preserve Chromium's underlying net error", () => {
   for (const name of ["before", "error", "completed"]) {
     assert.equal(filters[name].tabId, -1, `${name} must not observe page traffic`);
   }
+});
+
+test("a request the extension stopped itself is not logged as a network failure", () => {
+  // The worker cancels a stream once enough units arrived; Chromium then
+  // reports net::ERR_FAILED for that request (seen after every early stop).
+  const listeners = {};
+  const event = (name) => ({ addListener: (listener) => { listeners[name] = listener; } });
+  const debug = [];
+  const context = {
+    Map,
+    Date,
+    chrome: { webRequest: {
+      onBeforeSendHeaders: event("before"), onErrorOccurred: event("error"), onCompleted: event("completed")
+    } },
+    appendDebug: (...args) => debug.push(args)
+  };
+  vm.createContext(context);
+  vm.runInContext(networkSource, context, { filename: "background/network.js" });
+  const send = (requestId, traceId) => listeners.before({
+    requestId, requestHeaders: [{ name: "X-CaptionAI-Trace", value: traceId }],
+    timeStamp: Date.now(), url: "https://api.deepseek.com/chat/completions"
+  });
+  const fail = (requestId) => listeners.error({
+    requestId, error: "net::ERR_FAILED", timeStamp: Date.now(), fromCache: false, tabId: -1, type: "xmlhttprequest"
+  });
+  const lookup = vm.runInContext("aiNetworkFailureForTrace", context);
+  const markStopped = vm.runInContext("markAiNetworkTraceStopped", context);
+
+  send("r1", "commit:1:2:0-95.1");
+  markStopped("commit:1:2:0-95.1", "commit-guard-reached");
+  fail("r1");
+  assert.equal(lookup("commit:1:2:0-95.1"), null);
+  assert.deepEqual(debug.map((entry) => entry[1]), ["ai-network-stopped"]);
+  assert.equal(debug[0][2].reason, "commit-guard-reached");
+
+  // A failure the extension did not cause is still a network error.
+  send("r2", "commit:1:3:96-191.1");
+  fail("r2");
+  assert.equal(lookup("commit:1:3:96-191.1").error, "net::ERR_FAILED");
+  assert.equal(debug.at(-1)[1], "ai-network-error");
 });
 
 test("a commit window is never shorter than twice the uncommitted runway, except at a region end", () => {

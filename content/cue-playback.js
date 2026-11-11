@@ -149,10 +149,7 @@ function focusAiAfterSeek(timeMs) {
     // Demand belongs to the focus that created it. The post-seek scheduler
     // rebuilds it from the new position; stale targets would otherwise make
     // the lookahead restart, urgently, the very work this seek cancelled.
-    const idle = Number(state.cursor) - 1;
-    state.targetThrough = Math.min(Number(state.targetThrough), idle);
-    state.urgentTarget = Math.min(Number(state.urgentTarget), idle);
-    if (Number.isInteger(state.lookaheadThrough)) state.lookaheadThrough = Math.min(state.lookaheadThrough, idle);
+    YTDS_SHARED.commitStateDropDemand(state);
     if (Array.isArray(state.prefetchQueue)) state.prefetchQueue.length = 0;
     if (state.prefetchQueued && typeof state.prefetchQueued.clear === "function") {
       state.prefetchQueued.clear();

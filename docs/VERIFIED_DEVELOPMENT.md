@@ -38,20 +38,6 @@ implementation condition.
 6. Inspect `git diff --check` and the final diff. Explain the root cause, why the
    fix is general, verification evidence, and remaining risk.
 
-## Scheduling replay
-
-Scheduler changes can be compared without a provider. The replay drives the
-real content scheduler through a deterministic pause-heavy (`short`) or
-monologue (`long`) timeline with a simulated DeepSeek-like or low-RPM
-Gemini-like provider, and reports caption wait time, request count and
-input/output amplification:
-
-```sh
-node scripts/simulate-scheduling.js . deepseek 2 short
-git archive <old-commit> | tar -x -C /tmp/old
-node scripts/simulate-scheduling.js /tmp/old deepseek 2 short
-```
-
 ## Deterministic simulation
 
 `tests/sim/` runs the real background worker modules and the real content
@@ -91,10 +77,43 @@ requests and items sent. This is how the provider and speed tiers were
 replaced by one policy (see ARCHITECTURE.md); a threshold that survives must
 show a measured loss when removed.
 
-A single `--seed` replays the identical event sequence with its trace. When a
+A single `--seed` replays the identical event sequence with its trace. To compare
+with an older release, export it and run the same seeds against it:
+
+```sh
+git archive <old-commit> | tar -x -C /tmp/old
+npm run sim:fuzz -- --seeds 60 --from 9000 --profile limited --root /tmp/old
+``` When a
 scheduling change is proposed, compare the per-profile totals on fixed seeds
 before and after; a failing seed is a reproducible fixture, but add a reduced
 unit test for the invariant it exposed.
+
+## End-to-end in Chrome
+
+`scripts/e2e-chrome.js` loads a temporary copy of the extension into a fresh
+Chrome profile over the DevTools pipe, opens a real YouTube video, and plays it
+with rate changes, seeks, scrubs, a settings change and a reload. It then
+exports the extension's own debug log and checks it: paints match the
+subtitle on screen, no cancelled range is re-sent, no request hot loop, no API
+key in the log. It also reports each request's size, first byte and total
+time, and the run's token usage. Results go to `e2e-results/` (ignored).
+
+```sh
+node scripts/e2e-chrome.js --headful --cues synthetic
+node scripts/e2e-chrome.js --headful --cues-file "captions [VIDEO].orig.srt" --video VIDEO
+```
+
+The default provider is a local fake that streams the real JSONL protocol and
+"translates" by reversing each word's letters, so every paint is checkable.
+Run `--provider gemini` yourself, with `CAPTIONAI_E2E_API_KEY` set in your
+own shell; the key is removed from the test profile when the run ends.
+
+YouTube rejects the caption proof-of-origin token of any browser driven over
+the DevTools protocol (`navigator.webdriver` is true), signed in or not, so
+real captions cannot be fetched this way. Replay a track instead: export
+"Original" SRT from the popup in your everyday Chrome and pass it with
+`--cues-file`. Only the caption fetch is then not exercised; cover it with the
+manual smoke checks below.
 
 ## Manual Chrome smoke checks
 

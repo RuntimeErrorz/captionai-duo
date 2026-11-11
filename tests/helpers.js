@@ -82,6 +82,22 @@ function loadShared() {
   return context.YTDS_SHARED;
 }
 
+// The shipped content constants (every top-level AI_* / SEMANTIC_* const in
+// content/state-ui.js), so test harnesses never carry a drifting copy.
+let contentConstantsCache = null;
+function contentConstants() {
+  if (!contentConstantsCache) {
+    const lines = fs.readFileSync(path.resolve(__dirname, "..", "content/state-ui.js"), "utf8")
+      .split("\n").filter((line) => /^const (AI_|SEMANTIC_)\w+ = [^;]*;/.test(line));
+    const names = lines.map((line) => line.match(/^const (\w+)/)[1]);
+    const context = { Object };
+    vm.createContext(context);
+    contentConstantsCache = Object.freeze(vm.runInContext(
+      lines.join("\n") + `\n({ ${names.join(", ")} })`, context));
+  }
+  return { ...contentConstantsCache };
+}
+
 function loadSharedGlobal() {
   const root = path.resolve(__dirname, "..");
   for (const file of SHARED_FILES) require(path.join(root, file));
@@ -97,5 +113,6 @@ module.exports = {
   POPUP_FILES,
   readSourceFiles,
   loadShared,
-  loadSharedGlobal
+  loadSharedGlobal,
+  contentConstants
 };

@@ -212,9 +212,7 @@ function aiSkipCommittedBlock(regionIndex, state) {
       break;
     }
   }
-  state.cursor = cursor;
-  state.commitFloor = cursor;
-  state.limitEnd = cursor > region.end ? region.end : limitEnd;
+  YTDS_SHARED.commitStateSkipCommitted(state, cursor, cursor > region.end ? region.end : limitEnd);
   emitDebug("semantic-committed-block-skipped", {
     regionIndex, cursor, limitEnd: state.limitEnd
   });

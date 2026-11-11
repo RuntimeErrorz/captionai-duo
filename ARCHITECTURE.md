@@ -42,6 +42,11 @@ in `manifest.json` in order, and the service worker loads its modules through
   progress); connect deadlines start at 20 s and follow measured first
   bytes. Each value won a simulated matrix against the tiers it replaced
   (docs/VERIFIED_DEVELOPMENT.md).
+- **Commit lanes change through transitions.** Each region's lane (cursor,
+  commit floor, limit, demand, lookahead, window) changes only through the
+  `YTDS_SHARED.commitState*` transitions in `shared/cues.js`; a test forbids
+  direct assignment in `content/`, and the simulator checks
+  `commitStateViolations` for every lane at every step.
 - **Blocks start at sentences.** A recovered alignment chunk carries its
   sentence start, so a committed block never opens mid-sentence.
 
@@ -53,7 +58,7 @@ in `manifest.json` in order, and the service worker loads its modules through
   difference, so the prompt stays provider-independent.
 - **Window decision.** `YTDS_SHARED.semanticCommitWindowPlan` decides each
   commit-lane request window from plain numbers. The content scheduler, the
-  simulator (`scripts/simulate-scheduling.js`) and the tests all run it, so a
+  deterministic simulator (`tests/sim/`) and the tests all run it, so a
   scheduling change is measured exactly as it ships.
 - **Ledger.** Committed units are stored per video in `chrome.storage.local`
   under a key covering the caption track, target language, provider, model,

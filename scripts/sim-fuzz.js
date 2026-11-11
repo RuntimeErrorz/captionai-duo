@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // Deterministic simulation fuzzing of the real extension runtime.
-//   node scripts/sim-fuzz.js [--seeds N] [--from S] [--seed S] [--profile fast|limited|flaky]
+//   node scripts/sim-fuzz.js [--seeds N] [--from S] [--seed S] [--profile fast|limited|slow|flaky]
+//                            [--rpm N] [--rate R] [--ttfb A-B] [--root DIR]
+// --root runs the same seeds against another checkout of the runtime.
 // Every failure prints its seed; rerun it alone with --seed to reproduce the
 // identical event sequence.
 "use strict";
 
 const path = require("node:path");
+const rootIndex = process.argv.indexOf("--root");
+if (rootIndex > 0) process.env.SIM_ROOT = path.resolve(process.argv[rootIndex + 1]);
 const { runSeed } = require(path.join(__dirname, "..", "tests", "sim", "run.js"));
 
 const args = { seeds: 50, from: 1, seed: null, profile: null, verbose: false, rpm: null, rate: null, ttfb: null };
@@ -21,6 +25,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === "--rate") args.rate = Number(next());
   else if (flag === "--ttfb") args.ttfb = next().split("-").map(Number);
   else if (flag === "--json") args.json = true;
+  else if (flag === "--root") next(); // applied before the world loads
   else throw new Error(`unknown argument ${flag}`);
 }
 
@@ -29,7 +34,7 @@ for (let i = 2; i < process.argv.length; i++) {
     : Array.from({ length: args.seeds }, (_v, i) => args.from + i);
   const failures = [];
   const totals = { stallMs: 0, virtualMs: 0, translateBatches: 0, providerRequests: 0, provider429: 0,
-    sentItems: 0, cancels: 0 };
+    sentItems: 0, cancels: 0, promptTokens: 0, completionTokens: 0 };
   for (const seed of seeds) {
     const started = Date.now();
     const result = await runSeed(seed, {
@@ -56,6 +61,8 @@ for (let i = 2; i < process.argv.length; i++) {
     totals.cancels += result.metrics.cancels;
     totals.provider429 += result.provider429;
     totals.sentItems += result.metrics.sentItems;
+    totals.promptTokens += result.promptTokens;
+    totals.completionTokens += result.completionTokens;
     if (args.verbose || args.seed != null) {
       console.log(`seed ${seed} [${result.profile}] ok ${wallMs}ms wall ` + JSON.stringify(result.metrics));
     }

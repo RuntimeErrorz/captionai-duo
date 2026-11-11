@@ -5,6 +5,7 @@ const AI_NETWORK_TRACE_HEADER = "X-CaptionAI-Trace";
 const AI_NETWORK_DIAGNOSTIC_TTL_MS = 60000;
 const aiNetworkTraceByRequest = new Map();
 const aiNetworkFailureByTrace = new Map();
+const aiNetworkStoppedTraces = new Map();
 
 function cleanAiNetworkTraceId(value) {
   return String(value || "").replace(/[^A-Za-z0-9:_.-]/g, "").slice(0, 160);
@@ -22,6 +23,16 @@ function pruneAiNetworkDiagnostics(now) {
   for (const [key, value] of aiNetworkFailureByTrace) {
     if (!value || value.timeStamp < cutoff) aiNetworkFailureByTrace.delete(key);
   }
+  for (const [key, value] of aiNetworkStoppedTraces) {
+    if (!value || value.timeStamp < cutoff) aiNetworkStoppedTraces.delete(key);
+  }
+}
+
+// The worker itself ended this request (an early stop or a cancellation).
+// Chromium's following net::ERR_* is that close, not a provider failure.
+function markAiNetworkTraceStopped(traceId, reason) {
+  const id = cleanAiNetworkTraceId(traceId);
+  if (id) aiNetworkStoppedTraces.set(id, { reason: String(reason || "stopped").slice(0, 80), timeStamp: Date.now() });
 }
 
 function aiNetworkFailureForTrace(traceId) {
@@ -56,6 +67,14 @@ function registerAiNetworkDiagnostics() {
     const trace = aiNetworkTraceByRequest.get(details.requestId);
     if (!trace) return;
     aiNetworkTraceByRequest.delete(details.requestId);
+    const stopped = aiNetworkStoppedTraces.get(trace.traceId);
+    if (stopped) {
+      aiNetworkStoppedTraces.delete(trace.traceId);
+      appendDebug("background", "ai-network-stopped", {
+        traceId: trace.traceId, reason: stopped.reason, error: String(details.error || "")
+      });
+      return;
+    }
     const failure = {
       traceId: trace.traceId,
       error: String(details.error || "net::ERR_FAILED"),

@@ -17,3 +17,5 @@ Thumbs.db
 *.log
 
 benchmark-results-*.json
+
+e2e-results/

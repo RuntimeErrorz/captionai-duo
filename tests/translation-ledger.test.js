@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadShared } = require("./helpers");
+const { loadShared, contentConstants } = require("./helpers");
 
 const shared = loadShared();
 const root = path.resolve(__dirname, "..");
@@ -73,16 +73,7 @@ function createRuntime(storage, overrides = {}) {
       aiModel: "deepseek-v4-flash", aiExtraBodyRevision: 0, aiContextPast: 1, aiContextFuture: 1,
       aiPrefetchBatches: 1, aiRequestItems: 320, aiRateLimitRpm: 0, ...(overrides.settings || {})
     },
-    AI_CORE_ITEMS: 32, AI_INITIAL_REQUEST_ITEMS: 48, AI_REQUEST_ITEMS: 80, AI_URGENT_REQUEST_ITEMS: 96,
-    ACCELERATED_URGENT_REQUEST_ITEMS: 128,
-    AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160, AI_MAX_REQUEST_ITEMS: 320, AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
-    AI_MAX_CURRENT_CHARS: 18000, AI_COMMIT_GUARD_ITEMS: 16, SEMANTIC_COMMIT_GUARD_ITEMS: 16,
-    AI_MIN_COMMIT_RUNWAY_ITEMS: 32, SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    AI_URGENT_TARGET_TAIL_ITEMS: 224,    AI_SEEK_BACKTRACK_ITEMS: 64, AI_SEEK_LEFT_GUARD_ITEMS: 16, AI_SEEK_SETTLE_MS: 140,
-    AI_MAX_PREFETCH_BATCHES: 12, AI_FAST_PREFETCH_BATCHES: 3,    AI_CONTEXT_GROUPS: 20, AI_RATE_RETRY_LIMIT: 6, AI_COLD_RETRY_DELAYS_MS: [400, 1200, 2500],
-    AI_PLAYBACK_STARTUP_GRACE_MS: 6000, AI_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
-    AI_PLAYBACK_PROGRESS_GRACE_MS: 4000, AI_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
+    ...contentConstants(),
     getVideo: () => ({ currentTime: 0, playbackRate: 1 }), repaintActiveAiTranslation: () => {},
     semanticDisplayWidth: () => 1000, aiUpdateDisplayError: () => {},
     emitDebug: () => {}, emitCaptionStateTransition: () => {},

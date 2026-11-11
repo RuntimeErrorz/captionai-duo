@@ -171,14 +171,7 @@ function semanticCommitState(regionIndex) {
   let state = stateByRegion ? stateByRegion.get(regionIndex) : null;
   if (!state && stateByRegion) {
     state = {
-      cursor: region.start,
-      commitFloor: region.start,
-      limitEnd: region.end,
-      targetThrough: region.start - 1,
-      urgentTarget: region.start - 1,
-      lookaheadThrough: region.start - 1,
-      windowItems: aiInitialRequestItems(),
-      recoveryWindowItems: false, noProgressRange: "",
+      ...YTDS_SHARED.commitStateCreate(region, aiInitialRequestItems()),
       prefetchQueue: [],
       prefetchQueued: new Set(),
       prefetchResponses: new Map()
@@ -328,11 +321,7 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
     effectiveTarget++;
   }
   if (effectiveTarget > region.end) {
-    state.cursor = region.end + 1;
-    state.commitFloor = region.end + 1;
-    state.limitEnd = region.end;
-    state.targetThrough = region.end;
-    state.urgentTarget = region.end;
+    YTDS_SHARED.commitStateComplete(state, region);
     return state;
   }
   let requestStart = Math.max(region.start, effectiveTarget - aiSeekBacktrackItems());
@@ -369,16 +358,9 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
   cancelAiRegionRequests(regionIndex, requestStart);
   const provenLeftBoundary = requestStart === region.start ||
     (requestStart > region.start && captionSession.transCache.has(groupKey(requestStart - 1)));
-  state.cursor = requestStart;
-  state.commitFloor = provenLeftBoundary
-    ? requestStart
-    : Math.min(effectiveTarget, requestStart + AI_SEEK_LEFT_GUARD_ITEMS);
-  state.limitEnd = Math.max(effectiveTarget, limitEnd);
-  state.targetThrough = requestStart - 1;
-  state.urgentTarget = requestStart - 1;
-  state.lookaheadThrough = requestStart - 1;
-  state.windowItems = aiInitialRequestItems();
-  state.recoveryWindowItems = false; state.noProgressRange = "";
+  YTDS_SHARED.commitStateReseed(state, requestStart,
+    provenLeftBoundary ? requestStart : Math.min(effectiveTarget, requestStart + AI_SEEK_LEFT_GUARD_ITEMS),
+    Math.max(effectiveTarget, limitEnd), aiInitialRequestItems());
   emitDebug("semantic-commit-reseeded", {
     regionIndex,
     targetGroup: effectiveTarget,
@@ -595,11 +577,8 @@ function handleAiTranslationProgress(msg) {
   // look healthy indefinitely.
   request.lastProgressAt = Date.now();
   request.progressCursor = nextCursor;
-  state.cursor = nextCursor;
-  state.commitFloor = nextCursor;
+  YTDS_SHARED.commitStateAdvance(state, nextCursor, aiSteadyRequestItems());
   reconcileAiPrefetchCandidates(state, nextCursor);
-  state.windowItems = aiSteadyRequestItems();
-  state.recoveryWindowItems = false; state.noProgressRange = "";
   captionSession.semanticExhaustedRegions.delete(request.regionIndex);
   request.progressTranslations = request.progressTranslations.filter(
     (item) => Number(item && item.id) >= nextCursor
@@ -825,11 +804,8 @@ function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, reques
   const batchIndex = captionSession.semanticGroupToBatch[gIdx];
   const batch = captionSession.semanticBatchWindows[batchIndex];
   const targetThrough = Math.min(state.limitEnd, batch ? batch.end : gIdx);
-  state.targetThrough = Math.max(state.targetThrough, targetThrough);
-  if (urgent) {
-    state.urgentTarget = gIdx;
-    if (Number.isInteger(batchIndex)) captionSession.semanticFocusedBatchIndex = batchIndex;
-  }
+  YTDS_SHARED.commitStateRaiseDemand(state, targetThrough, urgent ? gIdx : null);
+  if (urgent && Number.isInteger(batchIndex)) captionSession.semanticFocusedBatchIndex = batchIndex;
   if (!urgent && gIdx > state.cursor) {
     queueAiSpeculativeRequest(regionIndex, gIdx);
     return;

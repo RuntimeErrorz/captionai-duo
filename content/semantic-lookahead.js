@@ -62,9 +62,7 @@ function advanceAiLookahead(groupIndex) {
     // range lies behind the playhead (the user jumped past it) is backfill.
     if (state.limitEnd < gIdx) continue;
     const through = Math.min(state.limitEnd, lookaheadEnd);
-    if (!Number.isInteger(state.lookaheadThrough) || state.lookaheadThrough < through) {
-      state.lookaheadThrough = through;
-    }
+    YTDS_SHARED.commitStateExtendLookahead(state, through);
     if (!aiCommitPending(state) || captionSession.transInflight.has(`dsb:${regionIndex}`)) continue;
     if (active >= maxLanes) break;
     const before = captionSession.semanticRequestMeta.size;

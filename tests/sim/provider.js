@@ -8,15 +8,20 @@
 
 const SECRET_KEY = "simulated-api-key-not-a-secret-7f3a9c";
 
+// Latency follows the request: first byte = a base range plus prefill time per
+// current item, and the body streams at a content rate in characters per
+// second. Calibrated on real runs (gemini-3.5-flash-lite: ~1.6 s first byte at
+// 128 items, ~2.2 s at 320, ~350 content chars/s; DeepSeek ~550 chars/s).
+// scripts/e2e-chrome.js --provider gemini reports the same figures.
 const PROFILES = Object.freeze({
   // DeepSeek-like: fast, unlimited RPM, rare faults.
-  fast: { rpm: 0, ttfb: [700, 2600], faults: 0.02 },
+  fast: { rpm: 0, ttfb: [500, 2000], ttfbPerItemMs: 2, charsPerSecond: 550, faults: 0.02 },
   // Free-tier Gemini-like: 15 RPM, slower first byte, overload spikes.
-  limited: { rpm: 15, ttfb: [900, 4200], faults: 0.06, overload: 0.08 },
+  limited: { rpm: 15, ttfb: [700, 3000], ttfbPerItemMs: 3.5, charsPerSecond: 350, faults: 0.06, overload: 0.08 },
   // Everything that can go wrong, often.
-  flaky: { rpm: 60, ttfb: [400, 9000], faults: 0.25, overload: 0.12 },
+  flaky: { rpm: 60, ttfb: [300, 8000], ttfbPerItemMs: 3.5, charsPerSecond: 300, faults: 0.25, overload: 0.12 },
   // A thinking model behind a free tier: long first byte, few requests.
-  slow: { rpm: 15, ttfb: [5000, 14000], faults: 0.04, overload: 0.04 }
+  slow: { rpm: 15, ttfb: [4000, 12500], ttfbPerItemMs: 5, charsPerSecond: 250, faults: 0.04, overload: 0.04 }
 });
 
 function parseCurrentRows(body) {
@@ -42,6 +47,10 @@ class FakeProvider {
     this.starts = [];
     this.inFlight = 0;
     this.requests = 0;
+    // Token cost of everything sent and generated (about 4 chars per token),
+    // including the system prompt and context every request repeats.
+    this.promptChars = 0;
+    this.completionChars = 0;
     this.rejected429 = 0;
   }
 
@@ -76,6 +85,7 @@ class FakeProvider {
     const headers = init && init.headers || {};
     const auth = String(headers.Authorization || headers.authorization || "");
     const body = JSON.parse(String(init && init.body || "{}"));
+    this.promptChars += String(init && init.body || "").length;
     const rows = parseCurrentRows(body);
     this.requests++;
     const now = this.clock.now;
@@ -97,7 +107,7 @@ class FakeProvider {
     }
     const fault = r.chance(profile.faults) ? r.pick(["hang", "truncate", "malformed", "duplicate",
       "no-marker", "stall", "garbage"]) : "";
-    const ttfb = r.int(profile.ttfb[0], profile.ttfb[1]);
+    const ttfb = r.int(profile.ttfb[0], profile.ttfb[1]) + Math.round((profile.ttfbPerItemMs || 0) * rows.length);
     if (fault === "hang") {
       // No headers until long after any connect timeout.
       await this.wait(120000, signal);
@@ -136,6 +146,8 @@ class FakeProvider {
   }
 
   streamResponse(text, stall, signal) {
+    this.completionChars += text.length;
+    const charsPerSecond = this.profile.charsPerSecond || 500;
     const r = this.random;
     const events = [];
     // Split the JSONL into deltas at arbitrary character boundaries.
@@ -155,6 +167,11 @@ class FakeProvider {
       i += size;
     }
     const stallAt = stall ? r.int(0, Math.max(0, frames.length - 1)) : -1;
+    // Each frame arrives after the time the model needs to generate the
+    // content it carries (SSE framing itself costs nothing), with jitter.
+    const contentShare = text.length / Math.max(1, wire.length);
+    const frameDelay = (frame) => Math.max(2, Math.round(
+      (frame.length * contentShare * 1000 / charsPerSecond) * (0.7 + r() * 0.6)));
     const encoder = new TextEncoder();
     const provider = this;
     let index = 0;
@@ -172,7 +189,8 @@ class FakeProvider {
         getReader: () => ({
           async read() {
             if (cancelled) return { done: true, value: undefined };
-            const pause = index === stallAt ? r.int(30000, 100000) : r.int(5, 60);
+            const pause = index === stallAt ? r.int(30000, 100000)
+              : frameDelay(frames[Math.min(index, frames.length - 1)] || "");
             try { await provider.wait(pause, signal); } catch (error) { finish(); throw error; }
             if (index >= frames.length) { finish(); return { done: true, value: undefined }; }
             const value = encoder.encode(frames[index++]);

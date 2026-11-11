@@ -243,9 +243,13 @@ async function fetchAiStreamWithTimeout(
   let response = null;
   let timedOut = false;
   let connectTimedOut = false;
-  const abortFromExternal = () => controller.abort();
+  const traceId = options && options.headers && options.headers[AI_NETWORK_TRACE_HEADER];
+  const markStopped = (reason) => {
+    if (traceId && typeof markAiNetworkTraceStopped === "function") markAiNetworkTraceStopped(traceId, reason);
+  };
+  const abortFromExternal = () => { markStopped("cancelled"); controller.abort(); };
   if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
+    if (externalSignal.aborted) { markStopped("cancelled"); controller.abort(); }
     else externalSignal.addEventListener("abort", abortFromExternal, { once: true });
   }
   const timer = setTimeout(() => {
@@ -338,6 +342,7 @@ async function fetchAiStreamWithTimeout(
       if (part && part.ytdsGraceExpired) {
         earlyStopped = true;
         earlyStopReason = "completion-grace-expired";
+        markStopped(earlyStopReason);
         try { await reader.cancel(earlyStopReason); } catch (_e) { /* already closed */ }
         break;
       }
@@ -369,6 +374,7 @@ async function fetchAiStreamWithTimeout(
         }
       }
       if (observerStopped) {
+        markStopped(earlyStopReason);
         try { await reader.cancel(earlyStopReason); } catch (_e) { /* already closed */ }
         break;
       }

@@ -54,6 +54,10 @@ const AI_STALE_PREFETCH_GRACE_MS = 2500;
 // A writer is "lagging" only after a provider-scale wait: a slow or rate-
 // limited provider may need ~8 s before its first byte, and replacing it then
 // costs another request. One threshold for every provider and speed.
+// Simulated: 8 s and 20 s were both worse than 14 s, and slow (thinking)
+// providers did not change between 14 s and 28 s, so the grace is not
+// adapted to measured first bytes. The lag threshold as seconds of speech
+// (10-30 s) also made no measurable difference.
 const AI_PLAYBACK_STARTUP_GRACE_MS = 14000;
 const AI_PLAYBACK_PROGRESS_GRACE_MS = 4000;
 const AI_PLAYBACK_LAG_ITEMS = 48;

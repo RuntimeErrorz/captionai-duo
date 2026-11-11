@@ -10,7 +10,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const root = path.resolve(__dirname, "..", "..");
+// SIM_ROOT runs the same world on another checkout (e.g. an older release
+// exported with git archive) so a change can be compared seed for seed.
+const root = path.resolve(process.env.SIM_ROOT || path.join(__dirname, "..", ".."));
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const manifest = JSON.parse(read("manifest.json"));
 

@@ -22,7 +22,10 @@ const PROVIDER_SETTINGS = Object.freeze({
 });
 
 // ---- synthetic video ---------------------------------------------------------
-function buildTruth(random, wordCount) {
+function buildTruth(random, wordCount, paceValue) {
+  // Speech pace varies by video: fast talkers (~4.5 words/s) to slow
+  // lectures (~1.5 words/s), so time-based lookahead can be measured.
+  const pace = Number.isFinite(paceValue) ? paceValue : random.pick([0.6, 0.8, 1, 1, 1.3, 1.7]);
   const words = [];
   let clock = random.int(500, 4000);
   let regionLeft = 0;
@@ -30,7 +33,7 @@ function buildTruth(random, wordCount) {
     if (regionLeft <= 0) regionLeft = random.chance(0.3) ? random.int(80, 300) : random.int(6, 60);
     regionLeft--;
     const hardAfter = regionLeft === 0 || id === wordCount - 1;
-    const duration = random.int(220, 520);
+    const duration = Math.round(random.int(220, 520) * pace);
     words.push({ id, start: clock, end: clock + duration, hardAfter });
     const softPause = !hardAfter && random.chance(0.04) ? random.int(900, 2500) : random.int(0, 60);
     clock += duration + (hardAfter ? random.int(4500, 9000) : softPause);
@@ -75,7 +78,7 @@ function buildTruth(random, wordCount) {
     return [[start, mid], [mid + 1, end]];
   };
   return {
-    words, cues, regionOf, canonicalChunks,
+    pace, words, cues, regionOf, canonicalChunks,
     unitOf: (id) => [unitStart[id], unitEnd[id]],
     durationMs: words[wordCount - 1].end + 2000
   };
@@ -257,6 +260,13 @@ class Checker {
         }
       }
     }
+    // Every region's commit lane keeps its structural rules.
+    const regions = session.semanticCommitRegions || [];
+    for (const [index, lane] of session.semanticCommitStateByRegion || []) {
+      const problems = shared.commitStateViolations(lane, regions[index]);
+      if (problems.length) this.fail("commit-lane-invalid", { region: index, problems: Array.from(problems),
+        cursor: lane.cursor, commitFloor: lane.commitFloor, limitEnd: lane.limitEnd });
+    }
     // Busy keys are exactly the live owners plus pending retry holds.
     const holds = session.semanticRequestHolds instanceof Map ? session.semanticRequestHolds : new Map();
     for (const key of session.semanticRequestMeta.keys()) {
@@ -311,7 +321,7 @@ class Checker {
 // ---- driver ----------------------------------------------------------------------
 async function runSeed(seed, options = {}) {
   const random = createRandom(seed);
-  const truth = buildTruth(random, options.words || random.int(250, 900));
+  const truth = buildTruth(random, options.words || random.int(250, 900), options.pace);
   const profile = options.profile || random.pick(["fast", "fast", "limited", "limited", "flaky"]);
   const settings = {
     enabled: true, targetLang: "zh-CN", debugEnabled: true, translationEnabled: true,
@@ -441,7 +451,8 @@ async function runSeed(seed, options = {}) {
     if (checker.violation) throw checker.violation;
     checker.quiescent(context, world.background, world);
     return { ok: true, seed, profile, metrics: checker.metrics, virtualMs: world.clock.now,
-      providerRequests: provider.requests, provider429: provider.rejected429, words: truth.words.length };
+      providerRequests: provider.requests, provider429: provider.rejected429, words: truth.words.length,
+      promptTokens: Math.round(provider.promptChars / 4), completionTokens: Math.round(provider.completionChars / 4) };
   } catch (error) {
     if (!(error instanceof Violation)) throw error;
     return { ok: false, seed, profile, invariant: error.invariant, detail: error.detail,

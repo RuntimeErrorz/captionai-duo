@@ -5,7 +5,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-const { loadShared } = require("./helpers");
+const { loadShared, contentConstants } = require("./helpers");
 
 const root = path.resolve(__dirname, "..");
 const shared = loadShared();
@@ -140,22 +140,10 @@ function loadHarness(options = {}) {
       aiRateLimitRpm: options.aiRateLimitRpm || 0,
       aiModel: options.aiModel || "test-model"
     },
+    ...contentConstants(),
+    // Scenario override: 16-item batch scopes keep the fixtures small.
     SEMANTIC_CORE_ITEMS: 16,
     AI_CORE_ITEMS: 16,
-    AI_INITIAL_REQUEST_ITEMS: 48,
-    AI_REQUEST_ITEMS: 80,
-    AI_URGENT_REQUEST_ITEMS: 96,
-    ACCELERATED_URGENT_REQUEST_ITEMS: 128,
-    AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
-    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
-    AI_MAX_REQUEST_ITEMS: 320,
-    AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
-    AI_MAX_CURRENT_CHARS: 18000,
-    AI_COMMIT_GUARD_ITEMS: 16,
-    AI_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    AI_URGENT_TARGET_TAIL_ITEMS: 224,
-    AI_CONTEXT_GROUPS: 20,
-    AI_COLD_RETRY_DELAYS_MS: [400, 1200, 2500],
     emitDebug: () => {},
     emitCaptionStateTransition: () => {},
     repaintActiveAiTranslation: () => {},
@@ -246,7 +234,7 @@ test("adaptive batch window reduces size when response has deferredIds", () => {
   handleResult(request, responseWithDeferrals, null);
 
   assert.ok(harness.state.cursor > 0);
-  assert.equal(harness.state.windowItems, Math.min(harness.context.AI_URGENT_REQUEST_ITEMS, 96));
+  assert.equal(harness.state.windowItems, vm.runInContext("Math.min(aiUrgentRequestItems(), 96)", harness.context));
 });
 
 test("a request-limited profile prioritizes urgent commit over speculative prefetch", async () => {

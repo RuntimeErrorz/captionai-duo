@@ -94,8 +94,11 @@ const SEMANTIC_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
 const AI_COMMIT_GUARD_ITEMS = SEMANTIC_COMMIT_GUARD_ITEMS;
 const SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
 const AI_MIN_COMMIT_RUNWAY_ITEMS = SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS;
+// Fixed counts, not seconds of speech: simulated over 1.5-4.5 words/s, a
+// runway of 60/90/150 s and a backtrack of 25-40 s changed stalls by under 1%,
+// so the simpler fixed values stay.
 const AI_URGENT_TARGET_TAIL_ITEMS = 224; // semantic runway after the visible target, at every speed
-const AI_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
+const AI_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in, divided by playback speed
 const AI_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
 const AI_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
 const AI_MAX_PREFETCH_BATCHES = 12;
