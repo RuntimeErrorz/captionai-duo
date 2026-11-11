@@ -923,3 +923,75 @@ test("an abbreviation period does not split a sentence", () => {
   ] });
   assert.equal(accepted.unitCount, 1);
 });
+
+test("a closed sentence inside a still-streaming line is accepted before the line ends", () => {
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  }, { requestClass: "urgent" });
+  const line = wireUnit(
+    rangeChunk(0, 1, "我遇到了美国士兵。"),
+    rangeChunk(2, 2, "他们帮助了我们。"),
+    rangeChunk(3, 3, "下一个想法还没说完")
+  );
+  const cut = line.indexOf("[3,");
+  assert.equal(observer.onTextDelta(line.slice(0, cut), false).stop, false);
+  // Both finished sentences are out while the line is still open; the
+  // unfinished clause is not.
+  assert.deepEqual(progress, [["0", "1", "2"]]);
+
+  assert.equal(observer.onTextDelta(line.slice(cut) + "\n[]\n", false).stop, false);
+  assert.deepEqual(progress, [["0", "1", "2"], ["3"]]);
+  const result = observer.result(false);
+  assert.deepEqual(Array.from(result, (item) => String(item.id)), ["0", "1", "2", "3"]);
+  assert.equal(result.streamPartial, false);
+});
+
+test("an open line with no closed sentence waits for the line to end", () => {
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  }, { requestClass: "urgent" });
+  const line = wireUnit(rangeChunk(0, 0, "我遇到了，"), rangeChunk(1, 1, "美国士兵。"));
+  observer.onTextDelta(line.slice(0, line.indexOf("[1,")), false);
+  assert.deepEqual(progress, []);
+  // A chunk whose closing quote has not arrived is never accepted.
+  observer.onTextDelta(line.slice(line.indexOf("[1,"), -3), false);
+  assert.deepEqual(progress, []);
+  observer.onTextDelta(line.slice(-3) + "\n", false);
+  assert.deepEqual(progress, [["0", "1"]]);
+});
+
+test("streaming a multi-sentence line byte by byte yields the same units as one delta", () => {
+  const text = wireUnit(
+    rangeChunk(0, 1, "我遇到了美国士兵。"),
+    rangeChunk(2, 2, "他们帮助了我们。"),
+    rangeChunk(3, 3, "下一个想法还没说完")
+  ) + "\n[]\n";
+  const collect = (deltas) => {
+    const units = [];
+    const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
+      for (const item of translations) if (item.alignedChunks) units.push(item.unitId);
+    }, { requestClass: "prefetch" });
+    for (const delta of deltas) assert.equal(observer.onTextDelta(delta, false).stop, false);
+    observer.onTextDelta("", true);
+    return { units, result: Array.from(observer.result(false), (item) => item.unitId) };
+  };
+  const whole = collect([text]);
+  const bytes = collect(Array.from(text));
+  assert.deepEqual(bytes.result, whole.result);
+  assert.deepEqual(new Set(bytes.result).size, 3);
+});
+
+test("an open-line prefix still stops at the commit guard", () => {
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", () => {}, {
+    requestClass: "prefetch", commitGuardLocal: 1
+  });
+  const line = wireUnit(
+    rangeChunk(0, 1, "我遇到了美国士兵。"),
+    rangeChunk(2, 2, "他们帮助了我们。")
+  );
+  const status = observer.onTextDelta(line.slice(0, line.indexOf("[2,")), false);
+  assert.equal(status.stop, true);
+  assert.equal(status.reason, "commit-guard-reached");
+});

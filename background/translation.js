@@ -108,6 +108,7 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
     state = YTDS_SHARED.createAiJsonlTranslationState(items, targetLang, sourceLang);
     recordBuffer = "";
     pendingProgress = [];
+    openLineAccepted = 0;
   };
   const fail = (reason, line) => {
     if (!state.error) state.error = String(reason || "invalid JSONL stream");
@@ -134,6 +135,118 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
     });
     return true;
   };
+  // Returns a stream status to stop with, DONE after the completion marker,
+  // or null to keep reading.
+  const DONE = Symbol("done");
+  const acceptRecord = (record, objectText) => {
+    const prefixRecord = YTDS_SHARED.aiJsonlLeadingRecordPrefix(state, record);
+    const accepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, record);
+    if (!accepted.ok) {
+      // pushAiJsonlTranslationRecord records the rejection on state so a
+      // caller cannot accidentally continue an invalid stream. Clear that
+      // transient marker only while validating the already-computed safe
+      // prefix; an accepted prefix is a partial success, not a visible
+      // failure, because the remaining suffix will be requested again.
+      let prefixAccepted = null;
+      if (prefixRecord) {
+        state.error = "";
+        prefixAccepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, prefixRecord);
+      }
+      if (prefixAccepted && prefixAccepted.ok &&
+          (prefixAccepted.translations.length || prefixAccepted.type === "marker-only")) {
+        publishPending();
+        pendingProgress = prefixAccepted.translations;
+        if (trace && trace.debug) appendDebug("background", "semantic-jsonl-prefix-recovered", {
+          requestId: trace.requestId || "",
+          unitId: prefixAccepted.unitId || "",
+          ids: prefixAccepted.ids,
+          rejectedReason: accepted.error
+        });
+        // The request is about to be cancelled for the invalid suffix, so
+        // there cannot be a later unit that revises this strictly ordered
+        // prefix. Publish it now instead of waiting for the final partial
+        // response callback; this removes provider tail latency from the
+        // playback waterline. Do not surface a protocol error for a
+        // recoverable suffix; the diagnostic event above retains it.
+        publishPending();
+        return status(true, "recoverable-jsonl-tail");
+      }
+      state.error = "";
+      const rewound = YTDS_SHARED.rewindAiJsonlOverlappingUnit(state, record);
+      if (rewound) {
+        pendingProgress = [];
+        const retryAccepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, record);
+        if (retryAccepted && retryAccepted.ok) {
+          if (retryAccepted.type === "unit") {
+            pendingProgress = retryAccepted.translations;
+            if (publishUnitsImmediately) publishPending();
+          }
+          return null;
+        }
+      }
+      // An overlapping correction is not a disposable tail: it may
+      // revise content that was already accepted. Keep the strict
+      // protocol error so the whole affected unit is retried.
+      if (!rewound && recoverMalformedTail(accepted.error)) {
+        return status(true, "recoverable-jsonl-tail");
+      }
+      fail(accepted.error, objectText);
+      return status(true, "invalid-jsonl");
+    }
+    if (accepted.type === "done") {
+      publishPending();
+      recordBuffer = "";
+      return DONE;
+    }
+    if (accepted.type === "unit") {
+      if (publishUnitsImmediately) {
+        // Accelerated prompts explicitly require a completed unit to be
+        // final and never revised. Publish it as soon as its JSONL line
+        // closes; waiting for the next unit would add an entire semantic
+        // sentence of latency to the playback waterline.
+        pendingProgress = accepted.translations;
+        publishPending();
+      } else {
+        // Keep the newest unit provisional until another ordered record
+        // confirms that the model will not revise it with overlapping ids.
+        // A malformed correction can then rewind the whole suspect unit
+        // before either streaming progress or the final response commits it.
+        publishPending();
+        pendingProgress = accepted.translations;
+      }
+      if (trace && trace.debug) appendDebug("background", "semantic-jsonl-unit", {
+        requestId: trace.requestId || "",
+        unitId: accepted.unitId,
+        ids: accepted.ids
+      });
+      if (commitGuardLocal >= 0 && state.cursor > commitGuardLocal) {
+        // This unit reaches the uncommitted runway. Everything before it
+        // is final; it and anything after are requested again from the
+        // new cursor, so the rest of this stream would be discarded.
+        publishPending();
+        return status(true, "commit-guard-reached");
+      }
+    }
+    return null;
+  };
+  // Leading chunks of the line now streaming that were already accepted
+  // because they close a sentence. The full line drops exactly these.
+  let openLineAccepted = 0;
+  const acceptClosedOpenLinePrefix = () => {
+    if (state.done || state.error || !recordBuffer) return null;
+    const chunks = YTDS_SHARED.aiJsonlOpenUnitChunks(recordBuffer);
+    if (chunks.length <= openLineAccepted) return null;
+    const pending = chunks.slice(openLineAccepted);
+    const closed = YTDS_SHARED.aiJsonlClosedSentencePrefixLength(state, pending);
+    if (!closed) return null;
+    openLineAccepted += closed;
+    if (trace && trace.debug) appendDebug("background", "semantic-jsonl-open-line-prefix", {
+      requestId: trace.requestId || "",
+      chunks: closed
+    });
+    const outcome = acceptRecord({ type: "unit", chunks: pending.slice(0, closed) }, recordBuffer);
+    return outcome === DONE ? null : outcome;
+  };
   return {
     onAttemptStart() {
       if (!state.translations.length) reset();
@@ -147,10 +260,26 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
       recordBuffer = parsed.rest;
       for (const objectText of parsed.objects) {
         if (state.done) break;
+        const skipChunks = openLineAccepted;
+        openLineAccepted = 0;
         const decoded = YTDS_SHARED.aiJsonlRecordFromLine(objectText);
         if (decoded.ignored) continue;
-        const records = Array.isArray(decoded.records) ? decoded.records
+        let records = Array.isArray(decoded.records) ? decoded.records
           : decoded.record ? [decoded.record] : [];
+        if (skipChunks > 0 && records.length) {
+          // The open-line prefix only ever comes from a single plain unit;
+          // drop the chunks that were already accepted from it.
+          const unit = records.length === 1 && records[0].type === "unit" ? records[0] : null;
+          const rest = unit && Array.isArray(unit.chunks) ? unit.chunks.slice(skipChunks) : [];
+          if (!rest.length) {
+            if (decoded.recovered && state.cursor < state.expected.length) {
+              publishPending();
+              return status(true, "recoverable-jsonl-tail");
+            }
+            continue;
+          }
+          records = [{ type: "unit", chunks: rest }];
+        }
         if (!records.length) {
           // Once every requested id is covered, a truncated completion/prose tail
           // cannot remove or revise any translation. The stream cursor is the
@@ -165,94 +294,9 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
         }
         for (const record of records) {
           if (state.done) break;
-          const prefixRecord = YTDS_SHARED.aiJsonlLeadingRecordPrefix(state, record);
-          const accepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, record);
-          if (!accepted.ok) {
-            // pushAiJsonlTranslationRecord records the rejection on state so a
-            // caller cannot accidentally continue an invalid stream. Clear that
-            // transient marker only while validating the already-computed safe
-            // prefix; an accepted prefix is a partial success, not a visible
-            // failure, because the remaining suffix will be requested again.
-            let prefixAccepted = null;
-            if (prefixRecord) {
-              state.error = "";
-              prefixAccepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, prefixRecord);
-            }
-            if (prefixAccepted && prefixAccepted.ok &&
-                (prefixAccepted.translations.length || prefixAccepted.type === "marker-only")) {
-              publishPending();
-              pendingProgress = prefixAccepted.translations;
-              if (trace && trace.debug) appendDebug("background", "semantic-jsonl-prefix-recovered", {
-                requestId: trace.requestId || "",
-                unitId: prefixAccepted.unitId || "",
-                ids: prefixAccepted.ids,
-                rejectedReason: accepted.error
-              });
-              // The request is about to be cancelled for the invalid suffix, so
-              // there cannot be a later unit that revises this strictly ordered
-              // prefix. Publish it now instead of waiting for the final partial
-              // response callback; this removes provider tail latency from the
-              // playback waterline. Do not surface a protocol error for a
-              // recoverable suffix; the diagnostic event above retains it.
-              publishPending();
-              return status(true, "recoverable-jsonl-tail");
-            }
-            state.error = "";
-            const rewound = YTDS_SHARED.rewindAiJsonlOverlappingUnit(state, record);
-            if (rewound) {
-              pendingProgress = [];
-              const retryAccepted = YTDS_SHARED.pushAiJsonlTranslationRecord(state, record);
-              if (retryAccepted && retryAccepted.ok) {
-                if (retryAccepted.type === "unit") {
-                  pendingProgress = retryAccepted.translations;
-                  if (publishUnitsImmediately) publishPending();
-                }
-                continue;
-              }
-            }
-            // An overlapping correction is not a disposable tail: it may
-            // revise content that was already accepted. Keep the strict
-            // protocol error so the whole affected unit is retried.
-            if (!rewound && recoverMalformedTail(accepted.error)) {
-              return status(true, "recoverable-jsonl-tail");
-            }
-            fail(accepted.error, objectText);
-            return status(true, "invalid-jsonl");
-          }
-          if (accepted.type === "done") {
-            publishPending();
-            recordBuffer = "";
-            break;
-          }
-          if (accepted.type === "unit") {
-            if (publishUnitsImmediately) {
-              // Accelerated prompts explicitly require a completed unit to be
-              // final and never revised. Publish it as soon as its JSONL line
-              // closes; waiting for the next unit would add an entire semantic
-              // sentence of latency to the playback waterline.
-              pendingProgress = accepted.translations;
-              publishPending();
-            } else {
-              // Keep the newest unit provisional until another ordered record
-              // confirms that the model will not revise it with overlapping ids.
-              // A malformed correction can then rewind the whole suspect unit
-              // before either streaming progress or the final response commits it.
-              publishPending();
-              pendingProgress = accepted.translations;
-            }
-            if (trace && trace.debug) appendDebug("background", "semantic-jsonl-unit", {
-              requestId: trace.requestId || "",
-              unitId: accepted.unitId,
-              ids: accepted.ids
-            });
-            if (commitGuardLocal >= 0 && state.cursor > commitGuardLocal) {
-              // This unit reaches the uncommitted runway. Everything before it
-              // is final; it and anything after are requested again from the
-              // new cursor, so the rest of this stream would be discarded.
-              publishPending();
-              return status(true, "commit-guard-reached");
-            }
-          }
+          const outcome = acceptRecord(record, objectText);
+          if (outcome === DONE) break;
+          if (outcome) return outcome;
         }
         if (decoded.recovered && state.cursor < state.expected.length) {
           // The tuple leaves are safe, but the surrounding JSON is not. Stop
@@ -260,6 +304,10 @@ function createAiJsonlStreamObserver(items, targetLang, onProgress, trace, sourc
           publishPending();
           return status(true, "recoverable-jsonl-tail");
         }
+      }
+      if (!flush) {
+        const outcome = acceptClosedOpenLinePrefix();
+        if (outcome) return outcome;
       }
       return status(false, "");
     },

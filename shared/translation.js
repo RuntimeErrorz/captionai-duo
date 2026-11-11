@@ -546,6 +546,36 @@
   const SOURCE_SENTENCE_END = /[.?!…](?:["'”’)\]]*)$/;
   const TARGET_SENTENCE_END = /[。！？!?…](?:["'”’」』）)\]]*)(?:\s|>>)*$/;
 
+  // A source period alone may be an abbreviation (Mr., U.S.); trust it only
+  // when the translation does not continue the clause.
+  function chunkClosesSentence(lastItem, translationValue) {
+    const translated = String(translationValue || "");
+    if (!translated) return false;
+    const lastSource = String(lastItem && lastItem.text || "").trim();
+    return TARGET_SENTENCE_END.test(translated) ||
+      (SOURCE_SENTENCE_END.test(lastSource) && !/[，,、;；:：—–-]\s*$/.test(translated));
+  }
+
+  // How many leading chunks of a still-streaming line end with a closed
+  // sentence. Those chunks can be accepted now, as if the model had broken
+  // the line there, instead of waiting for the line's unfinished tail.
+  function aiJsonlClosedSentencePrefixLength(stateValue, chunksValue) {
+    const state = stateValue && typeof stateValue === "object" ? stateValue : null;
+    const chunks = Array.isArray(chunksValue) ? chunksValue : [];
+    if (!state || !Array.isArray(state.items)) return 0;
+    let closed = 0;
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index];
+      const end = Array.isArray(chunk) ? compactJsonlCoordinate(chunk[1]) : null;
+      if (end == null || end >= state.items.length) break;
+      const translation = aiJsonlChunkTranslation(chunk);
+      if (endsWithChineseFullStop(chunk[2]) || chunkClosesSentence(state.items[end], translation)) {
+        closed = index + 1;
+      }
+    }
+    return closed;
+  }
+
   // Split a line's ordered chunks after every chunk that closes a sentence
   // in the source or the translation. A line holding one sentence stays one
   // group; the last group may be an unfinished clause.
@@ -556,13 +586,8 @@
     for (const chunk of chunks) {
       current.push(chunk);
       index += chunk.ids.length;
-      const lastSource = String(items[index - 1] && items[index - 1].text || "").trim();
-      const translated = String(chunk.translation || "");
-      // A source period alone may be an abbreviation (Mr., U.S.); trust it
-      // only when the translation does not continue the clause.
       const closes = chunk.sentenceBoundaryAfter === true ||
-        TARGET_SENTENCE_END.test(translated) ||
-        (SOURCE_SENTENCE_END.test(lastSource) && !/[，,、;；:：—–-]\s*$/.test(translated));
+        chunkClosesSentence(items[index - 1], chunk.translation);
       if (closes && chunk.translation) {
         groups.push(current);
         current = [];
@@ -755,5 +780,5 @@
     speakerSwitchSeparators,
     untranslatedRangeReason
   });
-Object.assign(internal, { normalizeTranslatedText, speakerSwitchSeparators, segmentedTranslationsFromJsonText, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts });
+Object.assign(internal, { normalizeTranslatedText, speakerSwitchSeparators, segmentedTranslationsFromJsonText, createAiJsonlTranslationState, pushAiJsonlTranslationRecord, aiJsonlClosedSentencePrefixLength, aiJsonlLeadingRecordPrefix, rewindAiJsonlOverlappingUnit, aiJsonlTranslationResult, joinTranslatedParts });
 })();

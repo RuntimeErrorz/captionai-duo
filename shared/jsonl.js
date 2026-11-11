@@ -311,6 +311,53 @@
     return chunks.length ? [{ type: "unit", chunks }] : [{ type: "done" }];
   }
 
+  // Complete chunks of a unit line that is still streaming. Only the plain
+  // shape `[[s,e,"t"],[s,e,"t"],...` qualifies; nested units, prose or a
+  // malformed chunk end the prefix. The caller decides how many of these
+  // chunks are final (a closed sentence) and must later drop exactly that
+  // many leading chunks from the decoded full line.
+  function aiJsonlOpenUnitChunks(value) {
+    const text = String(value || "").replace(/^\s+/, "");
+    if (!/^\[\s*\[/.test(text)) return [];
+    const chunks = [];
+    let depth = 0;
+    let chunkStart = -1;
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        if (depth !== 2) return chunks;
+        inString = true;
+      } else if (char === "[") {
+        depth++;
+        if (depth === 2) chunkStart = index;
+        if (depth > 2) return [];
+      } else if (char === "]") {
+        depth--;
+        if (depth === 0) return [];
+        if (depth === 1) {
+          const raw = text.slice(chunkStart, index + 1);
+          if (/^\[\s*\]$/.test(raw)) continue;
+          let parsed = null;
+          try { parsed = JSON.parse(raw); } catch (_e) { return chunks; }
+          const parts = aiJsonlTupleParts(parsed);
+          if (!parts) return chunks;
+          chunks.push(...parts);
+        }
+      } else if (depth === 1 && !/[\s,]/.test(char)) {
+        return chunks;
+      }
+    }
+    return chunks;
+  }
+
   function aiJsonlRecordFromLine(value) {
     const line = String(value || "").trim();
     if (!line || /^```(?:jsonl?|ndjson)?$/i.test(line) || line === "```") {
@@ -349,6 +396,7 @@
   Object.assign(internal, {
     compactJsonlCoordinate,
     aiJsonlObjects,
+    aiJsonlOpenUnitChunks,
     aiJsonlRecordFromLine
   });
 })();
