@@ -53,6 +53,8 @@ for (let start = 0; start < WORDS;) {
 const PROVIDERS = {
   deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", rpm: 0,
     ttfb: () => 120 + random() * 120, perItemMs: 16, maxActive: 12 },
+  compatible: { baseUrl: "https://api.example.com/v1", model: "generic-model", rpm: 0,
+    ttfb: () => 700 + random() * 800, perItemMs: 8, maxActive: 4 },
   gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-3.5-flash-lite-preview", rpm: 15,
     ttfb: () => 6500 + random() * 2300, perItemMs: 3, maxActive: 1 }
@@ -126,10 +128,13 @@ const context = {
     enabled: true, targetLang: "zh-CN", debugEnabled: false, aiBaseUrl: spec.baseUrl,
     aiModel: spec.model, aiPrefetchBatches: 1,
     aiRequestItems: Number(process.env.REQUEST_ITEMS || 96), aiRateLimitRpm: spec.rpm,
-    aiExtraBodyRevision: 0, aiContextPast: 1, aiContextFuture: 1
+    aiExtraBodyRevision: 0, aiContextPast: 1, aiContextFuture: 1,
+    aiMaxConcurrency: Number(process.env.CONC || 4)
   },
   SEMANTIC_CORE_ITEMS: 32, AI_CORE_ITEMS: 32, AI_INITIAL_REQUEST_ITEMS: 48, AI_REQUEST_ITEMS: 80,
-  AI_URGENT_REQUEST_ITEMS: 96, DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS: 64,
+  AI_URGENT_REQUEST_ITEMS: 96,
+  ACCELERATED_URGENT_REQUEST_ITEMS: Number(process.env.ACCEL_URGENT || 128),
+  DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS: 64,
   DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48, COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
   COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80, GEMINI_REQUEST_ITEMS: 96,
   GEMINI_MAX_REQUEST_ITEMS: 320, GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
@@ -183,15 +188,23 @@ function respond(entry, payload) {
 context.sendRuntimeMessage = (message, callback) => {
   if (message.type === "cancelAiTranslationRequest" || message.type === "cancelAiTranslation") {
     for (const entry of Array.from(live.values())) {
-      if (message.type === "cancelAiTranslation" || entry.message.requestId === message.requestId) {
-        respond(entry, { ok: false, cancelled: true, errorCode: "AI_CANCELLED", translations: [] });
+      const kept = Array.isArray(message.keepRequestIds) &&
+        message.keepRequestIds.includes(entry.message.requestId);
+      if ((message.type === "cancelAiTranslation" && !kept) ||
+          entry.message.requestId === message.requestId) {
+        // Chrome delivers the cancelled reply later, after the page has
+        // already dropped the request's owner; never answer synchronously.
+        at(now, () => respond(entry, { ok: false, cancelled: true, errorCode: "AI_CANCELLED", translations: [] }));
       }
     }
     if (typeof callback === "function") callback({ ok: true });
     return true;
   }
   if (message.type !== "translateBatch") return true;
-  const status = shared.aiConcurrencyStatus(active, spec.maxActive, !!message.urgent);
+  // Newer trees send the profile's concurrency; older ones imply it.
+  const maxActive = spec.rpm > 0 && spec.rpm <= 30 ? 1
+    : Number.isInteger(message.maxConcurrency) ? message.maxConcurrency : spec.maxActive;
+  const status = shared.aiConcurrencyStatus(active, maxActive, !!message.urgent);
   if (!status.allowed) {
     at(now, () => callback({ ok: false, rateLimited: true, retryAfterMs: status.retryAfterMs,
       limitReason: status.reason, errorCode: "AI_RATE_LIMITED" }));

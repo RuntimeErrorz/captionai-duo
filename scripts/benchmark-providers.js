@@ -41,6 +41,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === "--profiles") args.profiles = next().split(",");
   else if (flag === "--dry-run") args.dryRun = true;
   else if (flag === "--span") args.span = true;
+  else if (flag === "--urgent") args.urgent = true;
   else throw new Error(`unknown argument ${flag}`);
 }
 if (!args.config && !args.dryRun) throw new Error("--config <exported settings> is required");
@@ -50,18 +51,15 @@ const shared = loadShared();
 
 // ---- prompt variants -----------------------------------------------------------
 // "current" is the shipped prompt. --prompt-append adds a candidate rule to
-// both system prompts as the "appended" variant, so a wording can be measured
+// the system prompt as the "appended" variant, so a wording can be measured
 // against the shipped one before it is adopted.
 function translationSource(variant) {
   let source = read("background/translation.js");
   if (variant === "appended") {
     const text = String(args.promptAppend || "");
     const fullEnd = source.indexOf("`;", source.indexOf("const FULL_SEGMENT_SYSTEM_PROMPT"));
-    const fastEnd = source.indexOf('].join("\\n\\n");', source.indexOf("const AI_FAST_SEGMENT_SYSTEM_PROMPT"));
-    if (!text || fullEnd < 0 || fastEnd < 0) throw new Error("--prompt-append needs text and known prompt anchors");
-    source = source.slice(0, fastEnd) + `,\n  ${JSON.stringify(text)}\n` + source.slice(fastEnd);
-    const fullEndAfter = source.indexOf("`;", source.indexOf("const FULL_SEGMENT_SYSTEM_PROMPT"));
-    source = source.slice(0, fullEndAfter) + "\n\n" + text.replace(/[`\\$]/g, "\\$&") + source.slice(fullEndAfter);
+    if (!text || fullEnd < 0) throw new Error("--prompt-append needs text and a known prompt anchor");
+    source = source.slice(0, fullEnd) + "\n\n" + text.replace(/[`\\$]/g, "\\$&") + source.slice(fullEnd);
   } else if (variant !== "current") {
     throw new Error(`unknown variant ${variant}`);
   }
@@ -254,7 +252,7 @@ async function measure(runtime, sample, size, requestId, spanWith) {
     result = await vm.runInContext("aiTranslateBatch", runtime.context)(
       items, runtime.context.chrome && "zh-CN", sample.sourceLang, before, after, true,
       `bench:${requestId}`, undefined,
-      { requestId, urgent: false, fastPath: false, bypassCache: true, commitGuardLocal: guardLocal }
+      { requestId, urgent: !!args.urgent, fastPath: false, bypassCache: true, commitGuardLocal: guardLocal }
     );
   } catch (err) {
     error = String(err && (err.errorCode || err.message) || err);

@@ -23,7 +23,6 @@ function configFiniteNumber(value, fallback, min, max) {
 
 function normalizeBackupSettings(value) {
   const raw = { ...configPlainObject(value) };
-  Object.assign(raw, YTDS_SHARED.legacySettingsMigration(raw).set);
   const settings = {};
   for (const [key, fallback] of Object.entries(YTDS_SHARED.DEFAULTS)) {
     if (typeof fallback === "boolean") settings[key] = typeof raw[key] === "boolean" ? raw[key] : fallback;
@@ -50,6 +49,9 @@ function normalizeBackupSettings(value) {
     YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, YTDS_SHARED.DEFAULTS.aiRequestItems);
   settings.aiRateLimitRpm = YTDS_SHARED.normalizeAiRateLimitRpm(
     settings.aiRateLimitRpm, YTDS_SHARED.DEFAULTS.aiRateLimitRpm
+  );
+  settings.aiMaxConcurrency = YTDS_SHARED.normalizeAiMaxConcurrency(
+    settings.aiMaxConcurrency, YTDS_SHARED.DEFAULTS.aiMaxConcurrency
   );
 
   const enumValues = {
@@ -118,7 +120,9 @@ function normalizeBackupProfileStore(value, fallbackSettings = state) {
         ? fallbackSettings.aiPrefetchBatches : source.prefetchBatches,
       requestItems: source.requestItems == null
         ? fallbackSettings.aiRequestItems : source.requestItems,
-      rateLimitRpm: source.rateLimitRpm
+      rateLimitRpm: source.rateLimitRpm,
+      maxConcurrency: source.maxConcurrency == null
+        ? fallbackSettings.aiMaxConcurrency : source.maxConcurrency
     }, index);
     if (usedIds.has(profile.id)) profile.id = newAiConfigProfileId();
     usedIds.add(profile.id);
@@ -156,6 +160,7 @@ function normalizeConfigBackup(value) {
   settings.aiPrefetchBatches = activeProfile.prefetchBatches;
   settings.aiRequestItems = activeProfile.requestItems;
   settings.aiRateLimitRpm = activeProfile.rateLimitRpm;
+  settings.aiMaxConcurrency = activeProfile.maxConcurrency;
   const credentialScope = YTDS_SHARED.aiCredentialScope(activeProfile.baseUrl);
   const requestScope = YTDS_SHARED.aiRequestProfileScope(
     activeProfile.baseUrl, activeProfile.model

@@ -73,29 +73,6 @@ test("connect deadlines follow the measured time to first byte", () => {
   assert.equal(timeout(fast, true), 30000, "the adaptive deadline is capped");
 });
 
-test("profiles saved before the RPM setting keep their former pacing", async () => {
-  const gemini = loadBackground({ aiBaseUrl: GEMINI, aiModel: "gemini-3.5-flash-lite-preview" });
-  await vm.runInContext("migrateAiRateLimitRpm()", gemini.context);
-  assert.equal(gemini.sync.data.aiRateLimitRpm, 15);
-
-  const deepseek = loadBackground({ aiBaseUrl: "https://api.deepseek.com", aiModel: "deepseek-v4-flash" });
-  await vm.runInContext("migrateAiRateLimitRpm()", deepseek.context);
-  assert.equal(deepseek.sync.data.aiRateLimitRpm, 0);
-
-  const shared = loadShared();
-  const scope = shared.aiRequestProfileScope("https://gateway.example/v1", "m");
-  const custom = loadBackground(
-    { aiBaseUrl: "https://gateway.example/v1", aiModel: "m" },
-    { aiExtraBodyProfiles: { [scope]: JSON.stringify({ rate_limit_rpm: 20 }) } }
-  );
-  await vm.runInContext("migrateAiRateLimitRpm()", custom.context);
-  assert.equal(custom.sync.data.aiRateLimitRpm, 20);
-
-  const chosen = loadBackground({ aiBaseUrl: GEMINI, aiModel: "g", aiRateLimitRpm: 0 });
-  await vm.runInContext("migrateAiRateLimitRpm()", chosen.context);
-  assert.equal(chosen.sync.data.aiRateLimitRpm, 0, "an explicit user choice is never overwritten");
-});
-
 test("the RPM setting, not the provider, selects request-limited scheduling", () => {
   const load = (settings) => {
     const context = { YTDS_SHARED: loadShared(), settings, getVideo: () => ({ playbackRate: 1 }) };
@@ -118,24 +95,4 @@ test("the RPM setting, not the provider, selects request-limited scheduling", ()
   assert.equal(unlimitedGemini("aiRequestLimited()"), false);
   assert.equal(unlimitedGemini("aiSteadyRequestItems()"), 128,
     "the request-items setting applies to every provider");
-});
-
-test("profile normalization moves in-band rate keys into the RPM setting", () => {
-  const context = vm.createContext({
-    YTDS_SHARED: loadShared(),
-    state: { targetLang: "zh-CN", aiContextPast: 1, aiContextFuture: 1,
-      aiPrefetchBatches: 1, aiRequestItems: 96 },
-    chrome: { storage: { local: storageArea(), sync: storageArea() } },
-    crypto: { randomUUID: () => "id" }
-  });
-  vm.runInContext(read("popup/ai-profiles.js"), context, { filename: "popup/ai-profiles.js" });
-  const normalize = vm.runInContext("normalizeAiConfigProfile", context);
-  const migrated = normalize({
-    name: "custom", baseUrl: "https://gateway.example/v1", model: "m",
-    extraBody: JSON.stringify({ rate_limit_rpm: 20, top_p: 0.9 })
-  }, 0);
-  assert.equal(migrated.rateLimitRpm, 20);
-  assert.deepEqual(JSON.parse(migrated.extraBody), { top_p: 0.9 });
-  assert.equal(normalize({ baseUrl: GEMINI, model: "gemini-3.5-flash-lite-preview" }, 0).rateLimitRpm, 15);
-  assert.equal(normalize({ baseUrl: GEMINI, model: "g", rateLimitRpm: 0 }, 0).rateLimitRpm, 0);
 });

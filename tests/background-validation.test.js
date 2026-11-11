@@ -97,39 +97,23 @@ test("background validation admits the accelerated 320-item runway", () => {
   assert.equal(clean(batchItems(321)), null);
 });
 
-test("provider-specific concurrency admits DeepSeek runway without overdriving compatible APIs", () => {
+test("the profile's concurrency setting caps speculative requests per tab", () => {
   const context = loadConcurrencyHarness();
   const sender = { tab: { id: 17 } };
-  const aiReleases = [];
-  for (let i = 0; i < 12; i++) {
-    aiReleases.push(context.acquireAiSlot(sender, false, "deepseek"));
+  for (const limit of [12, 4]) {
+    const releases = [];
+    for (let i = 0; i < limit; i++) releases.push(context.acquireAiSlot(sender, false, limit));
+    assert.throws(() => context.acquireAiSlot(sender, false, limit), /local concurrency guard busy/);
+    // The subtitle being watched never waits behind lookahead.
+    const urgentRelease = context.acquireAiSlot(sender, true, limit);
+    assert.equal(typeof urgentRelease, "function");
+    urgentRelease();
+    for (const release of releases) release();
   }
-  assert.throws(
-    () => context.acquireAiSlot(sender, false, "deepseek"),
-    /local concurrency guard busy/
-  );
-  for (const release of aiReleases) release();
 
-  const compatibleReleases = [];
-  for (let i = 0; i < 4; i++) {
-    compatibleReleases.push(context.acquireAiSlot(sender, false, "compatible"));
-  }
-  assert.throws(
-    () => context.acquireAiSlot(sender, false, "compatible"),
-    /local concurrency guard busy/
-  );
-  const urgentRelease = context.acquireAiSlot(sender, true, "compatible");
-  assert.equal(typeof urgentRelease, "function");
-  urgentRelease();
-  for (const release of compatibleReleases) release();
-
-  // A request-limited (low RPM) profile runs one request at a time,
-  // whatever the provider.
-  const limitedRelease = context.acquireAiSlot(sender, false, "gemini", true);
-  assert.throws(
-    () => context.acquireAiSlot(sender, false, "gemini", true),
-    /local concurrency guard busy/
-  );
+  // A request-limited (low RPM) profile runs one request at a time.
+  const limitedRelease = context.acquireAiSlot(sender, false, 12, true);
+  assert.throws(() => context.acquireAiSlot(sender, false, 12, true), /local concurrency guard busy/);
   limitedRelease();
 });
 
@@ -185,34 +169,23 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   assert.equal(prompts[0].requestClass, "urgent");
   assert.equal(prompts[1].requestClass, "prefetch");
   assert.equal(prompts[2].requestClass, "prefetch-fast");
-  assert.equal(prompts[0].maxTokens, 2048);
-  assert.equal(prompts[1].maxTokens, 4096);
-  assert.equal(prompts[2].maxTokens, 2048);
-  assert.equal(prompts[3].maxTokens, 4096);
-  assert.equal(prompts[4].maxTokens, 4096);
-  assert.equal(prompts[5].maxTokens, 4096);
-  assert.ok(prompts[0].content.length < prompts[1].content.length);
-  assert.equal(prompts[0].content, prompts[2].content);
-  assert.equal(prompts[3].content, prompts[4].content);
-  assert.equal(prompts[4].content, prompts[5].content);
-  assert.ok(prompts[3].content.length > prompts[0].content.length);
+  // One output budget for every lane and provider.
+  for (const prompt of prompts) assert.equal(prompt.maxTokens, 4096);
+  // One system prompt for every lane and provider.
+  for (const prompt of prompts) assert.equal(prompt.content, prompts[0].content);
   assert.match(prompts[0].content, /JSONL/);
   assert.match(prompts[0].content, /strict ordered prefix/);
   assert.match(prompts[0].content, /empty array is the only completion marker/);
   assert.match(prompts[0].content, /Punctuation carries meaning/);
   assert.match(prompts[0].content, /never silently concatenate two completed source sentences/);
   assert.match(prompts[0].content, /must not force a new display page/);
-  assert.match(prompts[0].content, /\[\[0,1,"\.\.\."\]\]/);
+  assert.match(prompts[0].content, /\[\[0,1,"\.\.\."\]/);
   assert.match(prompts[0].content, /zero-based and local to this request/);
   assert.match(prompts[0].content, /\[position,text\]/);
   assert.match(prompts[0].request, /CURRENT_CUES:\n\[\[0,"source"\]\]/);
   assert.doesNotMatch(prompts[0].request, /CURRENT_CUES:\n\[\[500/);
-  assert.match(prompts[2].content, /never enumerate an ids array/i);
-  assert.match(prompts[3].content, /Punctuation carries meaning/);
-  assert.match(prompts[3].content, /\[\[0,1,"\.\.\."\]/);
-  assert.match(prompts[3].content, /zero-based and local to this request/);
-  assert.match(prompts[3].content, /never enumerate an ids array/i);
-  assert.match(prompts[5].content, /never translate it as a period/);
+  assert.match(prompts[0].content, /never enumerate an ids array/i);
+  assert.match(prompts[0].content, /never translate it as a period/);
 });
 
 test("detailed semantic diagnostics retain the raw JSONL response", async () => {

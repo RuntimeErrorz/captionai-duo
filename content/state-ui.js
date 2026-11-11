@@ -91,10 +91,9 @@ const AI_CORE_ITEMS = SEMANTIC_CORE_ITEMS;
 const AI_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
 const AI_REQUEST_ITEMS = 80; // normal monotonic request window
 const AI_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
-const DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS = 64; // keep DeepSeek's visible stream short at >=1.75x; future runway is speculative
-const DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS = 48; // DeepSeek output is slower than playback at >=2.5x; hand off to the staged runway sooner
-const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // generic compatible streams can fill the wider visible runway
-const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
+// Visible window at >=1.75x for every provider. Simulated 64-160: 128 had the
+// fewest stalls and requests at 2x and 3x (160 degraded at 3x with seeks).
+const ACCELERATED_URGENT_REQUEST_ITEMS = 128;
 // Request-limited profiles (low RPM setting) trade request count for width.
 const AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS = 320;
 const AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS = 1;
@@ -191,6 +190,8 @@ function loadSettings() {
         YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, 96);
       settings.aiRateLimitRpm =
         YTDS_SHARED.normalizeAiRateLimitRpm(settings.aiRateLimitRpm, 0);
+      settings.aiMaxConcurrency =
+        YTDS_SHARED.normalizeAiMaxConcurrency(settings.aiMaxConcurrency, 4);
       resolve();
     });
   });
@@ -240,6 +241,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
         settings.aiRateLimitRpm =
           YTDS_SHARED.normalizeAiRateLimitRpm(settings.aiRateLimitRpm, 0);
         prefetchChanged = prefetchChanged || oldV !== settings.aiRateLimitRpm;
+      }
+      if (k === "aiMaxConcurrency") {
+        settings.aiMaxConcurrency =
+          YTDS_SHARED.normalizeAiMaxConcurrency(settings.aiMaxConcurrency, 4);
+        prefetchChanged = prefetchChanged || oldV !== settings.aiMaxConcurrency;
       }
       if (RECUE_KEYS.has(k) && oldV !== settings[k]) {
         needRecue = true;

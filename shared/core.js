@@ -29,30 +29,8 @@
     "modalities", "audio"
   ]);
 
-  // Sync keys renamed when the provider-neutral naming landed. Read once,
-  // copied to the new key if that is still unset, then removed.
-  const LEGACY_SETTING_KEYS = Object.freeze({
-    deepseekContextPast: "aiContextPast",
-    deepseekContextFuture: "aiContextFuture",
-    deepseekPrefetchBatches: "aiPrefetchBatches"
-  });
-
-  function legacySettingsMigration(storedValue) {
-    const stored = storedValue && typeof storedValue === "object" ? storedValue : {};
-    const set = {};
-    const remove = [];
-    for (const [legacyKey, key] of Object.entries(LEGACY_SETTING_KEYS)) {
-      if (!Object.prototype.hasOwnProperty.call(stored, legacyKey)) continue;
-      remove.push(legacyKey);
-      if (!Object.prototype.hasOwnProperty.call(stored, key)) set[key] = stored[legacyKey];
-    }
-    return { set, remove };
-  }
-
   const AI_MAX_RATE_LIMIT_RPM = 600;
   const AI_REQUEST_LIMITED_MAX_RPM = 30;
-  const AI_GEMINI_FREE_TIER_RPM = 15;
-  const AI_LEGACY_RATE_LIMIT_KEYS = Object.freeze(["rate_limit_rpm", "rpm", "rate_limit_interval_ms"]);
 
   const DEFAULTS = Object.freeze({
     enabled: true,
@@ -65,6 +43,7 @@
     aiPrefetchBatches: 1,
     aiRequestItems: 320,
     aiRateLimitRpm: 0,
+    aiMaxConcurrency: 4,
     debugEnabled: false,
     order: "trans-top",
     rowGap: 4,
@@ -189,20 +168,6 @@
     } catch (_e) {
       return "compatible";
     }
-  }
-
-  // The Google OpenAI-compatible endpoint accepts several model families. Keep
-  // Gemini policy decisions tied to the model contract rather than treating
-  // every request sent to that host as Gemini.
-  function isGeminiModel(value) {
-    const model = String(value || "").trim().toLowerCase().replace(/^models\//, "");
-    return /^gemini(?:[-_.]|$)/.test(model);
-  }
-
-  function aiProviderKind(baseUrlValue, modelValue) {
-    const endpointKind = aiEndpointKind(baseUrlValue);
-    if (endpointKind !== "compatible") return endpointKind;
-    return isGeminiModel(modelValue) ? "gemini" : "compatible";
   }
 
   function aiChatCompletionsUrl(value) {
@@ -464,10 +429,7 @@
       stream: true
     };
     if (parsedExtra.ok) {
-      for (const [key, value] of Object.entries(parsedExtra.value)) {
-        // Former in-band scheduler settings are not provider parameters.
-        if (!AI_LEGACY_RATE_LIMIT_KEYS.includes(key)) body[key] = value;
-      }
+      for (const [key, value] of Object.entries(parsedExtra.value)) body[key] = value;
     }
     // Reassert the protected transport/contract values after the merge even
     // though the parser rejects them. This keeps direct programmatic callers
@@ -519,6 +481,16 @@
     return Math.max(0, Math.min(AI_MAX_RATE_LIMIT_RPM, Math.round(chosen)));
   }
 
+  // Requests one tab may have in flight at once. One slot always serves the
+  // subtitle being watched; the rest run lookahead.
+  const AI_MAX_CONCURRENCY = 16;
+  function normalizeAiMaxConcurrency(value, fallbackValue) {
+    const count = Number(value);
+    const fallback = Number(fallbackValue);
+    const chosen = Number.isFinite(count) ? count : Number.isFinite(fallback) ? fallback : 4;
+    return Math.max(1, Math.min(AI_MAX_CONCURRENCY, Math.round(chosen)));
+  }
+
   // A provider limited to a few requests per minute is request-bound, not
   // token-bound: schedule few wide requests, one at a time, with one lane.
   function aiRequestLimited(rpmValue) {
@@ -530,20 +502,6 @@
   function aiMinRequestIntervalMs(rpmValue) {
     const rpm = normalizeAiRateLimitRpm(rpmValue, 0);
     return rpm > 0 ? Math.ceil((60000 / rpm) * 1.05) : 0;
-  }
-
-  // One-time migration source for profiles saved before the RPM setting:
-  // an RPM typed into extra request parameters, else the Gemini free-tier
-  // limit the scheduler used to assume for Gemini endpoints.
-  function legacyAiRateLimitRpm(baseUrl, model, extraBodyValue) {
-    const extra = extraBodyValue && typeof extraBodyValue === "object" ? extraBodyValue : {};
-    const legacyRpm = Number(extra.rate_limit_rpm || extra.rpm);
-    if (Number.isFinite(legacyRpm) && legacyRpm > 0) return normalizeAiRateLimitRpm(legacyRpm, 0);
-    const legacyInterval = Number(extra.rate_limit_interval_ms);
-    if (Number.isFinite(legacyInterval) && legacyInterval > 0) {
-      return normalizeAiRateLimitRpm(Math.floor(60000 / legacyInterval), 0);
-    }
-    return aiProviderKind(baseUrl, model) === "gemini" ? AI_GEMINI_FREE_TIER_RPM : 0;
   }
 
   function normalizeAiContextCount(value, fallbackValue) {
@@ -637,17 +595,14 @@
 
   Object.assign(internal, {
     AI_REQUEST_LIMITED_MAX_RPM,
-    AI_LEGACY_RATE_LIMIT_KEYS,
     normalizeAiRateLimitRpm,
+    normalizeAiMaxConcurrency,
     aiRequestLimited,
     aiMinRequestIntervalMs,
-    legacyAiRateLimitRpm,
     aiHostPermissionPattern,
-    LEGACY_SETTING_KEYS,
-    legacySettingsMigration,
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, AI_PROMPT_CACHE_VERSION, DEFAULTS, FONT_STACKS,
     normalizeTargetLang,
-    isSameLanguage, normalizeAiBaseUrl, aiEndpointKind, isGeminiModel, aiProviderKind,
+    isSameLanguage, normalizeAiBaseUrl, aiEndpointKind,
     aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,
     parseAiExtraBody, aiCompletionText, aiErrorDescriptor, aiErrorMessage,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,

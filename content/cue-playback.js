@@ -122,20 +122,23 @@ function clearAiSeekSettle() {
   captionSession.semanticPendingSeekTimeMs = 0;
 }
 
-function aiBatchIndexAtTime(timeMs) {
+function aiGroupAtTime(timeMs) {
   if (!captionSession.cueList || !captionSession.semanticBatchWindows.length) return -1;
   let cueIndex = activeCueIdxAt(timeMs);
   if (cueIndex < 0) cueIndex = Math.min(captionSession.cueList.length - 1, findCueIdx(timeMs) + 1);
   const group = aiGroupForCueAt(cueIndex, timeMs);
-  if (!Number.isInteger(group) || group < 0) return -1;
-  const batchIndex = captionSession.semanticGroupToBatch[group];
-  return Number.isInteger(batchIndex) ? batchIndex : -1;
+  return Number.isInteger(group) && group >= 0 ? group : -1;
 }
 
 function focusAiAfterSeek(timeMs) {
-  const batchIndex = aiBatchIndexAtTime(timeMs);
-  if (batchIndex < 0 || batchIndex === captionSession.semanticFocusedBatchIndex) return;
+  const group = aiGroupAtTime(timeMs);
+  const batchIndex = group >= 0 ? captionSession.semanticGroupToBatch[group] : -1;
+  if (!Number.isInteger(batchIndex) || batchIndex < 0 ||
+      batchIndex === captionSession.semanticFocusedBatchIndex) return;
   const previousBatchIndex = captionSession.semanticFocusedBatchIndex;
+  // A commit request already covering the new target is exactly the work the
+  // post-seek scheduler would send again; keep it instead of cancelling it.
+  const kept = aiCommitRequestsCoveringGroup(group);
   captionSession.semanticFocusedBatchIndex = batchIndex;
   captionSession.semanticFocusGeneration++;
   invalidateCaptionSession("seek-focus");
@@ -146,6 +149,7 @@ function focusAiAfterSeek(timeMs) {
       captionSession.semanticRequestMeta.delete(key);
     }
   }
+  adoptAiRequestsAfterSeek(kept);
   for (const state of captionSession.semanticCommitStateByRegion.values()) {
     if (Array.isArray(state.prefetchQueue)) state.prefetchQueue.length = 0;
     if (state.prefetchQueued && typeof state.prefetchQueued.clear === "function") {
@@ -168,7 +172,8 @@ function focusAiAfterSeek(timeMs) {
     sendRuntimeMessage({
       type: "cancelAiTranslation",
       videoId: captionSession.cueVideoId,
-      beforeFocusGeneration: captionSession.semanticFocusGeneration
+      beforeFocusGeneration: captionSession.semanticFocusGeneration,
+      keepRequestIds: Array.from(kept.values(), (request) => request.requestId)
     });
   }
 }

@@ -146,7 +146,6 @@ function handoffAiStream(regionIndex, request, state) {
     if (!isCaptionSessionCurrent(request.sessionToken) ||
         request.reqEpoch !== captionSession.cueEpoch ||
         request.reqVid !== captionSession.cueVideoId ||
-        captionSession.semanticFocusGeneration !== request.focusGeneration ||
         state.cursor !== continuationStart || state.cursor > state.targetThrough ||
         state.cursor > state.limitEnd) return;
     aiRequestBatch(continuationStart, false, true, { bypassCache: true });
@@ -571,7 +570,7 @@ function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
   const batchIndex = captionSession.semanticGroupToBatch[start];
   const batch = captionSession.semanticBatchWindows[batchIndex];
   sendRuntimeMessage({
-    type: "translateBatch", endpointKind: aiEndpointKind(),
+    type: "translateBatch", maxConcurrency: aiMaxConcurrency(),
     requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
     commitGuardLocal: typeof aiCommitGuardLocal === "function"
       ? aiCommitGuardLocal(start, requestEnd, state.limitEnd, requestMeta.effectiveGuardItems) : -1,
@@ -588,6 +587,41 @@ function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
     if (finished) handleAiBatchResult(finished, resp, runtimeError);
   });
   return true;
+}
+// Live commit requests whose range contains `group`, keyed by inflight key.
+function aiCommitRequestsCoveringGroup(group) {
+  const kept = new Map();
+  const target = Number(group);
+  const groupToRegion = captionSession.semanticGroupToCommitRegion;
+  const regionIndex = groupToRegion && Number.isInteger(target) ? groupToRegion[target] : undefined;
+  if (!Number.isInteger(regionIndex)) return kept;
+  for (const [key, request] of captionSession.semanticRequestMeta.entries()) {
+    if (key !== `dsb:${regionIndex}` || !request || request.prefetch ||
+        request.regionIndex !== regionIndex ||
+        request.reqEpoch !== captionSession.cueEpoch ||
+        !isCaptionSessionCurrent(request.sessionToken) ||
+        !(Number(request.requestStart) <= target && target <= Number(request.requestEnd))) continue;
+    kept.set(key, request);
+  }
+  return kept;
+}
+// Hand requests kept across a seek to the new session. Ownership moves to the
+// new token; focusGeneration stays the transport identity the worker echoes.
+function adoptAiRequestsAfterSeek(kept) {
+  for (const [key, request] of kept.entries()) {
+    Object.assign(request, {
+      sessionToken: captureCaptionSession(),
+      reqEpoch: captionSession.cueEpoch
+    });
+    captionSession.semanticRequestMeta.set(key, request);
+    captionSession.transInflight.add(key);
+    emitCaptionStateTransition("semantic-request", "adopted", {
+      requestId: request.requestId,
+      reason: "seek-target-covered",
+      requestStart: request.requestStart,
+      requestEnd: request.requestEnd
+    });
+  }
 }
 function aiRequestById(requestId) {
   const wanted = String(requestId || "");

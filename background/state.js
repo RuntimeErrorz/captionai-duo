@@ -19,8 +19,6 @@ const AI_CONNECT_TIMEOUT_URGENT_MS = 8000;
 const AI_CONNECT_TIMEOUT_PREFETCH_MS = 12000;
 const AI_STREAM_COMPLETION_GRACE_MS = 750;
 const AI_MAX_ATTEMPTS = 3;
-const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 12;
-const COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB = 4;
 const REQUEST_LIMITED_MAX_ACTIVE_REQUESTS_PER_TAB = 1;
 const MAX_TRANSLATE_CHARS = 4000;
 // Accelerated playback needs a longer semantic runway than ordinary playback.
@@ -93,8 +91,6 @@ function debugSecretsFromLocalStorage(stored) {
   };
   const keys = stored && stored.aiApiKeys;
   if (keys && typeof keys === "object") Object.values(keys).forEach(add);
-  add(stored && stored.aiApiKey);
-  add(stored && stored.deepseekApiKey);
   const profileStore = stored && stored.aiConfigProfileStoreV1;
   const profiles = profileStore && Array.isArray(profileStore.profiles)
     ? profileStore.profiles : [];
@@ -107,7 +103,7 @@ async function refreshDebugKnownSecrets() {
   if (!localStore) { debugKnownSecrets = []; return; }
   try {
     const stored = await localStore.get({
-      aiApiKeys: {}, aiApiKey: "", deepseekApiKey: "", aiConfigProfileStoreV1: null
+      aiApiKeys: {}, aiConfigProfileStoreV1: null
     });
     debugKnownSecrets = debugSecretsFromLocalStorage(stored);
   } catch (_e) {
@@ -160,7 +156,7 @@ if (chrome.storage && chrome.storage.onChanged &&
     typeof chrome.storage.onChanged.addListener === "function") {
   chrome.storage.onChanged.addListener((changes, areaName) => {
     const credentialKeys = new Set([
-      "aiApiKeys", "aiApiKey", "deepseekApiKey", "aiConfigProfileStoreV1"
+      "aiApiKeys", "aiConfigProfileStoreV1"
     ]);
     if (areaName !== "local" || !Object.keys(changes || {}).some(
       (key) => credentialKeys.has(key)
@@ -499,13 +495,12 @@ function cleanBatchItems(value) {
   return out;
 }
 
-function acquireAiSlot(sender, urgent, endpointKind, requestLimited) {
+function acquireAiSlot(sender, urgent, maxConcurrency, requestLimited) {
   const key = sender && sender.tab && Number.isInteger(sender.tab.id)
     ? `tab:${sender.tab.id}` : "extension";
   const state = aiActiveByTab.get(key) || { active: 0 };
   const maxActive = requestLimited ? REQUEST_LIMITED_MAX_ACTIVE_REQUESTS_PER_TAB
-    : endpointKind === "deepseek" ? DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB
-      : COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB;
+    : YTDS_SHARED.normalizeAiMaxConcurrency(maxConcurrency, 4);
   const status = YTDS_SHARED.aiConcurrencyStatus(
     state.active, maxActive, !!urgent
   );
@@ -548,45 +543,6 @@ function retryDelayMs(res, attempt) {
 // arbitrary byte slices, so YTDS_SHARED.aiSseEvents buffers until a full
 // blank-line-delimited event is available before any JSON is parsed.
 
-// One-time rename of provider-specific sync keys; idempotent on every start.
-async function migrateLegacySettings() {
-  const syncStore = chrome.storage && chrome.storage.sync;
-  if (!syncStore) return;
-  try {
-    const legacy = YTDS_SHARED.LEGACY_SETTING_KEYS;
-    const stored = await syncStore.get([...Object.keys(legacy), ...Object.values(legacy)]);
-    const migration = YTDS_SHARED.legacySettingsMigration(stored);
-    if (!migration.remove.length) return;
-    if (Object.keys(migration.set).length) await syncStore.set(migration.set);
-    await syncStore.remove(migration.remove);
-  } catch (_e) { /* retried on the next worker start */ }
-}
-
-// Profiles saved before the requests-per-minute setting keep the pacing the
-// scheduler used to infer: an RPM typed into extra request parameters, or the
-// Gemini free-tier limit for Gemini endpoints. Runs once; idempotent.
-async function migrateAiRateLimitRpm() {
-  const syncStore = chrome.storage && chrome.storage.sync;
-  const localStore = chrome.storage && chrome.storage.local;
-  if (!syncStore || !localStore) return;
-  try {
-    const stored = await syncStore.get(["aiRateLimitRpm", "aiBaseUrl", "aiModel"]);
-    if (Object.prototype.hasOwnProperty.call(stored, "aiRateLimitRpm")) return;
-    const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(stored.aiBaseUrl) || YTDS_SHARED.AI_DEFAULT_BASE_URL;
-    const model = String(stored.aiModel || YTDS_SHARED.AI_DEFAULT_MODEL).trim();
-    const local = await localStore.get({ aiExtraBodyProfiles: {} });
-    const extras = local.aiExtraBodyProfiles && typeof local.aiExtraBodyProfiles === "object"
-      ? local.aiExtraBodyProfiles : {};
-    const parsed = YTDS_SHARED.parseAiExtraBody(
-      extras[YTDS_SHARED.aiRequestProfileScope(baseUrl, model)] || ""
-    );
-    await syncStore.set({
-      aiRateLimitRpm: YTDS_SHARED.legacyAiRateLimitRpm(baseUrl, model, parsed.ok ? parsed.value : {})
-    });
-  } catch (_e) { /* retried on the next worker start */ }
-}
-
-const legacySettingsMigrated = migrateLegacySettings().then(migrateAiRateLimitRpm);
 
 // A newly granted API host is new request material: bump the shared revision
 // so open video tabs retry, even if the popup closed during the prompt.

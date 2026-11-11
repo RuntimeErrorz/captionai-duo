@@ -441,15 +441,19 @@ function cancelAiRequestForSender(sender, videoId, requestId) {
   return cancelled;
 }
 
-function cancelAiForSender(sender, videoId, beforeFocusGeneration) {
+// keepRequestIds names requests the page carried across a seek because their
+// range still covers the new playback target.
+function cancelAiForSender(sender, videoId, beforeFocusGeneration, keepRequestIds) {
   const tabId = sender && sender.tab && sender.tab.id;
   const set = aiControllers.get(tabId);
   if (!set) return;
   const cutoff = Number(beforeFocusGeneration);
+  const keep = new Set(Array.isArray(keepRequestIds)
+    ? keepRequestIds.slice(0, 16).filter((id) => typeof id === "string" && id) : []);
   for (const entry of Array.from(set)) {
     const matchesVideo = !videoId || entry.videoId === String(videoId);
     const isOlderFocus = !Number.isFinite(cutoff) || entry.focusGeneration < cutoff;
-    if (matchesVideo && isOlderFocus) entry.controller.abort();
+    if (matchesVideo && isOlderFocus && !keep.has(entry.requestId)) entry.controller.abort();
   }
 }
 
@@ -503,9 +507,7 @@ async function getAiConfig() {
   ]);
   const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(stored.aiBaseUrl);
   const model = String(stored.aiModel || YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160);
-  const endpointKind = typeof YTDS_SHARED.aiProviderKind === "function"
-    ? YTDS_SHARED.aiProviderKind(baseUrl, model)
-    : YTDS_SHARED.aiEndpointKind(baseUrl);
+  const endpointKind = YTDS_SHARED.aiEndpointKind(baseUrl);
   const profiles = local.aiExtraBodyProfiles && typeof local.aiExtraBodyProfiles === "object"
     ? local.aiExtraBodyProfiles : {};
   const profileScope = YTDS_SHARED.aiRequestProfileScope(baseUrl, model);
@@ -533,14 +535,9 @@ async function aiApiKeyForConfig(config) {
   const stored = await chrome.storage.local.get({ aiApiKeys: {} });
   const keys = stored.aiApiKeys && typeof stored.aiApiKeys === "object"
     ? stored.aiApiKeys : {};
-  const apiKey = String(keys[YTDS_SHARED.aiCredentialScope(config.baseUrl)] || "").trim();
-  if (config.endpointKind === "deepseek" && !apiKey) {
-    const err = new Error("AI API key is not configured");
-    err.needsKey = true;
-    err.errorCode = "AI_KEY_MISSING";
-    throw err;
-  }
-  return apiKey;
+  // A key is optional: local or keyless endpoints work without one, and a
+  // provider that needs it answers 401/403, which is reported as such.
+  return String(keys[YTDS_SHARED.aiCredentialScope(config.baseUrl)] || "").trim();
 }
 
 async function ensureAiHostPermission(config) {

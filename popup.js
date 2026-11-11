@@ -518,7 +518,7 @@ async function onExportClick() {
     if (resp == null) {
       showExportMsg(t("exportNotYoutube", "请在 YouTube 视频页面使用导出。"), "err");
     } else if (resp.ok) {
-      const source = resp.source === "ai" || resp.source === "deepseek"
+      const source = resp.source === "ai"
         ? t("exportSourceAi", "AI 译文") : "";
       showExportMsg(t("exportDone", "已下载字幕") + " (" + (resp.count || 0) + ")" +
         (source ? " · " + source : ""), "ok");
@@ -579,6 +579,7 @@ function bindUI() {
   $("aiPrefetchBatches").value = String(state.aiPrefetchBatches);
   $("aiRequestItems").value = String(state.aiRequestItems);
   $("aiRateLimitRpm").value = String(state.aiRateLimitRpm);
+  $("aiMaxConcurrency").value = String(state.aiMaxConcurrency);
   $("rowGap").value = state.rowGap;
   $("rowGapV").textContent = state.rowGap + "px";
   paintSegs();
@@ -716,6 +717,8 @@ chrome.storage.sync.get(null, (got) => {
     YTDS_SHARED.normalizeAiRequestItems(state.aiRequestItems, DEFAULTS.aiRequestItems);
   state.aiRateLimitRpm =
     YTDS_SHARED.normalizeAiRateLimitRpm(state.aiRateLimitRpm, DEFAULTS.aiRateLimitRpm);
+  state.aiMaxConcurrency =
+    YTDS_SHARED.normalizeAiMaxConcurrency(state.aiMaxConcurrency, DEFAULTS.aiMaxConcurrency);
   chrome.storage.local.get({
     aiApiKeys: {}, aiExtraBodyProfiles: {},
     [AI_CONFIG_PROFILE_STORE_KEY]: null

@@ -1,24 +1,20 @@
-// Provider-aware semantic request sizing and playback policy.
+// Semantic request sizing and playback policy, from the profile's settings.
 "use strict";
 
-const DEEPSEEK_MAX_SPECULATIVE_REQUESTS = 2;
-// Speculative output is billed even when playback never reaches it. Keep the
-// accelerated runway useful but bounded; the scheduler will refill it as the
-// committed cursor advances instead of paying for a whole distant transcript.
-const DEEPSEEK_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 3;
-const DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 4;
-const COMPATIBLE_ACCELERATED_MAX_SPECULATIVE_REQUESTS = 2;
-const COMPATIBLE_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS = 3;
+// Speculative lanes wanted at each playback speed; the profile's concurrency
+// setting caps them, always leaving one slot for the visible subtitle.
+// Speculative output is billed even when playback never reaches it, so the
+// accelerated runway is useful but bounded.
+const SPECULATIVE_REQUESTS = 2;
+const ACCELERATED_SPECULATIVE_REQUESTS = 3;
+const HIGH_SPEED_SPECULATIVE_REQUESTS = 4;
 
-function aiEndpointKind() {
-  const baseUrl = typeof settings === "object" && settings ? settings.aiBaseUrl : "";
-  const model = typeof settings === "object" && settings ? settings.aiModel : "";
+function aiMaxConcurrency() {
+  const value = typeof settings === "object" && settings ? settings.aiMaxConcurrency : 4;
   const shared = typeof YTDS_SHARED === "object" && YTDS_SHARED ? YTDS_SHARED : null;
-  if (shared && typeof shared.aiProviderKind === "function") {
-    return shared.aiProviderKind(baseUrl, model);
-  }
-  return shared && typeof shared.aiEndpointKind === "function"
-    ? shared.aiEndpointKind(baseUrl) : "deepseek";
+  return shared && typeof shared.normalizeAiMaxConcurrency === "function"
+    ? shared.normalizeAiMaxConcurrency(value, 4)
+    : Math.max(1, Math.min(16, Math.round(Number(value) || 4)));
 }
 
 // A profile limited to a few requests per minute (its RPM setting) is
@@ -63,33 +59,14 @@ function aiMaxSpeculativeRequests() {
   if (aiRequestLimited()) return AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS;
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  const deepseek = aiEndpointKind() === "deepseek";
-  if (Number.isFinite(rate) && rate >= 2.5) {
-    return deepseek
-      ? DEEPSEEK_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS
-      : COMPATIBLE_HIGH_SPEED_MAX_SPECULATIVE_REQUESTS;
-  }
-  if (Number.isFinite(rate) && rate >= 1.75) {
-    return deepseek
-      ? DEEPSEEK_ACCELERATED_MAX_SPECULATIVE_REQUESTS
-      : COMPATIBLE_ACCELERATED_MAX_SPECULATIVE_REQUESTS;
-  }
-  return deepseek ? DEEPSEEK_MAX_SPECULATIVE_REQUESTS : 1;
+  const wanted = Number.isFinite(rate) && rate >= 2.5 ? HIGH_SPEED_SPECULATIVE_REQUESTS
+    : Number.isFinite(rate) && rate >= 1.75 ? ACCELERATED_SPECULATIVE_REQUESTS
+      : SPECULATIVE_REQUESTS;
+  return Math.max(1, Math.min(wanted, aiMaxConcurrency() - 1));
 }
 
 function aiAcceleratedUrgentRequestItems() {
-  if (aiRequestLimited()) return aiConfiguredRequestItems();
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  const deepseek = aiEndpointKind() === "deepseek";
-  if (Number.isFinite(rate) && rate >= 2.5) {
-    return deepseek
-      ? DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS
-      : COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS;
-  }
-  return deepseek
-    ? DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS
-    : COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS;
+  return aiRequestLimited() ? aiConfiguredRequestItems() : ACCELERATED_URGENT_REQUEST_ITEMS;
 }
 
 function aiMaxRequestItems() {

@@ -199,17 +199,3 @@ test("invalid backup is rejected before storage is changed", async () => {
   );
   assert.deepEqual(writes, []);
 });
-
-test("legacy provider-specific sync keys migrate without overwriting new keys", () => {
-  const shared = loadShared();
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(shared.legacySettingsMigration({
-      deepseekContextPast: 3, deepseekPrefetchBatches: 4, aiPrefetchBatches: 2
-    }))),
-    { set: { aiContextPast: 3 }, remove: ["deepseekContextPast", "deepseekPrefetchBatches"] }
-  );
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(shared.legacySettingsMigration({ aiContextPast: 1 }))),
-    { set: {}, remove: [] }
-  );
-});

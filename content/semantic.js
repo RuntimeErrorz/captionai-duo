@@ -386,8 +386,9 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
 const reseedAiCommitState = reseedSemanticCommitState;
 function canContinueAiInflight(regionIndex, state, targetGroup) {
   const request = captionSession.semanticRequestMeta.get(`dsb:${regionIndex}`);
+  // Ownership is the session token (rotated on every focus change), so a
+  // request adopted across a seek keeps its transport focusGeneration.
   if (!request || !state || request.reqEpoch !== captionSession.cueEpoch ||
-      request.focusGeneration !== captionSession.semanticFocusGeneration ||
       !isCaptionSessionCurrent(request.sessionToken)) return false;
   // Normal or accelerated playback may overtake the private guard just before
   // a response completes. Preserve that response when the new target is close
@@ -739,7 +740,7 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   }
   sendRuntimeMessage({
     type: "translateBatch",
-    endpointKind: aiEndpointKind(),
+    maxConcurrency: aiMaxConcurrency(),
     requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
     commitGuardLocal: typeof aiCommitGuardLocal === "function"
       ? (spanRegions.length
@@ -765,7 +766,8 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   }, (resp, runtimeError) => {
     const finishedRequest = finishAiRequest(inflightKey, requestId);
     if (!finishedRequest) return;
-    if (!isCaptionSessionCurrent(requestSessionToken)) {
+    // The owner's token, not the send-time token: a seek may adopt the request.
+    if (!isCaptionSessionCurrent(finishedRequest.sessionToken)) {
       emitCaptionStateTransition("semantic-response", "discarded", {
         requestId,
         reason: "session-invalidated"

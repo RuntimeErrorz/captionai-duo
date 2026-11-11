@@ -59,7 +59,7 @@ function handleCancelAiTranslation(msg, sender, sendResponse) {
     sendResponse({ ok: false, error: "untrusted sender", errorCode: "AI_UNTRUSTED_SENDER" });
     return false;
   }
-  cancelAiForSender(sender, msg.videoId, msg.beforeFocusGeneration);
+  cancelAiForSender(sender, msg.videoId, msg.beforeFocusGeneration, msg.keepRequestIds);
   sendResponse({ ok: true });
   return false;
 }
@@ -101,8 +101,7 @@ function parseTranslateBatch(msg, sender) {
     urgent: !!msg.urgent,
     fastPath: msg.fastPath === true,
     debug: !!msg.debug,
-    endpointKind: msg.endpointKind === "deepseek" || msg.endpointKind === "gemini"
-      ? msg.endpointKind : "compatible",
+    maxConcurrency: YTDS_SHARED.normalizeAiMaxConcurrency(msg.maxConcurrency, 4),
     requestLimited: msg.requestLimited === true,
     commitGuardLocal: Number.isInteger(msg.commitGuardLocal) &&
       msg.commitGuardLocal > 0 && msg.commitGuardLocal < items.length
@@ -238,7 +237,7 @@ function handleTranslateBatch(msg, sender, sendResponse) {
     return false;
   }
   let release;
-  try { release = acquireAiSlot(sender, batch.urgent, batch.endpointKind, batch.requestLimited); }
+  try { release = acquireAiSlot(sender, batch.urgent, batch.maxConcurrency, batch.requestLimited); }
   catch (err) {
     sendResponse(slotUnavailableResponse(err, batch));
     return false;

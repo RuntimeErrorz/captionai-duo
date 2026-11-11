@@ -9,7 +9,8 @@ const AI_TUNING_FIELDS = Object.freeze([
   ["aiContextFuture", (value) => YTDS_SHARED.normalizeAiContextCount(value, state.aiContextFuture), "contextFuture"],
   ["aiPrefetchBatches", (value) => YTDS_SHARED.normalizeAiPrefetchBatches(value), "prefetchBatches"],
   ["aiRequestItems", (value) => YTDS_SHARED.normalizeAiRequestItems(value, state.aiRequestItems), "requestItems"],
-  ["aiRateLimitRpm", (value) => YTDS_SHARED.normalizeAiRateLimitRpm(value, state.aiRateLimitRpm), "rateLimitRpm"]
+  ["aiRateLimitRpm", (value) => YTDS_SHARED.normalizeAiRateLimitRpm(value, state.aiRateLimitRpm), "rateLimitRpm"],
+  ["aiMaxConcurrency", (value) => YTDS_SHARED.normalizeAiMaxConcurrency(value, state.aiMaxConcurrency), "maxConcurrency"]
 ]);
 
 function aiHostPermissionOrigins(baseUrl) {
@@ -71,12 +72,6 @@ async function refreshEngineStatus() {
   }
   if (!await hasAiHostPermission(baseUrl)) {
     showEngineWarning(el, t("aiPermissionMissing", "需要授权扩展访问这个 API 地址。"), true);
-    return;
-  }
-  const apiKey = await loadCurrentAiApiKey();
-  const endpointKind = YTDS_SHARED.aiEndpointKind(baseUrl);
-  if (endpointKind === "deepseek" && !apiKey) {
-    showEngineWarning(el, t("aiKeyMissing", "请先填写 API Key。"), false);
     return;
   }
   try {

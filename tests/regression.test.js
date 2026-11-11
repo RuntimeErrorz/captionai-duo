@@ -51,15 +51,11 @@ test("target languages and same-language detection", () => {
   assert.equal(shared.isSameLanguage("", "en"), false);
 });
 
-test("provider classification follows the base URL and model", () => {
+test("provider classification follows only the base URL", () => {
   assert.equal(shared.aiEndpointKind("https://api.deepseek.com"), "deepseek");
   assert.equal(shared.aiEndpointKind("https://gateway.example/v1"), "compatible");
-  for (const model of ["gemini-3.5-flash-lite-preview", "gemini-3.1-flash-lite-preview"]) {
-    assert.equal(shared.aiProviderKind(
-      "https://generativelanguage.googleapis.com/v1beta/openai", model
-    ), "gemini");
-  }
-  assert.equal(shared.aiProviderKind("https://gateway.example/v1", "other-model"), "compatible");
+  assert.equal(shared.aiEndpointKind("https://generativelanguage.googleapis.com/v1beta/openai"), "compatible");
+  assert.equal(shared.aiProviderKind, undefined);
 });
 
 test("API bases require HTTPS except local servers and never carry credentials", () => {

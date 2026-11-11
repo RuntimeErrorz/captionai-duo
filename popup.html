@@ -141,6 +141,11 @@
             <input id="aiRateLimitRpm" type="number" min="0" max="600" step="1" inputmode="numeric"
                    data-i18n-title="aiRateLimitRpmHint" title="0 表示不限制" />
           </div>
+          <div class="field">
+            <label for="aiMaxConcurrency" data-i18n="aiMaxConcurrency">最大并发请求</label>
+            <input id="aiMaxConcurrency" type="number" min="1" max="16" step="1" inputmode="numeric"
+                   data-i18n-title="aiMaxConcurrencyHint" title="同时进行的翻译请求数上限" />
+          </div>
         </div>
 
         <div class="field">

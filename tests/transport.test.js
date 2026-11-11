@@ -207,10 +207,7 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     AI_INITIAL_REQUEST_ITEMS: 48,
     AI_REQUEST_ITEMS: 80,
     AI_URGENT_REQUEST_ITEMS: 96,
-    DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS: 64,
-    DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
-    COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
-    COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80,
+    ACCELERATED_URGENT_REQUEST_ITEMS: 128,
     AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
     AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS: 1,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
@@ -452,7 +449,7 @@ test("a 15 RPM profile leaves a 4.2 second global start interval", async () => {
   });
   const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
   const config = {
-    endpointKind: "gemini",
+    endpointKind: "compatible",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-3.1-flash-lite-preview",
     rateLimitRpm: 15
@@ -498,25 +495,6 @@ test("any provider is paced by its configured requests per minute", async () => 
   assert.equal(await second, 2100);
 });
 
-test("former in-band rate keys in extra parameters are neither pacing nor sent to the provider", async () => {
-  const shared = loadShared();
-  const body = shared.aiChatCompletionBody({
-    baseUrl: "https://gateway.example/v1", model: "m",
-    extraBody: { rate_limit_rpm: 20, rpm: 20, rate_limit_interval_ms: 3000, top_p: 0.9 }
-  }, [{ role: "user", content: "x" }], 256, 0.1);
-  assert.equal(body.top_p, 0.9);
-  for (const key of ["rate_limit_rpm", "rpm", "rate_limit_interval_ms"]) {
-    assert.equal(key in body, false, key);
-  }
-  // They migrate once into the profile's RPM setting instead.
-  assert.equal(shared.legacyAiRateLimitRpm("https://gateway.example/v1", "m", { rate_limit_rpm: 20 }), 20);
-  assert.equal(shared.legacyAiRateLimitRpm("https://gateway.example/v1", "m", { rate_limit_interval_ms: 3000 }), 20);
-  assert.equal(shared.legacyAiRateLimitRpm(
-    "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite-preview", {}
-  ), 15);
-  assert.equal(shared.legacyAiRateLimitRpm("https://api.deepseek.com", "deepseek-v4-flash", {}), 0);
-});
-
 test("urgent request preempts speculative prefetch rate delay and claims the slot", async () => {
   let currentTime = 0;
   const timers = [];
@@ -534,7 +512,7 @@ test("urgent request preempts speculative prefetch rate delay and claims the slo
   });
   const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
   const config = {
-    endpointKind: "gemini",
+    endpointKind: "compatible",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-3.1-flash-lite-preview",
     rateLimitRpm: 15
@@ -637,7 +615,11 @@ test("nearby playback overrun defers reseeding until the live prefix commits", (
   const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(canContinue(1, { cursor: 5793 }, 5873), true);
   assert.equal(canContinue(1, { cursor: 5793 }, 5921), false);
+  // Ownership is the session token. A request adopted across a seek keeps its
+  // older transport focusGeneration; a revoked token always ends ownership.
   request.focusGeneration = 3;
+  assert.equal(canContinue(1, { cursor: 5793 }, 5873), true);
+  request.sessionToken = Object.freeze({ revision: 2 });
   assert.equal(canContinue(1, { cursor: 5793 }, 5873), false);
 });
 
@@ -1069,8 +1051,8 @@ test("stale prefetch is cancelled before an urgent request is rebuilt", () => {
   assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[1].type, "translateBatch");
   assert.equal(harness.messages[1].urgent, true);
-  // Never below twice the uncommitted runway: a shorter window cannot commit.
-  assert.equal(harness.messages[1].items.length, 64);
+  // The accelerated visible window (also never below twice the runway).
+  assert.equal(harness.messages[1].items.length, 128);
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-stale-prefetch-reseed"
   ), true);
@@ -1252,7 +1234,7 @@ test("3x urgent playback keeps the visible request short while runway prefetch f
 
   // The visible request stays bounded so distinct speculative ranges can run
   // beside it; the active writer still preserves its planned runway.
-  assert.deepEqual(harness.messages.map((message) => message.items.length), [97, 160]);
+  assert.deepEqual(harness.messages.map((message) => message.items.length), [128, 160]);
   assert.ok(harness.messages.every((message) => message.items.length <= 160));
 });
 
@@ -1264,9 +1246,12 @@ test("urgent giant units wait for a full runway before aligned-chunk recovery", 
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(harness.messages.map((message) => message.items.length), [64, 160]);
+  // One accelerated window already reaches past the giant unit's runway.
+  assert.deepEqual(harness.messages.map((message) => message.items.length), [128]);
   assert.ok(harness.messages.every((message) => message.urgent));
-  assert.ok(harness.state.cursor >= 120);
+  // Aligned chunks commit only before the runway: 0-39 and 40-79 end before
+  // the guard at 96, chunk 80-119 does not; the visible target 40 is covered.
+  assert.equal(harness.state.cursor, 80);
   assert.equal(harness.context.captionSession.transCache.get("video g10"), "分段1");
 });
 
@@ -1725,7 +1710,7 @@ test("Gemini Flash Lite uses the configured request window at ordinary playback"
 
   const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].endpointKind, "gemini");
+  assert.equal(requests[0].maxConcurrency, 4);
   assert.equal(requests[0].items.length, 96);
 
   const customHarness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
