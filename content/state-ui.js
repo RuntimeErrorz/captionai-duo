@@ -267,7 +267,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if ((needRecue || needRetranslate) && settings.enabled) {
     resetCaptionSessionState("settings-change");
-    if (captionSession.sentGroups && captionSession.sentGroups.length) buildAiCommitRegions();
+    if (captionSession.sentGroups && captionSession.sentGroups.length) {
+      buildAiCommitRegions();
+      if (!needRecue && typeof loadAiTranslationLedger === "function") loadAiTranslationLedger();
+    }
     if (captionSession.cueTimer) {
       setTranslation("", "");
     }

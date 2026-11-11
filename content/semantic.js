@@ -184,6 +184,7 @@ function semanticCommitState(regionIndex) {
       prefetchResponses: new Map()
     };
     stateByRegion.set(regionIndex, state);
+    if (typeof aiSkipCommittedBlock === "function") aiSkipCommittedBlock(regionIndex, state);
   }
   return state;
 }
@@ -478,6 +479,7 @@ function commitSemanticResponsePrefix(
     }
   }
   cacheAiDisplayNeighborhood(units.flatMap((unit) => unit.members), true);
+  if (typeof recordAiLedgerUnits === "function") recordAiLedgerUnits(units);
   captionSession.semanticLayoutWidth = semanticDisplayWidth();
   emitDebug("semantic-prefix-committed", {
     regionIndex,
@@ -661,58 +663,33 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   if (aiPrefetchAtCursor(regionIndex, requestStart)) return;
   const commitFloor = state.commitFloor;
   const limitEnd = state.limitEnd;
-  const requestUrgent = !!urgent || state.urgentTarget >= requestStart;
-  const targetTailItems = aiUrgentTargetTailItems();
-  const maxRequestItems = aiMaxRequestItems();
   const video = typeof getVideo === "function" ? getVideo() : null;
   const playbackRate = Number(video && video.playbackRate);
-  const acceleratedPlayback = Number.isFinite(playbackRate) && playbackRate >= 1.75;
-  const acceleratedUrgentItems = aiAcceleratedUrgentRequestItems();
-  const recoveryWindow = state.recoveryWindowItems;
+  const targetTailItems = aiUrgentTargetTailItems();
+  const maxRequestItems = aiMaxRequestItems();
+  const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
+    ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
+  const plan = YTDS_SHARED.semanticCommitWindowPlan({
+    state, urgent, requestStart, limitEnd,
+    accelerated: Number.isFinite(playbackRate) && playbackRate >= 1.75,
+    futureStart: aiNextFuturePrefetchStart(regionIndex, state, requestStart),
+    guardItems, minRunwayItems: AI_MIN_COMMIT_RUNWAY_ITEMS, maxRequestItems, targetTailItems,
+    acceleratedUrgentItems: aiAcceleratedUrgentRequestItems(),
+    urgentRequestItems: aiUrgentRequestItems(),
+    acceleratedPrefetchItems: aiAcceleratedPrefetchItems(targetTailItems)
+  });
+  const requestUrgent = plan.requestUrgent;
   const inflightKey = `dsb:${regionIndex}`;
   const existingRequest = captionSession.semanticRequestMeta.get(inflightKey);
   if (captionSession.transInflight.has(inflightKey) &&
       (!requestUrgent || !existingRequest || existingRequest.urgent)) return;
-  const urgentRequestTailItems = acceleratedPlayback && requestUrgent && !recoveryWindow
-    ? 0 : targetTailItems;
-  const acceleratedPrefetchItems = !requestUrgent
-    ? aiAcceleratedPrefetchItems(targetTailItems) : 0;
-  const acceleratedUrgentWindowItems = acceleratedPlayback && requestUrgent && !recoveryWindow
-    ? Math.max(state.windowItems, acceleratedUrgentItems) : state.windowItems;
-  const planningWindowItems = Math.max(acceleratedUrgentWindowItems, acceleratedPrefetchItems);
-  const planningState = planningWindowItems > state.windowItems
-    ? { ...state, windowItems: planningWindowItems } : state;
-  const initialUrgentItems = acceleratedPlayback && requestUrgent && !recoveryWindow
-    ? acceleratedUrgentItems : aiUrgentRequestItems();
-  const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
-    ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
-  const requestPlan = YTDS_SHARED.semanticCommitRequestPlan(
-    planningState, requestStart, guardItems,
-    maxRequestItems, requestUrgent, initialUrgentItems,
-    urgentRequestTailItems
-  );
-  const targetAwareItems = requestPlan.itemCount;
-  let requestEnd = Math.min(limitEnd, requestStart + targetAwareItems - 1);
-  const futureStart = aiNextFuturePrefetchStart(regionIndex, state, requestStart);
-  if (!recoveryWindow && futureStart > requestStart && futureStart <= requestEnd) {
-    const bridgeItems = semanticBridgeRequestItems(
-      requestStart, futureStart, maxRequestItems, limitEnd
-    );
-    if (bridgeItems > 0) {
-      requestEnd = Math.min(limitEnd, requestStart + bridgeItems - 1);
-      emitDebug("semantic-prefetch-bridge", {
-        regionIndex, requestStart, futureStart, requestEnd, bridgeItems
-      });
-    }
-  }
-  // The trailing runway is never committed, so a shorter window can only buy
-  // a no-progress round trip. Streaming shows the first unit just as early in
-  // a wider window; only the region's own end may cut a request shorter.
-  const minUsefulItems = Math.min(
-    maxRequestItems, 2 * Math.max(guardItems, AI_MIN_COMMIT_RUNWAY_ITEMS)
-  );
-  if (requestEnd - requestStart + 1 < minUsefulItems) {
-    requestEnd = Math.min(limitEnd, requestStart + minUsefulItems - 1);
+  const requestPlan = { targetThrough: plan.targetThrough };
+  const targetAwareItems = plan.targetAwareItems;
+  let requestEnd = plan.requestEnd;
+  if (plan.bridgeItems > 0) {
+    emitDebug("semantic-prefetch-bridge", {
+      regionIndex, requestStart, futureStart: plan.futureStart, requestEnd, bridgeItems: plan.bridgeItems
+    });
   }
   const spanRegions = requestEnd === limitEnd && typeof aiRequestLimited === "function" &&
     aiRequestLimited()
@@ -800,6 +777,7 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
 
 function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, requestOptions) {
   if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) || captionSession.semanticSeekSettling) return;
+  if (typeof aiLedgerBlocksRequests === "function" && aiLedgerBlocksRequests()) return;
   if (!captionSession.sentGroups || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
   const groupToRegion = captionSession.semanticGroupToCommitRegion;
   const regionIndex = groupToRegion ? groupToRegion[gIdx] : undefined;

@@ -46,6 +46,7 @@ function advanceAiLookahead(groupIndex) {
       !Number.isInteger(gIdx) || gIdx < 0 || gIdx >= groups.length) return 0;
   if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) ||
       captionSession.semanticSeekSettling) return 0;
+  if (typeof aiLedgerBlocksRequests === "function" && aiLedgerBlocksRequests()) return 0;
   const lookaheadEnd = Math.min(groups.length - 1, gIdx + distance);
   const maxLanes = Math.max(1, aiMaxSpeculativeRequests());
   let active = aiActiveNonUrgentRequestCount();

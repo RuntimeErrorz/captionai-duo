@@ -12,6 +12,9 @@
   const TARGET_LANG_SET = new Set(TARGET_LANGS);
   const AI_DEFAULT_BASE_URL = "https://api.deepseek.com";
   const AI_DEFAULT_MODEL = "deepseek-v4-flash";
+  // Identity of the translation prompt and output protocol. Response caches
+  // and the per-video ledger are invalidated whenever it changes.
+  const AI_PROMPT_CACHE_VERSION = "prompt-v36-end-only-jsonl";
   const AI_EXTRA_BODY_MAX_CHARS = 4096;
   const AI_EXTRA_BODY_MAX_DEPTH = 8;
   const AI_EXTRA_BODY_MAX_KEYS = 128;
@@ -642,7 +645,7 @@
     aiHostPermissionPattern,
     LEGACY_SETTING_KEYS,
     legacySettingsMigration,
-    TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
+    TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, AI_PROMPT_CACHE_VERSION, DEFAULTS, FONT_STACKS,
     normalizeTargetLang,
     isSameLanguage, normalizeAiBaseUrl, aiEndpointKind, isGeminiModel, aiProviderKind,
     aiChatCompletionsUrl, aiCredentialScope, aiRequestProfileScope,

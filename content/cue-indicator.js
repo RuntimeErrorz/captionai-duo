@@ -107,6 +107,7 @@ function onCues(data) {
   captionSession.lastDebugCueIdx = -1;
   if (!captionSession.cueList.length) { onNoCues(data); return; }
   buildHybridCueGroups(captionSession.cueList);
+  if (typeof loadAiTranslationLedger === "function") loadAiTranslationLedger();
   emitDebug("cues-loaded", {
     cueCount: captionSession.cueList.length,
     trackKind: captionSession.cueTrackKind,

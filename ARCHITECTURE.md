@@ -21,8 +21,26 @@ in `manifest.json` in order, and the service worker loads its modules through
   its opaque identity and reset boundary, versioned diagnostics, semantic
   request/retry ownership (`semantic-requests.js`), batch-result commit and
   retry (`semantic-results.js`), commit-lane lookahead and request-limited
-  region spans (`semantic-lookahead.js`), semantic translation, export,
-  bridge, and lifecycle.
+  region spans (`semantic-lookahead.js`), semantic translation, the per-video
+  translation ledger (`translation-ledger.js`), export, bridge, and lifecycle.
+
+## Translation pipeline invariants
+
+- **Output protocol.** The model streams one JSONL line per sentence; each
+  chunk is `[end,"translation"]` and starts right after the previous chunk
+  (`[start,end,"translation"]` is still accepted). Closed sentences are
+  accepted while their line is still streaming.
+- **Window decision.** `YTDS_SHARED.semanticCommitWindowPlan` decides each
+  commit-lane request window from plain numbers. The content scheduler, the
+  simulator (`scripts/simulate-scheduling.js`) and the tests all run it, so a
+  scheduling change is measured exactly as it ships.
+- **Ledger.** Committed units are stored per video in `chrome.storage.local`
+  under a key covering the caption track, target language, provider, model,
+  extra parameters, context sizes and `AI_PROMPT_CACHE_VERSION`. A unit is
+  reused only if its source text still matches. Requests wait for the ledger
+  to load (at most 1.5 s), and a commit lane skips committed blocks instead of
+  stopping at them. At most 60 videos / ~4 MB are kept, least recently
+  written first out.
 - `background/` contains service-worker state, Chromium network diagnostics,
   HTTP transport, translation, and message routing. `background.js` only
   declares their deterministic order. Network diagnostics observe only

@@ -77,6 +77,7 @@
 
   function tupleLike(value) {
     if (!Array.isArray(value)) return false;
+    if (value.length === 2 && coordinateLike(value[0]) && typeof value[1] === "string") return true;
     if (value.length >= 3 && coordinateLike(value[0]) && coordinateLike(value[1]) &&
         typeof value[2] === "string") return true;
     if (value.length === 2 && typeof value[0] === "string" &&
@@ -244,8 +245,14 @@
 
   // Normalize a direct range tuple, a flat tuple sequence, or appended
   // metadata without inventing text or coordinates.
+  // An end-only chunk [end,translation] starts right after the previous
+  // chunk; its start is left null here and filled from the stream cursor.
   function aiJsonlTupleParts(value) {
     if (!Array.isArray(value)) return null;
+    if (value.length === 2 && compactJsonlCoordinate(value[0]) != null &&
+        typeof value[1] === "string") {
+      return [[null, value[0], value[1]]];
+    }
     if (value.length === 2 && typeof value[0] === "string" &&
         typeof value[1] === "string") {
       const pair = value[0].match(/^\s*\[?\s*(\d+)\s*[,:-]\s*(\d+)\s*\]?\s*$/);

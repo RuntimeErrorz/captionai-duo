@@ -525,28 +525,13 @@ function aiNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
   return Number.isFinite(next) ? next : -1;
 }
 function semanticBridgeRequestItems(requestStartValue, futureStartValue, maxValue, limitEndValue) {
-  const requestStart = Math.floor(Number(requestStartValue));
-  const futureStart = Math.floor(Number(futureStartValue));
-  const maxItems = Math.max(1, Math.floor(Number(maxValue) || 1));
-  const limitEnd = Math.floor(Number(limitEndValue));
-  if (![requestStart, futureStart, limitEnd].every(Number.isInteger) ||
-      futureStart <= requestStart || requestStart > limitEnd) return 0;
-  const gap = futureStart - requestStart;
   const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
     ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
   const minRunwayItems = typeof SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS !== "undefined"
     ? SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS : AI_MIN_COMMIT_RUNWAY_ITEMS;
-  let count = Math.min(maxItems, limitEnd - requestStart + 1, gap + 1);
-  while (count < maxItems && count < limitEnd - requestStart + 1 &&
-      count - YTDS_SHARED.semanticCommitRunwayItems(count, guardItems, minRunwayItems) < gap) {
-    count++;
-  }
-  const reachesEnd = requestStart + count - 1 >= limitEnd;
-  const runway = reachesEnd ? 0 : YTDS_SHARED.semanticCommitRunwayItems(
-    count, guardItems, minRunwayItems
+  return YTDS_SHARED.semanticBridgeRequestItems(
+    requestStartValue, futureStartValue, maxValue, limitEndValue, guardItems, minRunwayItems
   );
-  if (!reachesEnd && count - runway < gap) return 0;
-  return count;
 }
 const aiBridgeRequestItems = semanticBridgeRequestItems;
 
@@ -644,7 +629,12 @@ function scheduleAiBatchRetry(
   const errorMessage = YTDS_SHARED.aiErrorMessage(retryOptions && retryOptions.error != null ? retryOptions.error : retryOptions, reason);
   const maxAttempts = rateLimited ? AI_RATE_RETRY_LIMIT
     : /^(?:HTTP_\d+|AI_CONFIG_MISSING|AI_KEY_MISSING|AI_HOST_PERMISSION_MISSING)$/.test(errorInfo.code) ? 0 : AI_COLD_RETRY_DELAYS_MS.length;
-  if (attempt >= maxAttempts) {
+  // The worker's local concurrency cap only means "wait for a free slot";
+  // nothing failed, so it must never exhaust the region's retry budget.
+  const localWait = rateLimited && String(
+    retryOptions && retryOptions.error && retryOptions.error.limitReason || ""
+  ) === "local-concurrency";
+  if (!localWait && attempt >= maxAttempts) {
     const regionIndex = captionSession.semanticGroupToCommitRegion[gIdx];
     if (Number.isInteger(regionIndex)) {
       captionSession.semanticExhaustedRegions.set(regionIndex, {
@@ -675,7 +665,7 @@ function scheduleAiBatchRetry(
   const inflightKey = `dsb:${regionIndex}`;
   const scheduledFocusGeneration = captionSession.semanticFocusGeneration;
   const scheduledSessionToken = captureCaptionSession();
-  captionSession.semanticRetryCounts.set(key, attempt + 1);
+  if (!localWait) captionSession.semanticRetryCounts.set(key, attempt + 1);
   captionSession.transInflight.add(inflightKey);
   emitDebug("batch-retry", {
     start, end, attempt: attempt + 1, delayMs, rateLimited,

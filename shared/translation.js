@@ -327,6 +327,27 @@
     const pendingMarkerIds = pendingMarkerChunks.flatMap((chunk) =>
       Array.isArray(chunk && chunk.ids) ? chunk.ids : []);
     const chunkBaseOffset = state.cursor + pendingMarkerIds.length;
+    // End-only chunks carry no start: each one begins right after the
+    // previous chunk, the first one at the stream cursor.
+    let impliedStart = chunkBaseOffset;
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index];
+      if (!Array.isArray(chunk) || chunk.length !== 3) break;
+      const end = compactJsonlCoordinate(chunk[1]);
+      if (end == null) break;
+      // An end-only chunk repeating the previous chunk's end splits that
+      // chunk's translation in two; join it back instead of failing.
+      const previous = chunks[index - 1];
+      if (chunk[0] === null && index > 0 && end === impliedStart - 1 &&
+          Array.isArray(previous) && typeof previous[2] === "string" && typeof chunk[2] === "string") {
+        previous[2] += chunk[2];
+        chunks.splice(index, 1);
+        index--;
+        continue;
+      }
+      if (chunk[0] === null) chunk[0] = impliedStart;
+      impliedStart = end + 1;
+    }
     let trimmedCount = 0;
     if (state.pendingTrimmedCount > 0 &&
         compactJsonlCoordinate(chunks[0][0]) === chunkBaseOffset + state.pendingTrimmedCount) {

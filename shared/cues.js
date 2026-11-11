@@ -454,6 +454,99 @@
     };
   }
 
+  // Size a bridge window that reaches an already running future request:
+  // after its private runway the committed prefix must touch futureStart.
+  function semanticBridgeRequestItems(
+    requestStartValue, futureStartValue, maxValue, limitEndValue, guardItemsValue, minRunwayValue
+  ) {
+    const requestStart = Math.floor(Number(requestStartValue));
+    const futureStart = Math.floor(Number(futureStartValue));
+    const maxItems = Math.max(1, Math.floor(Number(maxValue) || 1));
+    const limitEnd = Math.floor(Number(limitEndValue));
+    const guardItems = Math.max(0, Math.floor(Number(guardItemsValue) || 0));
+    const minRunwayItems = Math.max(0, Math.floor(Number(minRunwayValue) || 0));
+    if (![requestStart, futureStart, limitEnd].every(Number.isInteger) ||
+        futureStart <= requestStart || requestStart > limitEnd) return 0;
+    const gap = futureStart - requestStart;
+    let count = Math.min(maxItems, limitEnd - requestStart + 1, gap + 1);
+    while (count < maxItems && count < limitEnd - requestStart + 1 &&
+        count - semanticCommitRunwayItems(count, guardItems, minRunwayItems) < gap) {
+      count++;
+    }
+    const reachesEnd = requestStart + count - 1 >= limitEnd;
+    const runway = reachesEnd ? 0 : semanticCommitRunwayItems(count, guardItems, minRunwayItems);
+    if (!reachesEnd && count - runway < gap) return 0;
+    return count;
+  }
+
+  // The whole window decision of one commit-lane request, from plain
+  // numbers. The content scheduler, the simulator and the tests all run this
+  // one function, so a tuning change is measured exactly as it ships.
+  //   state: { windowItems, recoveryWindowItems, urgentTarget, targetThrough }
+  //   urgent, accelerated (playback >= 1.75x), requestStart, limitEnd,
+  //   futureStart (start of a live future request, or -1), guardItems,
+  //   minRunwayItems, maxRequestItems, targetTailItems,
+  //   acceleratedUrgentItems, urgentRequestItems, acceleratedPrefetchItems
+  function semanticCommitWindowPlan(input) {
+    const value = input && typeof input === "object" ? input : {};
+    const state = value.state && typeof value.state === "object" ? value.state : {};
+    const count = (raw, fallback) => {
+      const parsed = Math.floor(Number(raw));
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const requestStart = count(value.requestStart, 0);
+    const limitEnd = count(value.limitEnd, requestStart);
+    const guardItems = Math.max(0, count(value.guardItems, 0));
+    const minRunwayItems = Math.max(0, count(value.minRunwayItems, 0));
+    const maxRequestItems = Math.max(1, count(value.maxRequestItems, 1));
+    const targetTailItems = Math.max(0, count(value.targetTailItems, 0));
+    const windowItems = Math.max(1, count(state.windowItems, 1));
+    const recoveryWindow = !!state.recoveryWindowItems;
+    const requestUrgent = !!value.urgent || count(state.urgentTarget, -1) >= requestStart;
+    const acceleratedUrgent = !!value.accelerated && requestUrgent && !recoveryWindow;
+    const acceleratedUrgentItems = Math.max(0, count(value.acceleratedUrgentItems, 0));
+    // Accelerated urgent work keeps no target tail: its window already
+    // reaches well past the visible subtitle.
+    const urgentTailItems = acceleratedUrgent ? 0 : targetTailItems;
+    const acceleratedPrefetchItems = requestUrgent
+      ? 0 : Math.max(0, count(value.acceleratedPrefetchItems, 0));
+    const planningWindowItems = Math.max(
+      acceleratedUrgent ? Math.max(windowItems, acceleratedUrgentItems) : windowItems,
+      acceleratedPrefetchItems
+    );
+    const planningState = planningWindowItems > windowItems
+      ? { ...state, windowItems: planningWindowItems } : state;
+    const initialUrgentItems = acceleratedUrgent
+      ? acceleratedUrgentItems : count(value.urgentRequestItems, maxRequestItems);
+    const requestPlan = semanticCommitRequestPlan(
+      planningState, requestStart, guardItems, maxRequestItems, requestUrgent,
+      initialUrgentItems, urgentTailItems
+    );
+    let requestEnd = Math.min(limitEnd, requestStart + requestPlan.itemCount - 1);
+    const futureStart = count(value.futureStart, -1);
+    let bridgeItems = 0;
+    if (!recoveryWindow && futureStart > requestStart && futureStart <= requestEnd) {
+      bridgeItems = semanticBridgeRequestItems(
+        requestStart, futureStart, maxRequestItems, limitEnd, guardItems, minRunwayItems
+      );
+      if (bridgeItems > 0) requestEnd = Math.min(limitEnd, requestStart + bridgeItems - 1);
+    }
+    // The trailing runway is never committed, so a shorter window can only
+    // buy a no-progress round trip; only the region's own end may cut it.
+    const minUsefulItems = Math.min(maxRequestItems, 2 * Math.max(guardItems, minRunwayItems));
+    if (requestEnd - requestStart + 1 < minUsefulItems) {
+      requestEnd = Math.min(limitEnd, requestStart + minUsefulItems - 1);
+    }
+    return {
+      requestUrgent,
+      requestEnd,
+      targetAwareItems: requestPlan.itemCount,
+      targetThrough: requestPlan.targetThrough,
+      bridgeItems,
+      futureStart
+    };
+  }
+
   function pendingTranslationScopeKey(groupIndex, groupToBatch) {
     const group = Math.floor(Number(groupIndex));
     if (!Number.isInteger(group) || group < 0) return "";
@@ -494,5 +587,5 @@
       : { allowed: false, reason: "local-concurrency", retryAfterMs: 1500 };
   }
 
-  Object.assign(internal, { cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, aiConcurrencyStatus });
+  Object.assign(internal, { cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, semanticBridgeRequestItems, semanticCommitWindowPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, aiConcurrencyStatus });
 })();

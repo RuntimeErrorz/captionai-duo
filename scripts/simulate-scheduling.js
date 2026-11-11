@@ -2,6 +2,9 @@
 // Replays playback against the real content scheduler with a simulated
 // provider, to compare scheduling changes. Usage:
 //   node scripts/simulate-scheduling.js [repoRoot] [deepseek|gemini] [rate] [short|long]
+// SCENARIO=reload plays the video, reloads the page and plays it again;
+// SCENARIO=seekback plays to 60%, seeks back to 20% and plays to the end;
+// SCENARIO=hop plays 0-20%, jumps to 50-60%, then plays 20% to the end.
 // repoRoot defaults to this checkout, so an older tree (git archive) can be
 // measured with the same scenario.
 "use strict";
@@ -14,6 +17,7 @@ const root = path.resolve(process.argv[2] || path.join(__dirname, ".."));
 const provider = process.argv[3] || "deepseek";
 const playbackRate = Number(process.argv[4] || 2);
 const regionShape = process.argv[5] || "short";
+const scenario = process.env.SCENARIO || "play";
 const { loadShared } = require(path.join(root, "tests/helpers.js"));
 
 // ---- deterministic scenario -------------------------------------------
@@ -68,7 +72,7 @@ const runDue = () => {
 const shared = loadShared();
 const contentFiles = ["content/semantic-policy.js", "content/semantic-requests.js",
   "content/semantic-results.js", "content/semantic-lookahead.js", "content/semantic.js",
-  "content/cue-indicator.js", "content/cue-playback.js"]
+  "content/translation-ledger.js", "content/cue-indicator.js", "content/cue-playback.js"]
   .filter((file) => fs.existsSync(path.join(root, file)));
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
 const adaptiveTimeouts = httpSource.includes("aiConnectTimeoutMs");
@@ -80,8 +84,24 @@ const batchWindows = [];
 for (let start = 0; start < WORDS; start += 32) batchWindows.push({ start, end: Math.min(WORDS - 1, start + 31) });
 let videoTimeMs = 0;
 const metrics = { requests: 0, httpAttempts: 0, sentItems: 0, outputItems: 0, timeouts: 0 };
+// chrome.storage.local survives the simulated page reload.
+const storageData = new Map();
+const eventCounts = {};
+const storageLocal = {
+  get: async (keys) => {
+    const out = {};
+    if (typeof keys === "string") { if (storageData.has(keys)) out[keys] = storageData.get(keys); return out; }
+    for (const [key, fallback] of Object.entries(keys || {})) {
+      out[key] = storageData.has(key) ? storageData.get(key) : fallback;
+    }
+    return out;
+  },
+  set: async (values) => { for (const [key, value] of Object.entries(values)) storageData.set(key, JSON.parse(JSON.stringify(value))); },
+  remove: async (keys) => { for (const key of [].concat(keys)) storageData.delete(key); }
+};
 const context = {
   Map, Set, Math, Number, String, Array, Object, Promise, JSON,
+  chrome: { storage: { local: storageLocal } },
   Date: { now: () => now },
   queueMicrotask: (fn) => at(now, fn),
   setTimeout: (fn, delay) => { at(now + Math.max(0, Number(delay) || 0), fn); return timers.length; },
@@ -89,6 +109,7 @@ const context = {
   YTDS_SHARED: shared,
   captionSession: {
     cueVideoId: "video", currentVideoId: "video", cueEpoch: 1, cueSourceLang: "en",
+    cueTrackSignature: "track", semanticCommitStateByRegion: new Map(),
     cueList: groups.map((group) => ({ text: group.text, start: group.start, end: group.end })),
     cueToGroup: groups.map((_g, id) => id), cueToGroups: groups.map((_g, id) => [id]),
     sentGroups: groups, semanticBatchWindows: batchWindows,
@@ -104,7 +125,8 @@ const context = {
   settings: {
     enabled: true, targetLang: "zh-CN", debugEnabled: false, aiBaseUrl: spec.baseUrl,
     aiModel: spec.model, aiPrefetchBatches: 1,
-    aiRequestItems: Number(process.env.REQUEST_ITEMS || 96), aiRateLimitRpm: spec.rpm
+    aiRequestItems: Number(process.env.REQUEST_ITEMS || 96), aiRateLimitRpm: spec.rpm,
+    aiExtraBodyRevision: 0, aiContextPast: 1, aiContextFuture: 1
   },
   SEMANTIC_CORE_ITEMS: 32, AI_CORE_ITEMS: 32, AI_INITIAL_REQUEST_ITEMS: 48, AI_REQUEST_ITEMS: 80,
   AI_URGENT_REQUEST_ITEMS: 96, DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS: 64,
@@ -121,7 +143,8 @@ const context = {
   AI_CONTEXT_GROUPS: 20, AI_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
   AI_RATE_RETRY_LIMIT: 6, AI_PLAYBACK_STARTUP_GRACE_MS: 6000, AI_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
   AI_PLAYBACK_PROGRESS_GRACE_MS: 4000, AI_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
-  emitDebug: () => {}, emitCaptionStateTransition: () => {},
+  emitDebug: (event) => { eventCounts[event] = (eventCounts[event] || 0) + 1; },
+  emitCaptionStateTransition: () => {},
   mergeCueTexts: (items) => items.map((item) => item.text).join(" "),
   cacheAiDisplayNeighborhood: () => {}, semanticDisplayWidth: () => 1000,
   repaintActiveAiTranslation: () => {}, aiTranslationErrorText: () => "error",
@@ -252,38 +275,92 @@ for (const file of contentFiles) {
   vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), context, { filename: file });
 }
 vm.runInContext("buildSemanticCommitRegions()", context);
+const hasLedger = typeof context.loadAiTranslationLedger === "function";
 
 // ---- playback -------------------------------------------------------------
 const STEP = 50;
-let stallMs = 0;
-let stalls = 0;
-let stalled = false;
-let lastGroup = -2;
 const totalVideoMs = words[WORDS - 1].end;
-while (videoTimeMs < totalVideoMs) {
-  runDue();
-  const word = words.find((w) => videoTimeMs >= w.start && videoTimeMs < w.end);
-  const group = word ? word.id : -1;
-  const session = context.captionSession;
-  session.activeGroupIdx = group;
-  session.activeCueIdx = group;
-  if (group !== lastGroup && group >= 0) {
-    if (!session.transCache.has(`video g${group}`)) context.aiRequestBatch(group, true, true);
-    context.prefetchAiBatches(group, false);
-    lastGroup = group;
+const settle = async () => { for (let i = 0; i < 4; i++) await null; };
+async function play(fromMs, untilMs) {
+  const result = { stallMs: 0, stalls: 0 };
+  let stalled = false;
+  let lastGroup = -2;
+  videoTimeMs = fromMs;
+  while (videoTimeMs < untilMs) {
+    await settle();
+    runDue();
+    const word = words.find((w) => videoTimeMs >= w.start && videoTimeMs < w.end);
+    const group = word ? word.id : -1;
+    const session = context.captionSession;
+    session.activeGroupIdx = group;
+    session.activeCueIdx = group;
+    if (group !== lastGroup && group >= 0) {
+      if (!session.transCache.has(`video g${group}`)) context.aiRequestBatch(group, true, true);
+      context.prefetchAiBatches(group, false);
+      lastGroup = group;
+    }
+    const missing = group >= 0 && !session.transCache.has(`video g${group}`);
+    if (missing) { result.stallMs += STEP; if (!stalled) result.stalls++; }
+    stalled = missing;
+    now += STEP;
+    videoTimeMs += STEP * playbackRate;
   }
-  const missing = group >= 0 && !session.transCache.has(`video g${group}`);
-  if (missing) { stallMs += STEP; if (!stalled) stalls++; }
-  stalled = missing;
-  now += STEP;
-  videoTimeMs += STEP * playbackRate;
+  return result;
 }
-const label = path.basename(root);
-console.log(JSON.stringify({
-  tree: label, provider, playbackRate, regionShape,
-  stallSeconds: +(stallMs / 1000).toFixed(1), stallEpisodes: stalls,
-  requests: metrics.requests, httpAttempts: metrics.httpAttempts, connectTimeouts: metrics.timeouts,
-  inputAmplification: +(metrics.sentItems / WORDS).toFixed(2),
-  outputAmplification: +(metrics.outputItems / WORDS).toFixed(2),
-  wallSeconds: +(now / 1000).toFixed(0)
-}));
+function reloadPage() {
+  const session = context.captionSession;
+  for (const key of ["transCache", "semanticUnitCache", "semanticSourceCache",
+    "semanticAlignedChunksCache", "semanticDisplayCache", "semanticRequestMeta",
+    "semanticRetryCounts", "semanticExhaustedRegions", "semanticVisibleErrors"]) session[key].clear();
+  session.transInflight.clear();
+  for (const entry of Array.from(live.values())) respond(entry, { ok: false, cancelled: true, translations: [] });
+  vm.runInContext("buildSemanticCommitRegions()", context);
+}
+
+(async () => {
+  if (hasLedger) await context.loadAiTranslationLedger();
+  const passes = [];
+  const snapshot = () => ({ ...metrics });
+  const delta = (before) => ({ requests: metrics.requests - before.requests,
+    sentItems: metrics.sentItems - before.sentItems });
+  if (scenario === "reload") {
+    let before = snapshot();
+    passes.push({ pass: "first", ...(await play(0, totalVideoMs)), ...delta(before) });
+    if (hasLedger) await context.flushAiLedger();
+    await settle();
+    reloadPage();
+    if (hasLedger) await context.loadAiTranslationLedger();
+    before = snapshot();
+    passes.push({ pass: "after-reload", ...(await play(0, totalVideoMs)), ...delta(before) });
+  } else if (scenario === "seekback") {
+    let before = snapshot();
+    passes.push({ pass: "to-60%", ...(await play(0, totalVideoMs * 0.6)), ...delta(before) });
+    before = snapshot();
+    passes.push({ pass: "20%-to-end", ...(await play(totalVideoMs * 0.2, totalVideoMs)), ...delta(before) });
+  } else if (scenario === "hop") {
+    // Jump ahead, then back: the lane resuming at 20% runs into the block
+    // already committed at 50-60% of the same long region.
+    let before = snapshot();
+    passes.push({ pass: "0-20%", ...(await play(0, totalVideoMs * 0.2)), ...delta(before) });
+    before = snapshot();
+    passes.push({ pass: "50-60%", ...(await play(totalVideoMs * 0.5, totalVideoMs * 0.6)), ...delta(before) });
+    before = snapshot();
+    passes.push({ pass: "20%-end", ...(await play(totalVideoMs * 0.2, totalVideoMs)), ...delta(before) });
+  } else {
+    passes.push({ pass: "play", ...(await play(0, totalVideoMs)) });
+  }
+  const stallMs = passes.reduce((sum, item) => sum + item.stallMs, 0);
+  const stalls = passes.reduce((sum, item) => sum + item.stalls, 0);
+  const label = path.basename(root);
+  console.log(JSON.stringify({
+    tree: label, provider, playbackRate, regionShape,
+    scenario, stallSeconds: +(stallMs / 1000).toFixed(1), stallEpisodes: stalls,
+    requests: metrics.requests, httpAttempts: metrics.httpAttempts, connectTimeouts: metrics.timeouts,
+    inputAmplification: +(metrics.sentItems / WORDS).toFixed(2),
+    outputAmplification: +(metrics.outputItems / WORDS).toFixed(2),
+    wallSeconds: +(now / 1000).toFixed(0),
+    ...(process.env.EVENTS ? { events: eventCounts } : {}),
+    passes: passes.map((item) => ({ ...item, stallMs: undefined,
+      stallSeconds: +(item.stallMs / 1000).toFixed(1) }))
+  }));
+})();

@@ -995,3 +995,98 @@ test("an open-line prefix still stops at the commit guard", () => {
   assert.equal(status.stop, true);
   assert.equal(status.reason, "commit-guard-reached");
 });
+
+function endChunk(end, translation) {
+  return [Number(end), translation];
+}
+
+test("end-only chunks start right after the previous chunk across lines", () => {
+  const progress = [];
+  const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", (translations) => {
+    progress.push(Array.from(translations, (item) => String(item.id)));
+  }, { requestClass: "urgent" });
+  const text = wireUnit(endChunk(1, "我遇到了美国士兵。")) + "\n" +
+    wireUnit(endChunk(2, "他们帮助了我们。")) + "\n" +
+    wireUnit(endChunk(3, "下一个想法还没说完")) + "\n[]\n";
+  assert.equal(observer.onTextDelta(text, true).stop, false);
+  assert.deepEqual(progress, [["0", "1"], ["2"], ["3"]]);
+  const result = observer.result(false);
+  assert.equal(result.streamPartial, false);
+  assert.equal(result[0].translation, "我遇到了美国士兵");
+});
+
+test("end-only lines stream byte by byte to the same units as one delta", () => {
+  const text = wireUnit(
+    endChunk(1, "我遇到了美国士兵。"),
+    endChunk(2, "他们帮助了我们。"),
+    endChunk(3, "下一个想法还没说完")
+  ) + "\n[]\n";
+  const run = (deltas) => {
+    const observer = loadJsonlStreamObserver()(sampleItems(), "zh-CN", () => {}, {
+      requestClass: "prefetch"
+    });
+    for (const delta of deltas) assert.equal(observer.onTextDelta(delta, false).stop, false);
+    observer.onTextDelta("", true);
+    return Array.from(observer.result(false), (item) => `${item.id}:${item.unitId}`);
+  };
+  const whole = run([text]);
+  assert.deepEqual(run(Array.from(text)), whole);
+  assert.equal(whole.length, 4);
+});
+
+test("end-only chunks keep coverage validation strict", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  // An end before the implied start is a malformed range.
+  assert.equal(shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [[null, 1, "我遇到了美国士兵。"]]
+  }).ok, true);
+  const backwards = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [[null, 1, "重复"]]
+  });
+  assert.equal(backwards.ok, false);
+  assert.match(backwards.error, /invalid JSONL range|unexpected JSONL position/);
+
+  const hardItems = sampleItems();
+  hardItems[0] = { ...hardItems[0], hardAfter: true };
+  const crossed = shared.createAiJsonlTranslationState(hardItems, "zh-CN");
+  assert.match(shared.pushAiJsonlTranslationRecord(crossed, {
+    type: "unit", chunks: [[null, 1, "越界"]]
+  }).error, /hard boundary/);
+});
+
+test("end-only and start-end chunks can be mixed on one line", () => {
+  const decoded = shared.aiJsonlRecordFromLine('[[1,"我遇到了美国士兵。"],[2,2,"他们帮助了我们。"]]');
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, decoded.record);
+  assert.equal(accepted.ok, true);
+  assert.deepEqual(Array.from(accepted.ids), ["0", "1", "2"]);
+});
+
+test("an end-only chunk that overruns a sentence boundary is trimmed back", () => {
+  const items = [
+    { id: "0", text: "We won.", startMs: 0, endMs: 700, hardAfter: false },
+    { id: "1", text: "Then", startMs: 700, endMs: 1000, hardAfter: false },
+    { id: "2", text: "we left.", startMs: 1000, endMs: 1700, hardAfter: false }
+  ];
+  const state = shared.createAiJsonlTranslationState(items, "zh-CN");
+  const first = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [[null, 1, "我们赢了。"]]
+  });
+  assert.equal(first.ok, true);
+  assert.deepEqual(Array.from(first.ids), ["0"]);
+  const second = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [[null, 2, "然后我们离开了。"]]
+  });
+  assert.equal(second.ok, true);
+  assert.deepEqual(Array.from(second.ids), ["1", "2"]);
+});
+
+test("an end-only chunk repeating the previous end joins its translation", () => {
+  const state = shared.createAiJsonlTranslationState(sampleItems(), "zh-CN");
+  const accepted = shared.pushAiJsonlTranslationRecord(state, {
+    type: "unit", chunks: [[null, 1, "我遇到了"], [null, 1, "美国士兵。"], [null, 2, "他们帮助了我们。"]]
+  });
+  assert.equal(accepted.ok, true);
+  assert.deepEqual(Array.from(accepted.ids), ["0", "1", "2"]);
+  assert.equal(accepted.translations[0].translation, "我遇到了美国士兵");
+});

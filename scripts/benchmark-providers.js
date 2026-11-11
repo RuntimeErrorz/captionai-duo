@@ -206,11 +206,18 @@ function lineStats(raw) {
     .filter((line) => line.startsWith("[[") && line !== "[]");
   let sentences = 0;
   let maxItems = 0;
+  let nextStart = 0;
+  // Chunks are [start,end,text] or end-only [end,text].
+  const endOf = (chunk) => Number(chunk.length === 2 ? chunk[0] : chunk[1]);
+  const textOf = (chunk) => String(chunk[chunk.length - 1] || "").trim();
   for (const line of lines) {
     try {
       const chunks = JSON.parse(line.replace(/,\s*$/, ""));
-      sentences += chunks.filter((chunk) => SENTENCE_END.test(String(chunk[2] || "").trim())).length;
-      maxItems = Math.max(maxItems, Number(chunks[chunks.length - 1][1]) - Number(chunks[0][0]) + 1);
+      sentences += chunks.filter((chunk) => SENTENCE_END.test(textOf(chunk))).length;
+      const start = chunks[0].length === 2 ? nextStart : Number(chunks[0][0]);
+      const end = endOf(chunks[chunks.length - 1]);
+      maxItems = Math.max(maxItems, end - start + 1);
+      nextStart = end + 1;
     } catch (_e) { /* counted as a line, not parsed */ }
   }
   return { lines: lines.length, sentencesPerLine: lines.length ? +(sentences / lines.length).toFixed(2) : 0, maxLineItems: maxItems };
@@ -261,6 +268,21 @@ async function measure(runtime, sample, size, requestId) {
     firstUnitMs: firstUnit ? firstUnit.t - started : null,
     totalMs: Date.now() - started,
     earlyStop: body && body.data.earlyStopReason || "",
+    // Why the parser stopped early: protocol reasons carry positions only,
+    // never subtitle text (quoted fragments are removed to be sure).
+    rejectReason: String(((runtime.events.find((event) => /semantic-jsonl-(tail-recovered|prefix-recovered|rejected)/.test(event.event)) || {}).data || {})
+      .reason || ((runtime.events.find((event) => event.event === "semantic-jsonl-prefix-recovered") || {}).data || {}).rejectedReason || "")
+      .replace(/"[^"]*"/g, '"…"').slice(0, 160),
+    // Structure of the first lines of a response the parser stopped early:
+    // numbers and brackets only, every string replaced by "…".
+    rawShape: (() => {
+      const stopped = runtime.events.some((event) =>
+        /semantic-jsonl-(tail-recovered|prefix-recovered|rejected)/.test(event.event));
+      const text = stopped && raw && raw.data ? String(raw.data.rawResponse || "") : "";
+      return text ? text.split("\n").slice(0, 14)
+        .map((line) => line.replace(/"(?:[^"\\]|\\.)*"/g, (match) => match === '""' ? '""' : '"…"')
+          .slice(0, 200)) : [];
+    })(),
     attempts: runtime.events.filter((event) => event.event === "ai-http-attempt-start").length,
     fallbacks: runtime.events.filter((event) => /fallback-request|alignment-fallback/.test(event.event)).length,
     committable, committableRatio: +(committable / items.length).toFixed(2),

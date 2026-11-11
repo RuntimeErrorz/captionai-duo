@@ -139,7 +139,8 @@ function advanceAiCommitCursor(ctx, resp, nextCursor) {
   request.progressCursor = nextCursor;
   state.cursor = nextCursor;
   state.commitFloor = nextCursor;
-  reconcileAiPrefetchCandidates(state, nextCursor);
+  if (typeof aiSkipCommittedBlock === "function") aiSkipCommittedBlock(ctx.regionIndex, state);
+  reconcileAiPrefetchCandidates(state, state.cursor);
   if (request.promotedFromPrefetch) storeAiPrefetchCandidate(state, request, resp);
   const hadDeferrals = Array.isArray(resp && resp.deferredIds) && resp.deferredIds.length > 0;
   state.windowItems = hadDeferrals
