@@ -60,7 +60,7 @@
     aiContextPast: 1,
     aiContextFuture: 1,
     aiPrefetchBatches: 1,
-    aiRequestItems: 96,
+    aiRequestItems: 320,
     aiRateLimitRpm: 0,
     debugEnabled: false,
     order: "trans-top",

@@ -2,7 +2,7 @@
 // Real-provider benchmark for request sizing and prompt variants.
 //
 //   node scripts/benchmark-providers.js --config <settings-backup.json> --log <debug-log.json> [--log ...]
-//        [--windows 64,96,160,320] [--variants current,strict-lines] [--repeat 2]
+//        [--windows 64,96,160,320] [--prompt-append "candidate rule"] [--repeat 2]
 //        [--profiles name1,name2] [--samples 3] [--dry-run]
 //
 // --config is the file exported from the popup (Tools > Export settings); API
@@ -25,7 +25,7 @@ const { loadShared } = require(path.join(root, "tests/helpers.js"));
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 
 // ---- arguments ---------------------------------------------------------------
-const args = { logs: [], windows: [64, 96, 160, 320], variants: ["current", "strict-lines"],
+const args = { logs: [], windows: [64, 96, 160, 320], variants: ["current"], promptAppend: "",
   repeat: 2, samples: 3, profiles: null, dryRun: false, config: "" };
 for (let i = 2; i < process.argv.length; i++) {
   const flag = process.argv[i];
@@ -33,7 +33,7 @@ for (let i = 2; i < process.argv.length; i++) {
   if (flag === "--config") args.config = next();
   else if (flag === "--log") args.logs.push(next());
   else if (flag === "--windows") args.windows = next().split(",").map(Number).filter((n) => n > 0);
-  else if (flag === "--variants") args.variants = next().split(",");
+  else if (flag === "--prompt-append") { args.promptAppend = next(); args.variants = ["current", "appended"]; }
   else if (flag === "--repeat") args.repeat = Math.max(1, Number(next()) || 1);
   else if (flag === "--samples") args.samples = Math.max(1, Number(next()) || 1);
   else if (flag === "--profiles") args.profiles = next().split(",");
@@ -46,21 +46,19 @@ if (!args.logs.length) throw new Error("--log <exported debug log> is required")
 const shared = loadShared();
 
 // ---- prompt variants -----------------------------------------------------------
-const STRICT_LINES = "Line discipline: one physical line carries exactly one sentence or " +
-  "one clause-sized unit. Never put two sentences on one line, however short they are; " +
-  "the caller displays and commits line by line. For three complete sentences followed " +
-  "by an unfinished one, the output is exactly three lines and then the marker:\\n" +
-  "[[0,4,\\\"...\\\"]]\\n[[5,6,\\\"...\\\"],[7,12,\\\"...\\\"]]\\n[[13,15,\\\"...\\\"]]\\n[]";
+// "current" is the shipped prompt. --prompt-append adds a candidate rule to
+// both system prompts as the "appended" variant, so a wording can be measured
+// against the shipped one before it is adopted.
 function translationSource(variant) {
   let source = read("background/translation.js");
-  if (variant === "strict-lines") {
-    const fullEnd = "Return JSONL lines only.`;";
-    const fastAnchor = '  "PAST_CONTEXT and FUTURE_CONTEXT are reference-only and must not be translated.';
-    if (!source.includes(fullEnd) || !source.includes(fastAnchor)) {
-      throw new Error("prompt anchors changed; update the strict-lines variant");
-    }
-    source = source.replace(fullEnd, `Return JSONL lines only.\n\n${STRICT_LINES.replace(/\\\\"/g, '\\"').replace(/\\n/g, "\n")}\`;`);
-    source = source.replace(fastAnchor, `  "${STRICT_LINES}",\n${fastAnchor}`);
+  if (variant === "appended") {
+    const text = String(args.promptAppend || "");
+    const fullEnd = source.indexOf("`;", source.indexOf("const FULL_SEGMENT_SYSTEM_PROMPT"));
+    const fastEnd = source.indexOf('].join("\\n\\n");', source.indexOf("const AI_FAST_SEGMENT_SYSTEM_PROMPT"));
+    if (!text || fullEnd < 0 || fastEnd < 0) throw new Error("--prompt-append needs text and known prompt anchors");
+    source = source.slice(0, fastEnd) + `,\n  ${JSON.stringify(text)}\n` + source.slice(fastEnd);
+    const fullEndAfter = source.indexOf("`;", source.indexOf("const FULL_SEGMENT_SYSTEM_PROMPT"));
+    source = source.slice(0, fullEndAfter) + "\n\n" + text.replace(/[`\\$]/g, "\\$&") + source.slice(fullEndAfter);
   } else if (variant !== "current") {
     throw new Error(`unknown variant ${variant}`);
   }
