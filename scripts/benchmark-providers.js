@@ -10,6 +10,10 @@
 // is an exported debug log whose request rows provide real subtitle samples.
 // The results file holds timings, token counts and protocol statistics only:
 // no API key and no subtitle or translated text.
+//
+// Node's fetch ignores the system proxy. Where a provider needs one (Gemini
+// from an unsupported region answers HTTP 400 "User location is not
+// supported"), set HTTPS_PROXY and run Node with --use-env-proxy (Node 22.21+).
 "use strict";
 
 const fs = require("node:fs");
@@ -145,6 +149,20 @@ function dryRunFetch(_url, options) {
   });
 }
 
+// Keep the provider's error text (keys redacted) so an HTTP failure explains itself.
+let lastErrorBody = "";
+async function inspectingFetch(url, options) {
+  const response = await globalThis.fetch(url, options);
+  if (!response.ok) {
+    try {
+      lastErrorBody = (await response.clone().text())
+        .replace(/AIza[0-9A-Za-z_-]{20,}/g, "<key>").replace(/sk-[0-9A-Za-z]{16,}/g, "<key>")
+        .replace(/\s+/g, " ").slice(0, 400);
+    } catch (_e) { lastErrorBody = ""; }
+  }
+  return response;
+}
+
 function createRuntime(variant, profile) {
   const baseUrl = shared.normalizeAiBaseUrl(profile.baseUrl) || shared.AI_DEFAULT_BASE_URL;
   const sync = storageArea({
@@ -163,7 +181,7 @@ function createRuntime(variant, profile) {
     console, Date, Math, JSON, Map, Set, URL, Promise, AbortController, TextDecoder, TextEncoder,
     Uint8Array, setTimeout, clearTimeout, queueMicrotask, structuredClone,
     YTDS_SHARED: shared,
-    fetch: args.dryRun ? dryRunFetch : globalThis.fetch,
+    fetch: args.dryRun ? dryRunFetch : inspectingFetch,
     chrome: {
       runtime: { onMessage: { addListener: () => {} }, onInstalled: { addListener: () => {} } },
       tabs: { sendMessage: () => Promise.resolve() },
@@ -207,6 +225,7 @@ async function measure(runtime, sample, size, requestId) {
   const before = sample.contextBefore.map(([id, text]) => ({ id, text }));
   const after = sample.contextAfter.map(([id, text]) => ({ id, text }));
   runtime.events.length = 0;
+  lastErrorBody = "";
   const started = Date.now();
   let result = null;
   let error = "";
@@ -239,6 +258,7 @@ async function measure(runtime, sample, size, requestId) {
   const usage = runtime.takeUsage();
   return {
     items: items.length, error: error || (result && result.errorCode) || "",
+    providerMessage: lastErrorBody,
     ttfbMs: (at("ai-http-first-byte") || {}).data?.firstByteMs ?? null,
     firstUnitMs: firstUnit ? firstUnit.t - started : null,
     totalMs: Date.now() - started,
@@ -277,7 +297,12 @@ const median = (values) => {
   const profiles = loadProfiles();
   if (!profiles.length) throw new Error("no matching profiles in the settings backup");
   const runs = [];
+  const reported = new Set();
   let serial = 0;
+  if (process.env.HTTPS_PROXY && !process.execArgv.includes("--use-env-proxy") &&
+      process.env.NODE_USE_ENV_PROXY !== "1") {
+    console.warn("HTTPS_PROXY is set but Node will not use it; add --use-env-proxy.");
+  }
   for (const profile of profiles) {
     for (const variant of args.variants) {
       const runtime = createRuntime(variant, profile);
@@ -292,6 +317,13 @@ const median = (values) => {
             process.stdout.write(`${run.profile} ${variant} w${size} s${sampleIndex} r${repeat}: ` +
               `ttfb ${run.ttfbMs}ms first ${run.firstUnitMs}ms total ${run.totalMs}ms ` +
               `sent/line ${run.sentencesPerLine} commit ${run.committableRatio} ${run.error}\n`);
+            if (run.providerMessage && !reported.has(`${profile.name}|${run.error}`)) {
+              reported.add(`${profile.name}|${run.error}`);
+              process.stdout.write(`  provider says: ${run.providerMessage}\n`);
+              if (/location is not supported/i.test(run.providerMessage)) {
+                process.stdout.write("  -> this provider needs your proxy: set HTTPS_PROXY and run node --use-env-proxy\n");
+              }
+            }
           }
         }
       }
