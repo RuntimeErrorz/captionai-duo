@@ -39,8 +39,8 @@ function loadContent() {
     emitDebug: (event, data) => {
       if (event === "state-transition") transitions.push(data);
     },
-    settings: { targetLang: "zh-CN", aiRateLimitRpm: 15, aiMaxConcurrency: 4 },
-    getVideo: () => ({ currentTime: 0, playbackRate: 3 }),
+    settings: { targetLang: "zh-CN", aiRateLimitRpm: 15, aiMaxConcurrency: 4, aiPrefetchBatches: 2 },
+    AI_MAX_PREFETCH_BATCHES: 12, AI_FAST_PREFETCH_BATCHES: 3,    getVideo: () => ({ currentTime: 0, playbackRate: 3 }),
     repaintActiveAiTranslation: () => {},
     cacheAiDisplayNeighborhood: () => {},
     semanticDisplayWidth: () => 1000
@@ -197,4 +197,98 @@ test("the worker keeps only the named requests when cancelling an older focus", 
   assert.equal(current.signal.aborted, false);
   cancel(sender, "video", 3, "not-an-array");
   assert.equal(kept.signal.aborted, true, "a malformed keep list keeps nothing");
+});
+
+test("a seek drops the demand the previous focus left in every region", () => {
+  // Stale targets made the lookahead restart, urgently, a far range the seek
+  // had just cancelled (sim seed 55).
+  const harness = loadContent();
+  const state = vm.runInContext("semanticCommitState(1)", harness.context);
+  Object.assign(state, { cursor: 700, targetThrough: 933, urgentTarget: 925, lookaheadThrough: 950 });
+
+  harness.focusAiAfterSeek(groupTimeMs(100));
+
+  assert.ok(state.targetThrough < state.cursor);
+  assert.ok(state.urgentTarget < state.cursor);
+  assert.ok(state.lookaheadThrough < state.cursor);
+});
+
+test("a reseed keeps a live writer that already starts at the reseed position", () => {
+  // Playback overtaking a slow first byte reseeded to the same start and
+  // re-sent the identical range, discarding the wait (sim seed 9).
+  const harness = loadContent();
+  Object.assign(harness.context, { AI_SEEK_BACKTRACK_ITEMS: 64, AI_SEEK_LEFT_GUARD_ITEMS: 16,
+    AI_INITIAL_REQUEST_ITEMS: 48 });
+  const session = harness.session;
+  session.transCache.set(`${session.cueVideoId} g612`, "T600-612");
+  const state = vm.runInContext("semanticCommitState(1)", harness.context);
+  Object.assign(state, { cursor: 613, commitFloor: 613 });
+  const { key, request } = startCommit(harness, 1, 613, 932);
+  const reseed = vm.runInContext("reseedSemanticCommitState", harness.context);
+
+  // At 3x the reseed backtracks 24 items; from 630 it stops after the
+  // committed 612, so the reseed start is 613.
+  reseed(1, 630);
+
+  assert.equal(session.semanticRequestMeta.get(key), request);
+  assert.equal(harness.messages.some((m) => m.type === "cancelAiTranslationRequest"), false);
+  assert.equal(state.cursor, 613);
+
+  // A writer that starts elsewhere is still replaced.
+  state.cursor = 640;
+  session.transCache.set(`${session.cueVideoId} g639`, "T630-639");
+  request.requestStart = 630;
+  reseed(1, 680);
+  assert.equal(session.semanticRequestMeta.has(key), false);
+});
+
+test("a stale retry hold can never release a key a newer owner holds", () => {
+  const harness = loadContent();
+  const run = (code) => vm.runInContext(code, harness.context);
+  const session = harness.session;
+  const hold = run("holdAiRequestKey('dsb:1')");
+  assert.ok(session.transInflight.has("dsb:1"));
+
+  // A seek revokes the hold; a new writer claims the same key.
+  run("revokeAiRequestKeys((key) => key.startsWith('dsb:'))");
+  const { request } = startCommit(harness, 1, 613, 932);
+  run("claimAiRequestOwner('dsb:1', captionSession.semanticRequestMeta.get('dsb:1'))");
+
+  // The stale retry timer fires later and tries to release its hold.
+  assert.equal(harness.context.releaseAiRequestHold(hold), false);
+  assert.equal(session.semanticRequestMeta.get("dsb:1"), request);
+  assert.ok(session.transInflight.has("dsb:1"), "the live owner keeps its busy key");
+
+  assert.equal(harness.context.releaseAiRequestOwner("dsb:1", request), true);
+  assert.equal(session.transInflight.has("dsb:1"), false);
+});
+
+test("a seek keeps a later region's lookahead lane that the new position still reaches", () => {
+  // Scrubbing back by a few seconds cancelled the next region's lane and the
+  // lookahead re-sent the identical range at once (sim seed 5059).
+  for (const [target, kept] of [[520, true], [100, false]]) {
+    const harness = loadContent();
+    const state = vm.runInContext("semanticCommitState(1)", harness.context);
+    state.cursor = 600;
+    const { key, request } = startCommit(harness, 1, 600, 700);
+
+    harness.focusAiAfterSeek(groupTimeMs(target));
+
+    assert.equal(harness.session.semanticRequestMeta.get(key) === request, kept, `target ${target}`);
+    const cancel = harness.messages.find((m) => m.type === "cancelAiTranslation");
+    assert.deepEqual(Array.from(cancel.keepRequestIds), kept ? [request.requestId] : []);
+  }
+});
+
+test("a seek back inside a region keeps that region's lane running from its cursor", () => {
+  // The target is already committed and lies behind the lane's start; the
+  // lookahead would restart the identical lane at once (sim seed 20035).
+  const harness = loadContent();
+  const state = vm.runInContext("semanticCommitState(1)", harness.context);
+  state.cursor = 700;
+  const { key, request } = startCommit(harness, 1, 700, 800);
+
+  harness.focusAiAfterSeek(groupTimeMs(680));
+
+  assert.equal(harness.session.semanticRequestMeta.get(key), request);
 });

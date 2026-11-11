@@ -209,22 +209,16 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     AI_URGENT_REQUEST_ITEMS: 96,
     ACCELERATED_URGENT_REQUEST_ITEMS: 128,
     AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
-    AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS: 1,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
-    AI_MAX_REQUEST_ITEMS: 320,
-    AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: Number.isInteger(options.maxRequestItems) ? options.maxRequestItems : 320,
     AI_MAX_CURRENT_CHARS: 18000,
     SEMANTIC_COMMIT_GUARD_ITEMS: 16,
     AI_COMMIT_GUARD_ITEMS: 16,
     SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS: 32,
     AI_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    AI_URGENT_TARGET_TAIL_ITEMS: 48,
-    AI_FAST_TARGET_TAIL_ITEMS: 192,
-    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_URGENT_TARGET_TAIL_ITEMS: 224,
     AI_SEEK_BACKTRACK_ITEMS: 64,
     AI_SEEK_LEFT_GUARD_ITEMS: 16,
-    AI_FAST_PREFETCH_BATCHES: 6,
-    AI_HIGH_SPEED_PREFETCH_BATCHES: 8,
     AI_CONTEXT_GROUPS: 20,
     AI_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
     AI_RATE_RETRY_LIMIT: 6,
@@ -287,8 +281,7 @@ function loadPlaybackPrefetchHarness(options = {}) {
   harness.context.settings.enabled = true;
   for (const [name, value] of Object.entries({
     AI_MAX_PREFETCH_BATCHES: options.maxPrefetchBatches,
-    AI_FAST_PREFETCH_BATCHES: options.fastPrefetchBatches,
-    AI_HIGH_SPEED_PREFETCH_BATCHES: options.highSpeedPrefetchBatches
+
   })) {
     if (value != null) harness.context[name] = value;
   }
@@ -602,9 +595,7 @@ test("nearby playback overrun defers reseeding until the live prefix commits", (
       cueEpoch: 2,
       semanticFocusGeneration: 4
     },
-    AI_URGENT_TARGET_TAIL_ITEMS: 48,
-    AI_FAST_TARGET_TAIL_ITEMS: 192,
-    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_URGENT_TARGET_TAIL_ITEMS: 224,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => null,
@@ -614,7 +605,7 @@ test("nearby playback overrun defers reseeding until the live prefix commits", (
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
   const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(canContinue(1, { cursor: 5793 }, 5873), true);
-  assert.equal(canContinue(1, { cursor: 5793 }, 5921), false);
+  assert.equal(canContinue(1, { cursor: 5793 }, 5872 + 224 + 1), false, "beyond the runway reach");
   // Ownership is the session token. A request adopted across a seek keeps its
   // older transport focusGeneration; a revoked token always ends ownership.
   request.focusGeneration = 3;
@@ -638,9 +629,7 @@ test("3x playback keeps a nearby live request instead of reseeding at the old ta
       cueEpoch: 2,
       semanticFocusGeneration: 4
     },
-    AI_URGENT_TARGET_TAIL_ITEMS: 48,
-    AI_FAST_TARGET_TAIL_ITEMS: 192,
-    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_URGENT_TARGET_TAIL_ITEMS: 224,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
@@ -676,9 +665,7 @@ test("an accelerated target abandons stale prefetch after its range has been pas
       cueEpoch: 2,
       semanticFocusGeneration: 4
     },
-    AI_URGENT_TARGET_TAIL_ITEMS: 48,
-    AI_FAST_TARGET_TAIL_ITEMS: 192,
-    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_URGENT_TARGET_TAIL_ITEMS: 224,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
@@ -725,9 +712,7 @@ test("a future request with a buffered safe prefix is not discarded as stale", (
       cueEpoch: 2,
       semanticFocusGeneration: 4
     },
-    AI_URGENT_TARGET_TAIL_ITEMS: 48,
-    AI_FAST_TARGET_TAIL_ITEMS: 192,
-    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_URGENT_TARGET_TAIL_ITEMS: 224,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
@@ -834,23 +819,23 @@ test("accelerated playback rebuilds a live urgent request after its safe cursor 
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
   const isLagging = vm.runInContext("aiRequestIsPlaybackLagging", context);
   const canContinue = vm.runInContext("canContinueAiInflight", context);
-  assert.equal(isLagging(request, { cursor: 96 }, 128), true);
-  assert.equal(canContinue(1, { cursor: 96 }, 128), false);
-  request.startedAt = Date.now() - 4000;
-  assert.equal(isLagging(request, { cursor: 104 }, 128), true);
-  request.startedAt = Date.now() - 3000;
-  assert.equal(isLagging(request, { cursor: 104 }, 128), false);
-  request.startedAt = Date.now() - 2000;
-  assert.equal(isLagging(request, { cursor: 96 }, 128), false);
-  request.startedAt = Date.now() - 7000;
+  // One rule for every speed: 48 items behind after a 14 s startup grace
+  // (4 s once the stream has made progress).
+  request.startedAt = Date.now() - 15000;
+  assert.equal(isLagging(request, { cursor: 96 }, 160), true);
+  assert.equal(canContinue(1, { cursor: 96 }, 160), false);
+  assert.equal(isLagging(request, { cursor: 96 }, 128), false, "fewer than 48 items behind");
+  request.startedAt = Date.now() - 13000;
+  assert.equal(isLagging(request, { cursor: 96 }, 160), false, "still inside the startup grace");
+  request.startedAt = Date.now() - 15000;
   request.lastProgressAt = Date.now() - 1000;
   // A timestamp from a provisional/left-guard fragment must not reset the
   // startup grace period.
-  assert.equal(isLagging(request, { cursor: 96 }, 128), true);
+  assert.equal(isLagging(request, { cursor: 96 }, 160), true);
   request.progressCursor = 96;
-  assert.equal(isLagging(request, { cursor: 96 }, 128), false);
+  assert.equal(isLagging(request, { cursor: 96 }, 160), false);
   request.lastProgressAt = Date.now() - 5000;
-  assert.equal(isLagging(request, { cursor: 96 }, 128), true);
+  assert.equal(isLagging(request, { cursor: 96 }, 160), true);
 });
 
 test("Gemini playback lag preserves full startup grace and accounts for cached targets", () => {
@@ -927,7 +912,7 @@ test("playback-lag reseed cancels the old urgent writer before rebuilding", () =
     requestId: "commit:0:1:0-159",
     requestStart: 0,
     requestEnd: 159,
-    startedAt: Date.now() - 7000,
+    startedAt: Date.now() - 15000,
     urgent: true,
     reqEpoch: 1,
     reqVid: "video",
@@ -949,7 +934,7 @@ test("playback-lag reseed cancels the old urgent writer before rebuilding", () =
   assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[0].requestId, oldRequest.requestId);
   assert.equal(harness.messages[1].type, "translateBatch");
-  assert.equal(harness.messages[1].requestStart, 56);
+  assert.equal(harness.messages[1].requestStart, 80 - Math.round(64 / 3), "backtrack shrinks with speed");
   assert.equal(harness.messages[1].urgent, true);
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-playback-lag-reseed"
@@ -988,7 +973,7 @@ test("playback-lag reseed preserves a valid future runway", () => {
     reqVid: "video",
     sessionToken,
     focusGeneration: 0,
-    startedAt: Date.now() - 7000,
+    startedAt: Date.now() - 15000,
     lastProgressAt: 0,
     progressCursor: 0,
     progressTranslations: [],
@@ -1022,6 +1007,7 @@ test("playback-lag reseed preserves a valid future runway", () => {
 
 test("stale prefetch is cancelled before an urgent request is rebuilt", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    aiRequestItems: 128,
     windowItems: 48, targetThrough: 40, urgentTarget: 40, playbackRate: 3
   });
   const sessionToken = harness.context.captureCaptionSession();
@@ -1058,7 +1044,7 @@ test("stale prefetch is cancelled before an urgent request is rebuilt", () => {
   ), true);
 });
 
-test("2x playback gets the intermediate semantic runway", () => {
+test("the semantic runway is the same at every playback speed", () => {
   const request = {
     requestEnd: 5872,
     reqEpoch: 2,
@@ -1073,9 +1059,7 @@ test("2x playback gets the intermediate semantic runway", () => {
       cueEpoch: 2,
       semanticFocusGeneration: 4
     },
-    AI_URGENT_TARGET_TAIL_ITEMS: 48,
-    AI_FAST_TARGET_TAIL_ITEMS: 192,
-    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_URGENT_TARGET_TAIL_ITEMS: 224,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 2 }),
@@ -1085,13 +1069,16 @@ test("2x playback gets the intermediate semantic runway", () => {
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
   const tailItems = vm.runInContext("aiUrgentTargetTailItems", context);
   const canContinue = vm.runInContext("canContinueAiInflight", context);
-  assert.equal(tailItems(), 192);
-  assert.equal(canContinue(1, { cursor: 5793 }, 6064), true);
-  assert.equal(canContinue(1, { cursor: 5793 }, 6065), false);
+  for (const rate of [1, 1.5, 2, 3]) {
+    context.getVideo = () => ({ playbackRate: rate });
+    assert.equal(tailItems(), 224, `${rate}x`);
+  }
+  assert.equal(canContinue(1, { cursor: 5793 }, 5872 + 224), true);
+  assert.equal(canContinue(1, { cursor: 5793 }, 5872 + 225), false);
 });
 
 test("a maximum-window mega-unit commits through its model-aligned chunks", () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 2);
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 2, { maxRequestItems: 160 });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
 
@@ -1209,13 +1196,15 @@ test("urgent and speculative lanes share one exact in-flight provider request", 
 
 test("a guard-touching unit expands directly to the maximum recovery window", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    aiRequestItems: 96,
     windowItems: 80, targetThrough: 40, urgentTarget: 40
   });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(harness.messages.map((message) => message.items.length), [105, 160]);
+  assert.deepEqual(harness.messages.map((message) => message.items.length), [96, 320],
+    "expands straight to the window cap");
   assert.equal(harness.debug.filter((entry) =>
     entry.event === "semantic-commit-window-expanded"
   ).length, 1);
@@ -1226,6 +1215,7 @@ test("a guard-touching unit expands directly to the maximum recovery window", as
 
 test("3x urgent playback keeps the visible request short while runway prefetch fills ahead", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    aiRequestItems: 128, maxRequestItems: 160,
     windowItems: 80, targetThrough: 40, urgentTarget: 80, playbackRate: 3
   });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
@@ -1240,6 +1230,7 @@ test("3x urgent playback keeps the visible request short while runway prefetch f
 
 test("urgent giant units wait for a full runway before aligned-chunk recovery", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 2, {
+    aiRequestItems: 128,
     windowItems: 48, targetThrough: 40, urgentTarget: 40, playbackRate: 3
   });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
@@ -1340,108 +1331,9 @@ test("uncommitted left-guard progress does not refresh playback lag grace", () =
   assert.equal(request.progressCursor, 0);
 });
 
-test("accelerated streamed progress hands off from a safe prefix before the long response ends", async () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 0, {
-    windowItems: 48, targetThrough: 255, urgentTarget: 40, playbackRate: 3
-  });
-  const request = {
-    requestId: "commit:0:1:0-159",
-    urgent: true,
-    regionIndex: 0,
-    requestStart: 0,
-    requestEnd: 159,
-    commitFloor: 0,
-    limitEnd: 500,
-    effectiveGuardItems: 16,
-    reqVid: "video",
-    reqEpoch: 1,
-    sessionToken: harness.context.captureCaptionSession(),
-    focusGeneration: 0,
-    progressTranslations: [],
-    progressRecoveryTranslations: []
-  };
-  harness.context.captionSession.semanticRequestMeta.set("dsb:0", request);
-  harness.context.captionSession.transInflight.add("dsb:0");
-  const calls = [];
-  harness.context.sendRuntimeMessage = (message, callback) => {
-    calls.push(message);
-    if (message.type === "cancelAiTranslationRequest" && typeof callback === "function") {
-      callback({ ok: true });
-    }
-    return true;
-  };
-
-  const handle = vm.runInContext("handleAiTranslationProgress", harness.context);
-  assert.equal(handle({
-    type: "translationBatchProgress",
-    requestId: request.requestId,
-    videoId: "video",
-    focusGeneration: 0,
-    translations: giantSemanticResponse(true)
-  }), true);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(harness.state.cursor, 120);
-  assert.equal(calls[0].type, "cancelAiTranslationRequest");
-  assert.equal(calls[1].type, "translateBatch");
-  assert.equal(calls[1].requestStart, 120);
-  assert.equal(calls[1].urgent, true);
-  assert.equal(calls[1].bypassCache, true);
-  assert.ok(calls[1].items.length > 0);
-  assert.ok(calls[1].items.length <= 160);
-  assert.equal(harness.debug.some((entry) =>
-    entry.event === "semantic-stream-handoff"
-  ), true);
-});
-
-test("Gemini ignores stream handoff even during accelerated playback", async () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 0, {
-    windowItems: 320, targetThrough: 255, urgentTarget: 40, playbackRate: 3,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
-    aiModel: "gemini-3.1-flash-lite-preview"
-  });
-  const request = {
-    requestId: "commit:0:1:0-319",
-    urgent: true,
-    regionIndex: 0,
-    requestStart: 0,
-    requestEnd: 319,
-    commitFloor: 0,
-    limitEnd: 500,
-    effectiveGuardItems: 16,
-    reqVid: "video",
-    reqEpoch: 1,
-    sessionToken: harness.context.captureCaptionSession(),
-    focusGeneration: 0,
-    progressTranslations: [],
-    progressRecoveryTranslations: []
-  };
-  harness.context.captionSession.semanticRequestMeta.set("dsb:0", request);
-  harness.context.captionSession.transInflight.add("dsb:0");
-  const calls = [];
-  harness.context.sendRuntimeMessage = (message) => {
-    calls.push(message);
-    return true;
-  };
-
-  const handle = vm.runInContext("handleAiTranslationProgress", harness.context);
-  assert.equal(handle({
-    type: "translationBatchProgress",
-    requestId: request.requestId,
-    videoId: "video",
-    focusGeneration: 0,
-    translations: giantSemanticResponse(true)
-  }), true);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(harness.debug.some((entry) =>
-    entry.event === "semantic-stream-handoff"
-  ), false);
-  assert.equal(calls.some((call) => call.type === "cancelAiTranslationRequest"), false);
-});
-
 test("accelerated prefetch starts with enough runway before urgent promotion", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    maxRequestItems: 160,
     windowItems: 48, targetThrough: 40, urgentTarget: -1, playbackRate: 3
   });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
@@ -1454,6 +1346,7 @@ test("accelerated prefetch starts with enough runway before urgent promotion", a
 
 test("same semantic region prefetches distinct future ranges concurrently", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    aiRequestItems: 96,
     windowItems: 48, targetThrough: 40, urgentTarget: 0, playbackRate: 3
   });
   const callbacks = [];
@@ -1673,6 +1566,7 @@ test("retry exhaustion forwards the original error text to the subtitle state", 
 
 test("accelerated prefetch skips the live writer and uses the fast transport path", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
+    aiRequestItems: 96,
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3
   });
   const sessionToken = harness.context.captureCaptionSession();
@@ -1711,7 +1605,7 @@ test("Gemini Flash Lite uses the configured request window at ordinary playback"
   const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(requests.length, 1);
   assert.equal(requests[0].maxConcurrency, 4);
-  assert.equal(requests[0].items.length, 96);
+  assert.equal(requests[0].items.length, 320, "the default request-items setting");
 
   const customHarness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
@@ -2006,7 +1900,7 @@ test("speculative local concurrency backoff requeues and pauses further speculat
 
 test("settling an active request clears local-concurrency backoff and pumps speculative queue", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
-    windowItems: 80, targetThrough: 200, urgentTarget: 0, playbackRate: 3,
+    windowItems: 80, targetThrough: 100, urgentTarget: 0, playbackRate: 3,
     groupCount: 401, limitEnd: 400, deferResponses: true
   });
 
@@ -2016,8 +1910,9 @@ test("settling an active request clears local-concurrency backoff and pumps spec
   harness.context.captionSession.semanticSpeculativeBackoffReason = "local-concurrency";
   harness.context.captionSession.semanticSpeculativeBackoffUntil = Date.now() + 5000;
   vm.runInContext("aiPrefetchState", harness.context)(harness.state);
-  harness.state.prefetchQueued.add(80);
-  harness.state.prefetchQueue.push(80);
+  // Queued ahead of the cursor the response is about to commit.
+  harness.state.prefetchQueued.add(200);
+  harness.state.prefetchQueue.push(200);
 
   harness.messages.length = 0;
 
@@ -2028,7 +1923,8 @@ test("settling an active request clears local-concurrency backoff and pumps spec
 
   assert.equal(harness.context.captionSession.semanticSpeculativeBackoffReason, "");
   assert.equal(harness.context.captionSession.semanticSpeculativeBackoffUntil, 0);
-  assert.ok(harness.messages.some((msg) => msg.type === "translateBatch" && msg.requestStart === 80));
+  // The visible target is committed, so the speculative queue resumes.
+  assert.ok(harness.messages.some((msg) => msg.type === "translateBatch" && msg.requestStart === 200));
 });
 
 test("lookahead crosses a hard pause by starting the next region at its true start", () => {
@@ -2036,8 +1932,6 @@ test("lookahead crosses a hard pause by starting the next region at its true sta
     groupCount: 64, limitEnd: 63, prefetchBatches: 4
   });
   harness.context.AI_MAX_PREFETCH_BATCHES = 12;
-  harness.context.AI_FAST_PREFETCH_BATCHES = 6;
-  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 8;
   harness.context.captionSession.semanticCommitRegions = [
     { start: 0, end: 31 },
     { start: 32, end: 63 }
@@ -2241,7 +2135,7 @@ test("a max-planned short bridge recovers past its future join instead of exhaus
   }));
   const harness = loadSemanticCommitHarness(translations, 0, {
     windowItems: 160, targetThrough: 100, urgentTarget: 0, playbackRate: 3,
-    groupCount: 301, limitEnd: 300, deferResponses: true
+    groupCount: 301, limitEnd: 300, deferResponses: true, maxRequestItems: 160
   });
   const sessionToken = harness.context.captureCaptionSession();
   harness.context.captionSession.semanticRequestMeta.set("dsp:0:2", {
@@ -2276,7 +2170,7 @@ test("adaptive no-progress enters recovery instead of replaying the same cached 
   }));
   const harness = loadSemanticCommitHarness(translations, 0, {
     windowItems: 160, targetThrough: 100, urgentTarget: 0, playbackRate: 3,
-    groupCount: 301, limitEnd: 300, deferResponses: true
+    groupCount: 301, limitEnd: 300, deferResponses: true, maxRequestItems: 160
   });
   harness.state.commitFloor = 10;
   const sessionToken = harness.context.captureCaptionSession();
@@ -2336,8 +2230,6 @@ test("same-language captions are shown directly without translation requests", (
   });
   harness.context.settings.enabled = true;
   harness.context.AI_MAX_PREFETCH_BATCHES = 0;
-  harness.context.AI_FAST_PREFETCH_BATCHES = 0;
-  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 0;
   harness.context.PENDING_ELLIPSIS_MS = 400;
   harness.context.captionSession.activeGroupIdx = 0;
   vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
@@ -2380,17 +2272,16 @@ test("accelerated playback prefetches the current semantic batch before promotio
       }
     },
     AI_MAX_PREFETCH_BATCHES: 10,
-    AI_FAST_PREFETCH_BATCHES: 6,
-    AI_HIGH_SPEED_PREFETCH_BATCHES: 8,
     aiGroupForCueAt: () => 0
   };
   vm.createContext(context);
   vm.runInContext(playbackSource, context, { filename: "content/cue-playback.js" });
   vm.runInContext("prefetchFrom(0)", context);
-  assert.deepEqual(requestedAhead, [8]);
+  // A 3-batch setting raised to round(3 + 1) = 4 at 3x.
+  assert.deepEqual(requestedAhead, [4]);
   assert.deepEqual(calls, [
     { group: 0, urgent: true },
-    ...batchStarts.slice(1).map((group) => ({ group, urgent: false }))
+    ...batchStarts.slice(1, 5).map((group) => ({ group, urgent: false }))
   ]);
 });
 
@@ -2416,8 +2307,6 @@ test("same-group playback watchdog and rate change re-arm accelerated current pr
     },
     getVideo: () => ({ currentTime: 0, playbackRate: 3 }),
     AI_MAX_PREFETCH_BATCHES: 10,
-    AI_FAST_PREFETCH_BATCHES: 6,
-    AI_HIGH_SPEED_PREFETCH_BATCHES: 8,
     extensionContextAlive: () => true,
     maybeReflowSemanticDisplay: () => {},
     armPendingTranslationIndicator: () => {},
@@ -2471,7 +2360,8 @@ test("cached translations are normalized again while preserving sentence spacing
 });
 
 test("an unrecoverable no-progress response keeps a bounded budget and bypasses cache", () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 2);
+  // A unit as large as the window cap can never commit: the retry budget applies.
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 2, { maxRequestItems: 160 });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
 
@@ -2514,7 +2404,7 @@ test("a non-retryable provider response is painted at the active subtitle", () =
 });
 
 test("an invalidated semantic retry timer cannot resurrect its request", () => {
-  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
+  const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, { maxRequestItems: 160 });
   const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   assert.equal(harness.timers.length, 1);
@@ -2645,14 +2535,14 @@ test("webRequest diagnostics preserve Chromium's underlying net error", () => {
 test("a commit window is never shorter than twice the uncommitted runway, except at a region end", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 48, targetThrough: 10, urgentTarget: -1, playbackRate: 1,
-    groupCount: 301, limitEnd: 300, deferResponses: true
+    groupCount: 801, limitEnd: 800, deferResponses: true
   });
   // A non-urgent lane would otherwise use its 48-item window.
   vm.runInContext("pumpAiCommitRegion(0, false)", harness.context);
   const first = harness.messages.find((message) => message.type === "translateBatch");
-  assert.equal(first.items.length, 64);
+  assert.ok(first.items.length >= 64, "at least twice the 32-item runway");
   // The background may stop streaming where this request's runway begins.
-  assert.equal(first.commitGuardLocal, 32);
+  assert.equal(first.commitGuardLocal, first.items.length - 32);
 
   const tail = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 48, targetThrough: 10, urgentTarget: -1, playbackRate: 1,
@@ -2685,40 +2575,44 @@ test("a speculative window never overlaps a finished response still waiting for 
   assert.equal(launched[0].requestStart, 448);
 });
 
-test("a request-limited profile carries one request across short hard-pause regions", async () => {
+test("one request carries across short hard-pause regions", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 96, targetThrough: -1, urgentTarget: -1, playbackRate: 1,
-    groupCount: 300, limitEnd: 19, deferResponses: true, prefetchBatches: 4,
+    groupCount: 600, limitEnd: 19, deferResponses: true, prefetchBatches: 4,
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
     aiModel: "gemini-3.5-flash-lite-preview", aiRequestItems: 96
   });
   const session = harness.context.captionSession;
-  session.semanticCommitRegions = [{ start: 0, end: 19 }, { start: 20, end: 29 }, { start: 30, end: 299 }];
+  session.semanticCommitRegions = [{ start: 0, end: 19 }, { start: 20, end: 29 }, { start: 30, end: 599 }];
   session.semanticGroupToCommitRegion = [
-    ...new Array(20).fill(0), ...new Array(10).fill(1), ...new Array(270).fill(2)
+    ...new Array(20).fill(0), ...new Array(10).fill(1), ...new Array(570).fill(2)
   ];
   harness.context.AI_MAX_PREFETCH_BATCHES = 12;
-  harness.context.AI_FAST_PREFETCH_BATCHES = 6;
-  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 8;
   vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
   vm.runInContext("advanceAiLookahead(0)", harness.context);
 
   const sent = () => harness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(sent().length, 1, "one request, not one per region");
   assert.equal(sent()[0].requestStart, 0);
-  assert.equal(sent()[0].requestEnd, 95);
-  assert.equal(sent()[0].commitGuardLocal, 64, "only the last, partial region keeps a runway");
+  const end = sent()[0].requestEnd;
+  assert.ok(end > 30 && end < 599, "the request ends inside the third region");
+  assert.equal(sent()[0].commitGuardLocal, end + 1 - 32, "only the last, partial region keeps a runway");
 
   const pending = harness.pendingCallbacks[0];
   pending.responded = true;
-  pending.callback({ ok: true, translations: rangeSemanticResponse(0, 95), deferredIds: [], httpDiagnostics: { attempts: [] } });
+  pending.callback({ ok: true, translations: rangeSemanticResponse(0, end), deferredIds: [], httpDiagnostics: { attempts: [] } });
   for (let tick = 0; tick < 6; tick++) await new Promise((resolve) => setImmediate(resolve));
 
   const cursor = (index) => session.semanticCommitStateByRegion.get(index).cursor;
   assert.equal(cursor(0), 20);
   assert.equal(cursor(1), 30, "the second region commits from the shared response");
-  assert.equal(cursor(2), 64, "the third region commits up to its runway");
+  assert.equal(cursor(2), end + 1 - 32, "the third region commits up to its runway");
+  // The wide window already ran past the lookahead reach: nothing more to
+  // fetch until playback catches up.
+  assert.equal(sent().length, 1);
+  vm.runInContext(`advanceAiLookahead(${end - 64})`, harness.context);
+  for (let tick = 0; tick < 6; tick++) await new Promise((resolve) => setImmediate(resolve));
   const next = sent().slice(1);
   assert.equal(next.length, 1, "the lane continues with one request");
-  assert.equal(next[0].requestStart, 64);
+  assert.equal(next[0].requestStart, end + 1 - 32);
 });

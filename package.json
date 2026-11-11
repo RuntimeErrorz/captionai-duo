@@ -5,6 +5,7 @@
   "scripts": {
     "test": "node --test",
     "check:architecture": "node scripts/check-architecture.js",
-    "check": "npm run check:architecture && npm test"
+    "check": "npm run check:architecture && npm test",
+    "sim:fuzz": "node scripts/sim-fuzz.js"
   }
 }

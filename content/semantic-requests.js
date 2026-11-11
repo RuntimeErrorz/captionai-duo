@@ -1,17 +1,62 @@
 // Semantic request ownership, cancellation and retry state machine.
 "use strict";
 
+// ---- ownership: the only writer of semanticRequestMeta / transInflight ----
+// semanticRequestMeta maps an inflight key to its live request owner.
+// transInflight is "this key is busy": every owner key, plus keys held by a
+// pending retry. A retry hold is a token: only the timer that took it can
+// release it, so a stale timer can never free a key a newer owner now holds.
+function aiRequestHolds() {
+  if (!(captionSession.semanticRequestHolds instanceof Map)) captionSession.semanticRequestHolds = new Map();
+  return captionSession.semanticRequestHolds;
+}
+function claimAiRequestOwner(inflightKey, request) {
+  aiRequestHolds().delete(inflightKey);
+  captionSession.semanticRequestMeta.set(inflightKey, request);
+  captionSession.transInflight.add(inflightKey);
+}
+// Releases the owner of a key; with `request`, only if it is still the owner.
+function releaseAiRequestOwner(inflightKey, request) {
+  if (request && captionSession.semanticRequestMeta.get(inflightKey) !== request) return false;
+  const released = captionSession.semanticRequestMeta.delete(inflightKey);
+  if (!aiRequestHolds().has(inflightKey)) captionSession.transInflight.delete(inflightKey);
+  return released;
+}
+function releaseAiRequestOwnerOf(request) {
+  for (const [key, value] of captionSession.semanticRequestMeta.entries()) {
+    if (value === request) return releaseAiRequestOwner(key, request) ? key : "";
+  }
+  return "";
+}
+function holdAiRequestKey(inflightKey) {
+  const hold = Object.freeze({ inflightKey });
+  aiRequestHolds().set(inflightKey, hold);
+  captionSession.transInflight.add(inflightKey);
+  return hold;
+}
+function releaseAiRequestHold(hold) {
+  if (!hold || aiRequestHolds().get(hold.inflightKey) !== hold) return false;
+  aiRequestHolds().delete(hold.inflightKey);
+  if (!captionSession.semanticRequestMeta.has(hold.inflightKey)) captionSession.transInflight.delete(hold.inflightKey);
+  return true;
+}
+// Drops owners and holds of every key the predicate selects.
+function revokeAiRequestKeys(predicate) {
+  for (const key of Array.from(captionSession.transInflight)) {
+    if (!predicate(key)) continue;
+    captionSession.semanticRequestMeta.delete(key);
+    aiRequestHolds().delete(key);
+    captionSession.transInflight.delete(key);
+  }
+}
+
 const AI_STALE_PREFETCH_GRACE_MS = 2500;
-const AI_PLAYBACK_STARTUP_GRACE_MS = 6000;
-// A request-limited provider may need ~8 s before its first byte.
-const AI_REQUEST_LIMITED_STARTUP_GRACE_MS = 14000;
+// A writer is "lagging" only after a provider-scale wait: a slow or rate-
+// limited provider may need ~8 s before its first byte, and replacing it then
+// costs another request. One threshold for every provider and speed.
+const AI_PLAYBACK_STARTUP_GRACE_MS = 14000;
 const AI_PLAYBACK_PROGRESS_GRACE_MS = 4000;
-const AI_HIGH_SPEED_STARTUP_GRACE_MS = 3500;
-const AI_HIGH_SPEED_PROGRESS_GRACE_MS = 2500;
-const AI_STREAM_HANDOFF_MIN_ITEMS = 64;
-const AI_HIGH_SPEED_STREAM_HANDOFF_MIN_ITEMS = 16;
-const AI_STREAM_HANDOFF_MAX_REMAINING_ITEMS = 48;
-const AI_SPECULATIVE_REQUEST_ITEMS = 96;
+const AI_PLAYBACK_LAG_ITEMS = 48;
 
 function aiRequestHasProgress(request) {
   if (!request) return false;
@@ -44,10 +89,7 @@ function aiRequestIsPlaybackLagging(request, state, targetGroup) {
       typeof groupKey === "function" && captionSession.transCache.has(groupKey(targetGroup))) {
     return false;
   }
-  const rate = Number(getVideo() && getVideo().playbackRate);
-  const highSpeed = rate >= 2.5;
-  const requestLimited = typeof aiRequestLimited === "function" && aiRequestLimited();
-  const lagThreshold = requestLimited ? 48 : (highSpeed ? 24 : (rate >= 1.75 ? 48 : 0));
+  const lagThreshold = AI_PLAYBACK_LAG_ITEMS;
   const target = Number(targetGroup);
   const cursor = Number(state.cursor);
   const requestStart = Number(request.requestStart);
@@ -58,14 +100,8 @@ function aiRequestIsPlaybackLagging(request, state, targetGroup) {
     Number.isInteger(progressCursor) && progressCursor > requestStart &&
     Number.isFinite(lastProgressAt) && lastProgressAt > startedAt;
   const referenceAt = hasStreamProgress ? lastProgressAt : startedAt;
-  const startupGraceMs = requestLimited
-    ? AI_REQUEST_LIMITED_STARTUP_GRACE_MS
-    : (highSpeed ? AI_HIGH_SPEED_STARTUP_GRACE_MS : AI_PLAYBACK_STARTUP_GRACE_MS);
-  const progressGraceMs = requestLimited
-    ? AI_PLAYBACK_PROGRESS_GRACE_MS
-    : (highSpeed ? AI_HIGH_SPEED_PROGRESS_GRACE_MS : AI_PLAYBACK_PROGRESS_GRACE_MS);
-  const graceMs = hasStreamProgress ? progressGraceMs : startupGraceMs;
-  return lagThreshold > 0 && Number.isInteger(target) && Number.isInteger(cursor) &&
+  const graceMs = hasStreamProgress ? AI_PLAYBACK_PROGRESS_GRACE_MS : AI_PLAYBACK_STARTUP_GRACE_MS;
+  return Number.isInteger(target) && Number.isInteger(cursor) &&
     target - cursor >= lagThreshold && Number.isFinite(referenceAt) &&
     Date.now() - referenceAt >= graceMs;
 }
@@ -73,9 +109,8 @@ function aiSeekBacktrackItems() {
   const base = Math.max(0, Math.floor(Number(AI_SEEK_BACKTRACK_ITEMS) || 0));
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
-  if (Number.isFinite(rate) && rate >= 2.5) return Math.min(base, 24);
-  if (Number.isFinite(rate) && rate >= 1.75) return Math.min(base, 40);
-  return base;
+  // Read-only lead-in before a seek target, shrinking with playback speed.
+  return Math.round(base / Math.max(1, Number.isFinite(rate) ? rate : 1));
 }
 function aiLeadingUnitReachesRequestEnd(translationsValue, requestStartValue, requestEndValue) {
   const translations = Array.isArray(translationsValue) ? translationsValue : [];
@@ -104,60 +139,6 @@ function aiAlignedRecoveryInput(translationsValue, requestStartValue) {
     return visibleUnitIds.has(String(item && item.unitId || ""));
   });
 }
-function aiStreamHandoffReady(request, state, maxRequestItems, normalMaxRequestItems) {
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  const accelerated = Number.isFinite(rate) && rate >= 1.75;
-  if (!request || !state || !request.urgent ||
-      (typeof aiRequestLimited === "function" && aiRequestLimited()) ||
-      (!accelerated && Number(maxRequestItems) <= Number(normalMaxRequestItems))) return false;
-  const requestStart = Number(request.requestStart);
-  const requestEnd = Number(request.requestEnd);
-  const cursor = Number(state.cursor);
-  const targetThrough = Number(state.targetThrough);
-  if (![requestStart, requestEnd, cursor, targetThrough].every(Number.isInteger)) return false;
-  const minItems = Number.isFinite(rate) && rate >= 2.5
-    ? AI_HIGH_SPEED_STREAM_HANDOFF_MIN_ITEMS
-    : AI_STREAM_HANDOFF_MIN_ITEMS;
-  return cursor - requestStart >= minItems &&
-    requestEnd - cursor <= AI_STREAM_HANDOFF_MAX_REMAINING_ITEMS &&
-    targetThrough - cursor >= minItems;
-}
-function handoffAiStream(regionIndex, request, state) {
-  const inflightKey = `dsb:${regionIndex}`;
-  if (!request || captionSession.semanticRequestMeta.get(inflightKey) !== request ||
-      !state || state.cursor > state.targetThrough || state.cursor > state.limitEnd) return false;
-  const continuationStart = state.cursor;
-  request.streamHandoff = true;
-  captionSession.semanticRequestMeta.delete(inflightKey);
-  captionSession.transInflight.delete(inflightKey);
-  emitCaptionStateTransition("semantic-request", "stream-handoff", {
-    requestId: request.requestId,
-    regionIndex,
-    continuationStart
-  });
-  emitDebug("semantic-stream-handoff", {
-    requestId: request.requestId,
-    regionIndex,
-    continuationStart,
-    previousRequestEnd: request.requestEnd
-  });
-  const launch = () => {
-    if (!isCaptionSessionCurrent(request.sessionToken) ||
-        request.reqEpoch !== captionSession.cueEpoch ||
-        request.reqVid !== captionSession.cueVideoId ||
-        state.cursor !== continuationStart || state.cursor > state.targetThrough ||
-        state.cursor > state.limitEnd) return;
-    aiRequestBatch(continuationStart, false, true, { bypassCache: true });
-  };
-  const sent = sendRuntimeMessage({
-    type: "cancelAiTranslationRequest",
-    videoId: captionSession.cueVideoId,
-    requestId: request.requestId
-  }, () => queueMicrotask(launch));
-  if (!sent) queueMicrotask(launch);
-  return true;
-}
 function aiBatchRetryKey(start, end, videoId, epoch) {
   return `${videoId}:${epoch}:${start}:${end}`;
 }
@@ -178,7 +159,7 @@ function beginAiRequest(inflightKey, kind, start, end, urgent) {
     return "";
   }
   const requestId = `${kind}:${captionSession.semanticFocusGeneration}:${++captionSession.semanticRequestSerial}:${start}-${end}`;
-  captionSession.semanticRequestMeta.set(inflightKey, {
+  claimAiRequestOwner(inflightKey, {
     requestId,
     urgent: !!urgent,
     startedAt: Date.now(),
@@ -187,7 +168,6 @@ function beginAiRequest(inflightKey, kind, start, end, urgent) {
     progressTranslations: [],
     progressRecoveryTranslations: []
   });
-  captionSession.transInflight.add(inflightKey);
   emitCaptionStateTransition("semantic-request", "started", {
     requestId, kind, start, end, urgent: !!urgent
   });
@@ -202,8 +182,7 @@ function finishAiRequest(inflightKey, requestId) {
     });
     return null;
   }
-  captionSession.semanticRequestMeta.delete(inflightKey);
-  captionSession.transInflight.delete(inflightKey);
+  releaseAiRequestOwner(inflightKey, current);
   emitCaptionStateTransition("semantic-request", "settled", {
     requestId,
     urgent: !!current.urgent
@@ -231,8 +210,7 @@ function cancelAiRegionRequests(regionIndex, preserveFromValue) {
       videoId: captionSession.cueVideoId,
       requestId: request.requestId
     });
-    captionSession.semanticRequestMeta.delete(key);
-    captionSession.transInflight.delete(key);
+    releaseAiRequestOwner(key);
   }
   const state = typeof aiCommitState === "function" ? aiCommitState(wanted) : null;
   if (state) { aiPrefetchState(state);
@@ -262,8 +240,7 @@ function cancelAiRequestsBeforeRegion(regionIndex) {
       previousRegionIndex: request.regionIndex,
       regionIndex: wanted
     });
-    captionSession.semanticRequestMeta.delete(key);
-    captionSession.transInflight.delete(key);
+    releaseAiRequestOwner(key);
   }
   if (!(captionSession.semanticCommitStateByRegion instanceof Map)) return;
   for (const [index, state] of captionSession.semanticCommitStateByRegion.entries()) {
@@ -293,8 +270,7 @@ function cancelAiStaleSpeculativeRequests(regionIndex, targetGroup) {
       requestStart: request.requestStart,
       requestEnd: request.requestEnd
     });
-    captionSession.semanticRequestMeta.delete(inflightKey);
-    captionSession.transInflight.delete(inflightKey);
+    releaseAiRequestOwner(inflightKey);
     return true;
   };
   for (const [key, request] of Array.from(captionSession.semanticRequestMeta.entries())) {
@@ -431,13 +407,7 @@ function pumpAiSpeculativeRequests(regionIndex, stateValue) {
         state.prefetchResponses.has(start)) continue;
     start = aiSpeculativeStartAfterActive(regionIndex, start);
     if (start <= state.cursor || start > state.limitEnd) continue;
-    const requestLimited = typeof aiRequestLimited === "function" && aiRequestLimited();
-    const itemCount = requestLimited ? aiSteadyRequestItems() : Math.min(
-      aiMaxRequestItems(),
-      Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
-          Number(getVideo() && getVideo().playbackRate) >= 1.75
-        ? AI_SPECULATIVE_REQUEST_ITEMS : aiSteadyRequestItems()
-    );
+    const itemCount = aiSteadyRequestItems();
     const end = Math.min(state.limitEnd, start + Math.max(1, itemCount) - 1);
     if (aiSpeculativeRangeOverlaps(regionIndex, start, end)) continue;
     if (!launchAiSpeculativeRequest(regionIndex, state, start, end)) continue;
@@ -571,7 +541,6 @@ function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
   const batch = captionSession.semanticBatchWindows[batchIndex];
   sendRuntimeMessage({
     type: "translateBatch", maxConcurrency: aiMaxConcurrency(),
-    requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
     commitGuardLocal: typeof aiCommitGuardLocal === "function"
       ? aiCommitGuardLocal(start, requestEnd, state.limitEnd, requestMeta.effectiveGuardItems) : -1,
     debug: !!settings.debugEnabled, requestId,
@@ -589,19 +558,28 @@ function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
   return true;
 }
 // Live commit requests whose range contains `group`, keyed by inflight key.
-function aiCommitRequestsCoveringGroup(group) {
+// Live commit writers the scheduler would send again right after a seek to
+// `group`: the writer whose range covers the target, and every lookahead lane
+// that runs from its region's cursor at or ahead of the target within reach.
+function aiCommitRequestsWantedAfterSeek(group) {
   const kept = new Map();
   const target = Number(group);
   const groupToRegion = captionSession.semanticGroupToCommitRegion;
-  const regionIndex = groupToRegion && Number.isInteger(target) ? groupToRegion[target] : undefined;
-  if (!Number.isInteger(regionIndex)) return kept;
+  const regions = captionSession.semanticCommitRegions;
+  const targetRegion = groupToRegion && Number.isInteger(target) ? groupToRegion[target] : undefined;
+  if (!Number.isInteger(targetRegion) || !regions) return kept;
+  const reach = target + (typeof aiLookaheadItems === "function" ? aiLookaheadItems() : 0);
   for (const [key, request] of captionSession.semanticRequestMeta.entries()) {
-    if (key !== `dsb:${regionIndex}` || !request || request.prefetch ||
-        request.regionIndex !== regionIndex ||
+    if (!request || request.prefetch || key !== `dsb:${request.regionIndex}` ||
         request.reqEpoch !== captionSession.cueEpoch ||
-        !isCaptionSessionCurrent(request.sessionToken) ||
-        !(Number(request.requestStart) <= target && target <= Number(request.requestEnd))) continue;
-    kept.set(key, request);
+        !isCaptionSessionCurrent(request.sessionToken)) continue;
+    const start = Number(request.requestStart);
+    const covers = request.regionIndex === targetRegion && start <= target && target <= Number(request.requestEnd);
+    const state = captionSession.semanticCommitStateByRegion &&
+      captionSession.semanticCommitStateByRegion.get(request.regionIndex);
+    const lookaheadLane = request.regionIndex >= targetRegion && !!state && state.cursor === start &&
+      start >= target && start <= reach;
+    if (covers || lookaheadLane) kept.set(key, request);
   }
   return kept;
 }
@@ -613,8 +591,7 @@ function adoptAiRequestsAfterSeek(kept) {
       sessionToken: captureCaptionSession(),
       reqEpoch: captionSession.cueEpoch
     });
-    captionSession.semanticRequestMeta.set(key, request);
-    captionSession.transInflight.add(key);
+    claimAiRequestOwner(key, request);
     emitCaptionStateTransition("semantic-request", "adopted", {
       requestId: request.requestId,
       reason: "seek-target-covered",
@@ -643,8 +620,7 @@ function cancelAiPrefetchRequests() {
       requestId: request.requestId,
       reason: "prefetch-disabled"
     });
-    captionSession.semanticRequestMeta.delete(inflightKey);
-    captionSession.transInflight.delete(inflightKey);
+    releaseAiRequestOwner(inflightKey);
   }
   for (const state of captionSession.semanticCommitStateByRegion.values()) {
     aiPrefetchState(state);
@@ -700,14 +676,14 @@ function scheduleAiBatchRetry(
   const scheduledFocusGeneration = captionSession.semanticFocusGeneration;
   const scheduledSessionToken = captureCaptionSession();
   if (!localWait) captionSession.semanticRetryCounts.set(key, attempt + 1);
-  captionSession.transInflight.add(inflightKey);
+  const retryHold = holdAiRequestKey(inflightKey);
   emitDebug("batch-retry", {
     start, end, attempt: attempt + 1, delayMs, rateLimited,
     reason: String(reason || "")
   });
   emitCaptionStateTransition("semantic-retry", "scheduled", { start, end, attempt: attempt + 1, delayMs, reason: String(reason || "") });
   setTimeout(() => {
-    captionSession.transInflight.delete(inflightKey);
+    releaseAiRequestHold(retryHold);
     if (!isCaptionSessionCurrent(scheduledSessionToken) ||
         epoch !== captionSession.cueEpoch || videoId !== captionSession.cueVideoId) {
       captionSession.semanticRetryCounts.delete(key);

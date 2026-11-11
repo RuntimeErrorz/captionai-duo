@@ -56,8 +56,11 @@
         const sentenceBoundaryAfter = chunk.sentenceBoundaryAfter === true ||
           endsWithChineseFullStop(chunk.translation);
         const chunkUnitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
+        // A chunk is not a sentence: remember where its sentence starts so the
+        // commit plan never opens a committed block in the middle of it.
+        const sentenceStart = Number(memberIds[0]);
         for (let ordinal = 0; ordinal < ids.length; ordinal++) {
-          const item = { ...members[memberOffset + ordinal], translation, unitId: chunkUnitId };
+          const item = { ...members[memberOffset + ordinal], translation, unitId: chunkUnitId, sentenceStart };
           delete item.sentenceBoundaryAfter;
           if (sentenceBoundaryAfter) item.sentenceBoundaryAfter = true;
           delete item.alignedChunks;

@@ -136,21 +136,23 @@ function focusAiAfterSeek(timeMs) {
   if (!Number.isInteger(batchIndex) || batchIndex < 0 ||
       batchIndex === captionSession.semanticFocusedBatchIndex) return;
   const previousBatchIndex = captionSession.semanticFocusedBatchIndex;
-  // A commit request already covering the new target is exactly the work the
-  // post-seek scheduler would send again; keep it instead of cancelling it.
-  const kept = aiCommitRequestsCoveringGroup(group);
+  // Commit writers the post-seek scheduler would send again unchanged are
+  // kept instead of being cancelled and re-sent.
+  const kept = aiCommitRequestsWantedAfterSeek(group);
   captionSession.semanticFocusedBatchIndex = batchIndex;
   captionSession.semanticFocusGeneration++;
   invalidateCaptionSession("seek-focus");
-  for (const key of Array.from(captionSession.transInflight)) {
-    if (typeof key === "string" && (key.startsWith("dsb:") ||
-        key.startsWith("dsp:") || key.startsWith("dsr:"))) {
-      captionSession.transInflight.delete(key);
-      captionSession.semanticRequestMeta.delete(key);
-    }
-  }
+  revokeAiRequestKeys((key) => typeof key === "string" &&
+    (key.startsWith("dsb:") || key.startsWith("dsp:") || key.startsWith("dsr:")));
   adoptAiRequestsAfterSeek(kept);
   for (const state of captionSession.semanticCommitStateByRegion.values()) {
+    // Demand belongs to the focus that created it. The post-seek scheduler
+    // rebuilds it from the new position; stale targets would otherwise make
+    // the lookahead restart, urgently, the very work this seek cancelled.
+    const idle = Number(state.cursor) - 1;
+    state.targetThrough = Math.min(Number(state.targetThrough), idle);
+    state.urgentTarget = Math.min(Number(state.urgentTarget), idle);
+    if (Number.isInteger(state.lookaheadThrough)) state.lookaheadThrough = Math.min(state.lookaheadThrough, idle);
     if (Array.isArray(state.prefetchQueue)) state.prefetchQueue.length = 0;
     if (state.prefetchQueued && typeof state.prefetchQueued.clear === "function") {
       state.prefetchQueued.clear();
@@ -272,18 +274,12 @@ function cueTick(event) {
       // group can remain active while its request stalls; without re-entering
       // the request state machine here, playback-lag detection only runs at a
       // group boundary and cannot rebuild the stalled urgent writer in time.
-      const acceleratedPlayback = isAcceleratedAiPlayback();
       if (seekJustSettled || playbackRateChanged) {
         armPendingTranslationIndicator(activeGroup, true);
       }
-      if (acceleratedPlayback) {
-        // This path includes the current urgent request and replenishes the
-        // future runway. Existing request ownership prevents duplicates.
-        prefetchFrom(idx);
-      } else {
-        aiRequestBatch(activeGroup, true, true);
-        if (seekJustSettled || playbackRateChanged) prefetchFrom(idx);
-      }
+      // This path includes the current urgent request and replenishes the
+      // future runway. Existing request ownership prevents duplicates.
+      prefetchFrom(idx);
     }
     return;                             // same sentence — no re-render, no jitter
   }
@@ -304,14 +300,13 @@ function cueTick(event) {
     });
   }
   setOriginal(displaySource);
-  // At accelerated playback, warm the current semantic region before the
-  // renderer promotes it to visible work. The old order started the urgent
-  // request first, so the already-live cold prefetch could never be widened.
-  const acceleratedPlayback = isAcceleratedAiPlayback();
-  if (acceleratedPlayback) prefetchFrom(idx);
+  // Warm the current semantic region before the renderer promotes it to
+  // visible work; starting the urgent request first would leave an already
+  // live cold prefetch unable to widen. Simulated, this order beat the
+  // render-first one at every playback speed.
+  prefetchFrom(idx);
   renderTranslationForCue(idx, cue, displaySource,
     captionSession.semanticSeekSettling || eventType === "seeking");
-  if (!acceleratedPlayback) prefetchFrom(idx);
 }
 
 function sourceForDisplayedCue(idx, cue) {
@@ -390,16 +385,9 @@ function prefetchFrom(startIdx) {
     const g0 = at === captionSession.activeCueIdx && captionSession.activeGroupIdx >= 0
       ? captionSession.activeGroupIdx : aiGroupForCueAt(at);
     if (g0 == null || g0 < 0) return;
-    const acceleratedPlayback = isAcceleratedAiPlayback();
-    prefetchAiBatches(g0, acceleratedPlayback, acceleratedPlayback);
+    prefetchAiBatches(g0, true, true);
     return;
   }
-}
-
-function isAcceleratedAiPlayback() {
-  const video = getVideo();
-  const rate = Number(video && video.playbackRate);
-  return Number.isFinite(rate) && rate >= 1.75;
 }
 
 function aiPrefetchBatchCount() {
@@ -407,12 +395,16 @@ function aiPrefetchBatchCount() {
     AI_MAX_PREFETCH_BATCHES,
     Math.max(0, Math.floor(Number(settings.aiPrefetchBatches) || 0))
   );
-  if (!isAcceleratedAiPlayback()) return configured;
+  return Math.min(AI_MAX_PREFETCH_BATCHES, Math.max(configured, aiPlaybackLookaheadFloor()));
+}
+
+// Lookahead the playback speed itself requires: round(rate + 1) batches or
+// lanes (2 at 1x, 3 at 2x, 4 at 3x). One continuous rule replaces the old
+// 1.75x/2.5x tiers and beat them in simulation at every speed.
+function aiPlaybackLookaheadFloor() {
   const video = getVideo();
   const rate = Number(video && video.playbackRate);
-  const accelerated = Number.isFinite(rate) && rate >= 2.5
-    ? AI_HIGH_SPEED_PREFETCH_BATCHES : AI_FAST_PREFETCH_BATCHES;
-  return Math.min(AI_MAX_PREFETCH_BATCHES, Math.max(configured, accelerated));
+  return Math.round((Number.isFinite(rate) && rate > 0 ? rate : 1) + 1);
 }
 
 function prefetchAiBatches(gIdx, includeCurrent, currentUrgent = false) {

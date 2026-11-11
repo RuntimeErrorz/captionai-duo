@@ -222,9 +222,8 @@ function aiPrefetchAtCursor(regionIndex, cursorValue) {
           }
           return true;
         }
-        const owner = Array.from(captionSession.semanticRequestMeta.entries()).find(([, value]) => value === request);
         if (request.requestId) sendRuntimeMessage({ type: "cancelAiTranslationRequest", videoId: captionSession.cueVideoId, requestId: request.requestId });
-        if (owner) { captionSession.semanticRequestMeta.delete(owner[0]); captionSession.transInflight.delete(owner[0]); }
+        releaseAiRequestOwnerOf(request);
         break;
       }
       if (typeof handleAiTranslationProgress !== "function") break;
@@ -251,19 +250,12 @@ function aiPrefetchAtCursor(regionIndex, cursorValue) {
       });
     if (bufferedAfterConsume.length &&
         !bufferedAfterConsume.some((item) => Number(item && item.id) === state.cursor)) {
-      let inflightKey = "";
-      for (const [key, value] of captionSession.semanticRequestMeta.entries()) {
-        if (value === request) { inflightKey = key; break; }
-      }
       if (request.requestId) sendRuntimeMessage({
         type: "cancelAiTranslationRequest",
         videoId: captionSession.cueVideoId,
         requestId: request.requestId
       });
-      if (inflightKey) {
-        captionSession.semanticRequestMeta.delete(inflightKey);
-        captionSession.transInflight.delete(inflightKey);
-      }
+      releaseAiRequestOwnerOf(request);
       emitCaptionStateTransition("semantic-request", "cancelled", {
         requestId: request.requestId,
         reason: "buffered-prefix-gap",
@@ -358,6 +350,20 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
       limitEnd = id - 1;
       break;
     }
+  }
+  // A live writer that already starts at the reseed position and reaches the
+  // target is exactly the request a reseed would send: keep it.
+  const liveWriter = captionSession.semanticRequestMeta.get(`dsb:${regionIndex}`);
+  if (liveWriter && !liveWriter.prefetch && Number(liveWriter.requestStart) === requestStart &&
+      Number(liveWriter.requestEnd) >= effectiveTarget && state.cursor === requestStart &&
+      liveWriter.reqEpoch === captionSession.cueEpoch && isCaptionSessionCurrent(liveWriter.sessionToken)) {
+    if (!liveWriter.reseedKept) {
+      liveWriter.reseedKept = true;
+      emitDebug("semantic-reseed-kept-live-writer", {
+        regionIndex, targetGroup: effectiveTarget, requestId: liveWriter.requestId
+      });
+    }
+    return state;
   }
   // Replace only the stalled writer; preserve future ranges that still reach the new cursor.
   cancelAiRegionRequests(regionIndex, requestStart);
@@ -608,39 +614,26 @@ function handleAiTranslationProgress(msg) {
     previousCursor,
     nextCursor
   });
-  if (aiStreamHandoffReady(
-    request, state, aiMaxRequestItems(), aiNormalMaxRequestItems()
-  )) handoffAiStream(request.regionIndex, request, state);
   repaintActiveAiTranslation();
   return true;
 }
 
+// Semantic runway kept past the visible target, the same at every speed:
+// simulated, the widest runway beat speed tiers with fewer requests.
 function aiUrgentTargetTailItems() {
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  if (Number.isFinite(rate) && rate >= 2.5) {
-    return Math.min(aiMaxRequestItems(), Math.max(
-      AI_URGENT_TARGET_TAIL_ITEMS, AI_HIGH_SPEED_TARGET_TAIL_ITEMS
-    ));
-  }
-  if (Number.isFinite(rate) && rate >= 1.75) {
-    return Math.min(AI_MAX_REQUEST_ITEMS, Math.max(
-      AI_URGENT_TARGET_TAIL_ITEMS, AI_FAST_TARGET_TAIL_ITEMS
-    ));
-  }
-  return AI_URGENT_TARGET_TAIL_ITEMS;
+  return Math.min(aiMaxRequestItems(), AI_URGENT_TARGET_TAIL_ITEMS);
 }
 
-function aiKeepAcceleratedUrgentLane(requestWasUrgent, state) {
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const rate = Number(video && video.playbackRate);
-  return !!requestWasUrgent && Number.isFinite(rate) && rate >= 1.75 && !!state &&
+// A settled urgent request keeps the visible lane urgent while its target is
+// still ahead of the cursor, at every playback speed.
+function aiKeepUrgentLane(requestWasUrgent, state) {
+  return !!requestWasUrgent && !!state &&
     state.cursor <= state.targetThrough && state.cursor <= state.limitEnd;
 }
 
-function aiAcceleratedPrefetchItems(targetTailItems) {
+// Lookahead windows reach the whole runway past their start.
+function aiPrefetchWindowItems(targetTailItems) {
   const tailItems = Math.max(0, Math.floor(Number(targetTailItems) || 0));
-  if (tailItems <= AI_URGENT_TARGET_TAIL_ITEMS) return 0;
   return Math.min(
     aiMaxRequestItems(),
     tailItems + AI_COMMIT_GUARD_ITEMS + 64
@@ -664,20 +657,17 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   if (aiPrefetchAtCursor(regionIndex, requestStart)) return;
   const commitFloor = state.commitFloor;
   const limitEnd = state.limitEnd;
-  const video = typeof getVideo === "function" ? getVideo() : null;
-  const playbackRate = Number(video && video.playbackRate);
   const targetTailItems = aiUrgentTargetTailItems();
   const maxRequestItems = aiMaxRequestItems();
   const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
     ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
   const plan = YTDS_SHARED.semanticCommitWindowPlan({
     state, urgent, requestStart, limitEnd,
-    accelerated: Number.isFinite(playbackRate) && playbackRate >= 1.75,
     futureStart: aiNextFuturePrefetchStart(regionIndex, state, requestStart),
     guardItems, minRunwayItems: AI_MIN_COMMIT_RUNWAY_ITEMS, maxRequestItems, targetTailItems,
-    acceleratedUrgentItems: aiAcceleratedUrgentRequestItems(),
+    urgentWindowItems: aiAcceleratedUrgentRequestItems(),
     urgentRequestItems: aiUrgentRequestItems(),
-    acceleratedPrefetchItems: aiAcceleratedPrefetchItems(targetTailItems)
+    acceleratedPrefetchItems: aiPrefetchWindowItems(targetTailItems)
   });
   const requestUrgent = plan.requestUrgent;
   const inflightKey = `dsb:${regionIndex}`;
@@ -741,7 +731,6 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   sendRuntimeMessage({
     type: "translateBatch",
     maxConcurrency: aiMaxConcurrency(),
-    requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
     commitGuardLocal: typeof aiCommitGuardLocal === "function"
       ? (spanRegions.length
         ? aiSpanCommitGuardLocal(requestStart, spanRegions, effectiveGuardItems)
@@ -788,6 +777,11 @@ function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, reques
   const region = regions && regionIndex != null ? regions[regionIndex] : null;
   let state = semanticCommitState(regionIndex);
   if (!region || !state) return;
+  // Urgency belongs to the visible target. Once it is committed there is no
+  // urgent work here; lookahead owns the runway. Otherwise a region whose
+  // cursor lags far behind the target would be pumped urgently from there.
+  if (urgent && captionSession.transCache.has(groupKey(gIdx)) &&
+      !(requestOptions && requestOptions.bypassCache)) return;
   if (urgent) {
     cancelAiRequestsBeforeRegion(regionIndex);
     cancelAiStaleSpeculativeRequests(regionIndex, gIdx);

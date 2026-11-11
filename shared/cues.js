@@ -371,7 +371,12 @@
       if (!started) {
         // Units wholly inside the left read-only guard, plus the one touching
         // its boundary, provide context but can never become committed output.
-        if (last < commitFloor || first < commitFloor) continue;
+        // A recovered alignment chunk touches the guard when its sentence does.
+        const sentenceStart = unit.items.reduce((lowest, item) => {
+          const value = Number(item && item.sentenceStart);
+          return Number.isInteger(value) ? Math.min(lowest, value) : lowest;
+        }, first);
+        if (last < commitFloor || sentenceStart < commitFloor) continue;
         if (commitFloor === cursor && first !== cursor) break;
         expected = first;
         started = true;
@@ -380,7 +385,11 @@
       if (last >= guardStart) break;
       unit.items.sort((a, b) => Number(a.id) - Number(b.id));
       committedUnits.push({ unitId: unit.unitId, members: unit.members.slice() });
-      committedTranslations.push(...unit.items);
+      for (const item of unit.items) {
+        const committed = { ...item };
+        delete committed.sentenceStart;
+        committedTranslations.push(committed);
+      }
       expected = last + 1;
     }
     return {
@@ -483,10 +492,10 @@
   // numbers. The content scheduler, the simulator and the tests all run this
   // one function, so a tuning change is measured exactly as it ships.
   //   state: { windowItems, recoveryWindowItems, urgentTarget, targetThrough }
-  //   urgent, accelerated (playback >= 1.75x), requestStart, limitEnd,
+  //   urgent, requestStart, limitEnd,
   //   futureStart (start of a live future request, or -1), guardItems,
   //   minRunwayItems, maxRequestItems, targetTailItems,
-  //   acceleratedUrgentItems, urgentRequestItems, acceleratedPrefetchItems
+  //   urgentWindowItems, urgentRequestItems (recovery), acceleratedPrefetchItems
   function semanticCommitWindowPlan(input) {
     const value = input && typeof input === "object" ? input : {};
     const state = value.state && typeof value.state === "object" ? value.state : {};
@@ -503,21 +512,22 @@
     const windowItems = Math.max(1, count(state.windowItems, 1));
     const recoveryWindow = !!state.recoveryWindowItems;
     const requestUrgent = !!value.urgent || count(state.urgentTarget, -1) >= requestStart;
-    const acceleratedUrgent = !!value.accelerated && requestUrgent && !recoveryWindow;
-    const acceleratedUrgentItems = Math.max(0, count(value.acceleratedUrgentItems, 0));
-    // Accelerated urgent work keeps no target tail: its window already
-    // reaches well past the visible subtitle.
-    const urgentTailItems = acceleratedUrgent ? 0 : targetTailItems;
+    // Visible work uses its own window and keeps no target tail: the window
+    // already reaches well past the subtitle. Only a recovery window, sized
+    // by the failure it recovers from, plans its tail around the target.
+    const windowedUrgent = requestUrgent && !recoveryWindow;
+    const urgentWindowItems = Math.max(0, count(value.urgentWindowItems, 0));
+    const urgentTailItems = windowedUrgent ? 0 : targetTailItems;
     const acceleratedPrefetchItems = requestUrgent
       ? 0 : Math.max(0, count(value.acceleratedPrefetchItems, 0));
     const planningWindowItems = Math.max(
-      acceleratedUrgent ? Math.max(windowItems, acceleratedUrgentItems) : windowItems,
+      windowedUrgent ? Math.max(windowItems, urgentWindowItems) : windowItems,
       acceleratedPrefetchItems
     );
     const planningState = planningWindowItems > windowItems
       ? { ...state, windowItems: planningWindowItems } : state;
-    const initialUrgentItems = acceleratedUrgent
-      ? acceleratedUrgentItems : count(value.urgentRequestItems, maxRequestItems);
+    const initialUrgentItems = windowedUrgent
+      ? urgentWindowItems : count(value.urgentRequestItems, maxRequestItems);
     const requestPlan = semanticCommitRequestPlan(
       planningState, requestStart, guardItems, maxRequestItems, requestUrgent,
       initialUrgentItems, urgentTailItems

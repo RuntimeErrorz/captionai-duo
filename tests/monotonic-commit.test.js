@@ -418,3 +418,35 @@ test("bridge hand-off commits the gap and eliminates adaptive-no-progress deadlo
   assert.deepEqual(Array.from(plan.units[0].members), [7341, 7342, 7343, 7344, 7345]);
   assert.deepEqual(Array.from(plan.units[1].members), Array.from({ length: 15 }, (_v, i) => 7346 + i));
 });
+
+test("a recovered chunk of a sentence that touches the left guard never opens a committed block", () => {
+  // Sentence 188-201 starts inside the read-only guard (floor 191). Chunk
+  // recovery splits it into 188-194 and 195-201; committing 195-201 alone
+  // would leave 188-194 a fragment no later window can complete.
+  const sentence = unit(188, 201, "整句");
+  sentence[0].alignedChunks = [
+    { ids: Array.from({ length: 7 }, (_v, i) => String(188 + i)), translation: "前半句" },
+    { ids: Array.from({ length: 7 }, (_v, i) => String(195 + i)), translation: "后半句" }
+  ];
+  const recovered = shared.semanticUnitsFromAlignedChunks([
+    ...unit(175, 187, "保护区内"), ...sentence, ...unit(202, 210, "下一句")
+  ]);
+  assert.ok(recovered.some((item) => item.unitId === "semantic-195-201"), "fixture splits the sentence");
+
+  const plan = shared.monotonicSemanticCommitPlan(recovered, 175, 251, 251, 16, 191, 0);
+
+  assert.equal(plan.units[0].members[0], 202);
+  assert.equal(plan.translations.some((item) => Number(item.id) < 202), false);
+  assert.equal(plan.translations.some((item) => "sentenceStart" in item), false);
+});
+
+test("chunk recovery still commits a sentence that starts at the proven floor", () => {
+  const sentence = unit(191, 204, "整句");
+  sentence[0].alignedChunks = [
+    { ids: Array.from({ length: 7 }, (_v, i) => String(191 + i)), translation: "前半句" },
+    { ids: Array.from({ length: 7 }, (_v, i) => String(198 + i)), translation: "后半句" }
+  ];
+  const recovered = shared.semanticUnitsFromAlignedChunks([...unit(175, 190, "保护区内"), ...sentence]);
+  const plan = shared.monotonicSemanticCommitPlan(recovered, 175, 260, 260, 16, 191, 0);
+  assert.equal(plan.units[0].unitId, "semantic-191-197");
+});

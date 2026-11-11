@@ -10,9 +10,9 @@ const shared = loadShared();
 function plan(overrides = {}) {
   const { state: stateOverrides, ...rest } = overrides;
   return shared.semanticCommitWindowPlan({
-    urgent: false, accelerated: false, requestStart: 0, limitEnd: 1000, futureStart: -1,
+    urgent: false, requestStart: 0, limitEnd: 1000, futureStart: -1,
     guardItems: 16, minRunwayItems: 32, maxRequestItems: 320, targetTailItems: 48,
-    acceleratedUrgentItems: 64, urgentRequestItems: 96, acceleratedPrefetchItems: 0,
+    urgentWindowItems: 64, urgentRequestItems: 96, acceleratedPrefetchItems: 0,
     ...rest,
     state: { windowItems: 320, recoveryWindowItems: false, urgentTarget: -1, targetThrough: -1,
       ...(stateOverrides || {}) }
@@ -26,15 +26,15 @@ test("a steady lookahead request uses the configured window", () => {
   assert.equal(result.bridgeItems, 0);
 });
 
-test("an urgent request is bounded around its visible target", () => {
-  // target 10 + guard 16 + tail 48 = 75 items, raised to the 96-item urgent window.
+test("an urgent request uses its window and always covers its visible target", () => {
   const result = plan({ urgent: true, state: { urgentTarget: 10 } });
   assert.equal(result.requestUrgent, true);
   assert.equal(result.targetThrough, 10);
-  assert.equal(result.requestEnd, 95);
+  assert.equal(result.requestEnd, 63, "the 64-item urgent window");
 
+  // A far target still gets its guard; no extra tail at any speed.
   const far = plan({ urgent: true, state: { urgentTarget: 200 } });
-  assert.equal(far.requestEnd, 200 + 16 + 48);
+  assert.equal(far.requestEnd, 200 + 16);
 });
 
 test("a pending urgent target makes the request urgent without the flag", () => {
@@ -43,7 +43,7 @@ test("a pending urgent target makes the request urgent without the flag", () => 
 });
 
 test("accelerated urgent playback drops the target tail and uses its own window", () => {
-  const result = plan({ urgent: true, accelerated: true,
+  const result = plan({ urgent: true,
     state: { urgentTarget: 10, windowItems: 48 } });
   assert.equal(result.targetAwareItems, 64);
   assert.equal(result.requestEnd, 63);
@@ -57,7 +57,7 @@ test("a guard-recovery window may exceed the urgent window", () => {
 test("accelerated prefetch widens only non-urgent work", () => {
   assert.equal(plan({ state: { windowItems: 64 }, acceleratedPrefetchItems: 300 }).requestEnd, 299);
   assert.equal(plan({ urgent: true, state: { windowItems: 64, urgentTarget: 0 },
-    acceleratedPrefetchItems: 300 }).requestEnd, 64); // target 0 + guard 16 + tail 48
+    acceleratedPrefetchItems: 300 }).requestEnd, 63); // the urgent window, not the prefetch width
 });
 
 test("a window that reaches a live future request is cut to bridge it", () => {

@@ -110,11 +110,6 @@ test("the profile's concurrency setting caps speculative requests per tab", () =
     urgentRelease();
     for (const release of releases) release();
   }
-
-  // A request-limited (low RPM) profile runs one request at a time.
-  const limitedRelease = context.acquireAiSlot(sender, false, 12, true);
-  assert.throws(() => context.acquireAiSlot(sender, false, 12, true), /local concurrency guard busy/);
-  limitedRelease();
 });
 
 test("all segmentation lanes use compact alignment ranges", async () => {

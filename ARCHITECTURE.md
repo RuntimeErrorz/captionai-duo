@@ -19,12 +19,31 @@ in `manifest.json` in order, and the service worker loads its modules through
 - `content/` contains the isolated-world subtitle runtime: UI state, the explicit
   `captionSession` owner for video/track/playback/request/display/fallback state,
   its opaque identity and reset boundary, versioned diagnostics, semantic
-  request/retry ownership (`semantic-requests.js`), batch-result commit and
+  request/retry ownership (`semantic-requests.js`: the only writer of
+  request owners and retry holds), batch-result commit and
   retry (`semantic-results.js`), commit-lane lookahead and request-limited
   region spans (`semantic-lookahead.js`), semantic translation, the per-video
   translation ledger (`translation-ledger.js`), export, bridge, and lifecycle.
 
 ## Translation pipeline invariants
+
+- **Request ownership.** `semanticRequestMeta` holds live request owners;
+  `transInflight` is every owner key plus retry holds. Only the ownership
+  functions at the top of `content/semantic-requests.js` change them, and a
+  retry hold is a token only its own timer can release.
+- **Seeks keep wanted work.** A seek keeps the commit writer covering the new
+  target and every lookahead lane that runs from its region's cursor within
+  reach, and drops all demand left by the previous focus.
+- **One scheduling policy.** No provider, RPM threshold or playback-speed
+  tier selects behavior. Every lane uses the request-items setting (cap
+  320); lookahead depth and speculative lanes are round(rate + 1); the
+  semantic runway is 224 items at every speed; seek backtrack is 64 / rate;
+  a visible writer is rebuilt 48 items behind after 14 s (4 s after
+  progress); connect deadlines start at 20 s and follow measured first
+  bytes. Each value won a simulated matrix against the tiers it replaced
+  (docs/VERIFIED_DEVELOPMENT.md).
+- **Blocks start at sentences.** A recovered alignment chunk carries its
+  sentence start, so a committed block never opens mid-sentence.
 
 - **Output protocol.** Every provider gets the same prompt: one JSONL line
   per sentence, each chunk `[start,end,"translation"]`. The parser also
@@ -83,7 +102,9 @@ Run `npm run check`. It verifies:
    lists;
 4. no runtime file exceeds 900 lines;
 5. the shared API still assembles and remains frozen;
-6. the complete behavioral regression suite passes.
+6. the complete behavioral regression suite passes, including the
+   deterministic simulation of the real runtime (`tests/sim/`, see
+   `docs/VERIFIED_DEVELOPMENT.md`).
 7. repository agent instructions, CI, bug/PR evidence templates, and the verified
    development guide remain present and wired to the same check command.
 

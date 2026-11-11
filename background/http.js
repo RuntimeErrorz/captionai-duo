@@ -16,7 +16,11 @@ function aiProviderRequestIntervalMs(config) {
 const AI_FIRST_BYTE_HISTORY = new Map();
 const AI_FIRST_BYTE_HISTORY_SIZE = 8;
 const AI_MAX_CONNECT_TIMEOUT_MS = 30000;
-const AI_REQUEST_LIMITED_CONNECT_TIMEOUT_MS = 20000;
+// Until a provider's latency is known, wait as for a slow one: a premature
+// connect timeout wastes a request (simulated: a 20 s cold deadline, tightened
+// after four first-byte samples, beat both fixed 8/12 s and fixed 20 s).
+const AI_COLD_CONNECT_TIMEOUT_MS = 20000;
+const AI_FIRST_BYTE_SAMPLES_FOR_DEADLINE = 4;
 
 function aiFirstByteHistoryKey(config) {
   return `${config && config.endpoint || ""}\n${config && config.model || ""}`;
@@ -33,12 +37,10 @@ function recordAiFirstByte(config, firstByteMs) {
 }
 
 function aiConnectTimeoutMs(config, urgent) {
-  const base = YTDS_SHARED.aiRequestLimited(config && config.rateLimitRpm)
-    ? AI_REQUEST_LIMITED_CONNECT_TIMEOUT_MS
-    : urgent ? AI_CONNECT_TIMEOUT_URGENT_MS : AI_CONNECT_TIMEOUT_PREFETCH_MS;
   const history = AI_FIRST_BYTE_HISTORY.get(aiFirstByteHistoryKey(config)) || [];
-  const observed = history.length ? Math.ceil(Math.max(...history) * 1.5) : 0;
-  return Math.min(AI_MAX_CONNECT_TIMEOUT_MS, Math.max(base, observed));
+  if (history.length < AI_FIRST_BYTE_SAMPLES_FOR_DEADLINE) return AI_COLD_CONNECT_TIMEOUT_MS;
+  const floor = urgent ? AI_CONNECT_TIMEOUT_URGENT_MS : AI_CONNECT_TIMEOUT_PREFETCH_MS;
+  return Math.min(AI_MAX_CONNECT_TIMEOUT_MS, Math.max(floor, Math.ceil(Math.max(...history) * 1.5)));
 }
 
 function aiRequestCancelledError() {

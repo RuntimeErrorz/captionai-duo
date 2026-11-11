@@ -27,6 +27,7 @@ function createCaptionSessionState(initialVideoId) {
     semanticReflowFrame: null,
     displayMeasureCanvas: null,
     transInflight: new Set(),
+    semanticRequestHolds: new Map(),
     semanticRetryCounts: new Map(),
     semanticExhaustedRegions: new Map(),
     semanticVisibleErrors: new Map(),
@@ -157,6 +158,7 @@ function resetCaptionSessionState(reason, options) {
   captionSession.semanticDisplayCache.clear();
   captionSession.semanticRequestMeta.clear();
   captionSession.transInflight.clear();
+  if (captionSession.semanticRequestHolds) captionSession.semanticRequestHolds.clear();
   captionSession.semanticRetryCounts.clear();
   captionSession.semanticExhaustedRegions.clear();
   captionSession.semanticVisibleErrors.clear();

@@ -19,7 +19,6 @@ const AI_CONNECT_TIMEOUT_URGENT_MS = 8000;
 const AI_CONNECT_TIMEOUT_PREFETCH_MS = 12000;
 const AI_STREAM_COMPLETION_GRACE_MS = 750;
 const AI_MAX_ATTEMPTS = 3;
-const REQUEST_LIMITED_MAX_ACTIVE_REQUESTS_PER_TAB = 1;
 const MAX_TRANSLATE_CHARS = 4000;
 // Accelerated playback needs a longer semantic runway than ordinary playback.
 // Keep the normal planner cap at 160, while accepting the larger urgent window
@@ -495,12 +494,11 @@ function cleanBatchItems(value) {
   return out;
 }
 
-function acquireAiSlot(sender, urgent, maxConcurrency, requestLimited) {
+function acquireAiSlot(sender, urgent, maxConcurrency) {
   const key = sender && sender.tab && Number.isInteger(sender.tab.id)
     ? `tab:${sender.tab.id}` : "extension";
   const state = aiActiveByTab.get(key) || { active: 0 };
-  const maxActive = requestLimited ? REQUEST_LIMITED_MAX_ACTIVE_REQUESTS_PER_TAB
-    : YTDS_SHARED.normalizeAiMaxConcurrency(maxConcurrency, 4);
+  const maxActive = YTDS_SHARED.normalizeAiMaxConcurrency(maxConcurrency, 4);
   const status = YTDS_SHARED.aiConcurrencyStatus(
     state.active, maxActive, !!urgent
   );

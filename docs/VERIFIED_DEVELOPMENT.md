@@ -52,6 +52,50 @@ git archive <old-commit> | tar -x -C /tmp/old
 node scripts/simulate-scheduling.js /tmp/old deepseek 2 short
 ```
 
+## Deterministic simulation
+
+`tests/sim/` runs the real background worker modules and the real content
+runtime in separate vm contexts on one virtual clock, joined by an
+asynchronous, JSON-serialized Chrome transport. A fake provider reads the real
+prompt's `CURRENT_CUES`, streams the documented JSONL protocol over SSE in
+arbitrary byte chunks, and injects 429/503, connect hangs, mid-stream stalls,
+truncated, malformed and duplicated lines. A seeded user plays at 1-3x, seeks,
+scrubs, pauses, reloads and changes settings. After every 50 ms step the
+checker enforces:
+
+- committed translations are immutable and are exactly the chunks of the true
+  sentence; every committed block starts at a true sentence start;
+- a painted translation is one contiguous span of the active group's region
+  that reaches its sentence (no stale translation at a new position);
+- busy keys are exactly live request owners plus retry holds;
+- no range is re-sent within 30 ms of being cancelled, no request hot loop;
+- the visible group is never left untranslated with nothing working on it;
+- after a 180 s drain nothing is in flight, and the API key never appears
+  outside `aiApiKeys` (transport, storage, diagnostics).
+
+`npm run check` runs 30 seeds plus determinism and settings scenarios. For
+broader search and for metrics (stall time, requests, 429s, items sent):
+
+```sh
+npm run sim:fuzz -- --seeds 300 --from 20000
+npm run sim:fuzz -- --seeds 60 --from 9000 --profile limited
+npm run sim:fuzz -- --seed 20035
+```
+
+Experiment flags fix one dimension: `--rpm N` (provider and setting),
+`--rate R` (every play action), `--ttfb A-B` (first-byte range), and
+`--profile fast|limited|slow|flaky`. A scheduling change is accepted only if
+it is no worse across a matrix of RPM 0-60, fast/medium/slow/flaky providers
+and 1-3x playback, on two disjoint fixed seed sets, for stall seconds,
+requests and items sent. This is how the provider and speed tiers were
+replaced by one policy (see ARCHITECTURE.md); a threshold that survives must
+show a measured loss when removed.
+
+A single `--seed` replays the identical event sequence with its trace. When a
+scheduling change is proposed, compare the per-profile totals on fixed seeds
+before and after; a failing seed is a reproducible fixture, but add a reduced
+unit test for the invariant it exposed.
+
 ## Manual Chrome smoke checks
 
 Perform the relevant checks whenever behavior crosses the browser boundary:

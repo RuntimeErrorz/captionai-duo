@@ -58,6 +58,9 @@ function advanceAiLookahead(groupIndex) {
     if (captionSession.semanticExhaustedRegions.has(regionIndex)) continue;
     const state = semanticCommitState(regionIndex);
     if (!state) continue;
+    // Lookahead runs ahead of playback only. A lane whose whole reachable
+    // range lies behind the playhead (the user jumped past it) is backfill.
+    if (state.limitEnd < gIdx) continue;
     const through = Math.min(state.limitEnd, lookaheadEnd);
     if (!Number.isInteger(state.lookaheadThrough) || state.lookaheadThrough < through) {
       state.lookaheadThrough = through;

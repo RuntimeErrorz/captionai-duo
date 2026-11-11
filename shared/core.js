@@ -30,7 +30,6 @@
   ]);
 
   const AI_MAX_RATE_LIMIT_RPM = 600;
-  const AI_REQUEST_LIMITED_MAX_RPM = 30;
 
   const DEFAULTS = Object.freeze({
     enabled: true,
@@ -40,7 +39,7 @@
     aiExtraBodyRevision: 0,
     aiContextPast: 1,
     aiContextFuture: 1,
-    aiPrefetchBatches: 1,
+    aiPrefetchBatches: 5,
     aiRequestItems: 320,
     aiRateLimitRpm: 0,
     aiMaxConcurrency: 4,
@@ -491,13 +490,6 @@
     return Math.max(1, Math.min(AI_MAX_CONCURRENCY, Math.round(chosen)));
   }
 
-  // A provider limited to a few requests per minute is request-bound, not
-  // token-bound: schedule few wide requests, one at a time, with one lane.
-  function aiRequestLimited(rpmValue) {
-    const rpm = normalizeAiRateLimitRpm(rpmValue, 0);
-    return rpm > 0 && rpm <= AI_REQUEST_LIMITED_MAX_RPM;
-  }
-
   // Minimum spacing between request starts, with a 5% safety margin.
   function aiMinRequestIntervalMs(rpmValue) {
     const rpm = normalizeAiRateLimitRpm(rpmValue, 0);
@@ -594,10 +586,8 @@
   }
 
   Object.assign(internal, {
-    AI_REQUEST_LIMITED_MAX_RPM,
     normalizeAiRateLimitRpm,
     normalizeAiMaxConcurrency,
-    aiRequestLimited,
     aiMinRequestIntervalMs,
     aiHostPermissionPattern,
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, AI_PROMPT_CACHE_VERSION, DEFAULTS, FONT_STACKS,

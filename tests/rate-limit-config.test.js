@@ -51,48 +51,43 @@ function loadBackground(syncSeed = {}, localSeed = {}) {
   return { context, sync, local };
 }
 
-test("connect deadlines follow the measured time to first byte", () => {
+test("connect deadlines follow the measured time to first byte, not the RPM", () => {
   const { context } = loadBackground();
   const timeout = vm.runInContext("aiConnectTimeoutMs", context);
   const record = vm.runInContext("recordAiFirstByte", context);
   const fast = { endpoint: "https://api.deepseek.com/chat/completions", model: "a", rateLimitRpm: 0 };
   const slow = { endpoint: `${GEMINI}/chat/completions`, model: "g", rateLimitRpm: 15 };
 
-  assert.equal(timeout(fast, true), 8000);
+  // Until four first bytes are known, every provider gets the wide deadline.
+  assert.equal(timeout(fast, true), 20000);
+  assert.equal(timeout(slow, true), 20000);
+  for (const firstByteMs of [700, 900, 1100]) record(fast, firstByteMs);
+  assert.equal(timeout(fast, true), 20000, "three samples are not enough");
+  record(fast, 1000);
+  assert.equal(timeout(fast, true), 8000, "a fast provider tightens to the urgent floor");
   assert.equal(timeout(fast, false), 12000);
-  assert.equal(timeout(slow, true), 20000, "a request-limited profile starts with a wide deadline");
 
-  for (const firstByteMs of [7723, 8545, 7550]) record(slow, firstByteMs);
-  assert.equal(timeout(slow, true), 20000, "1.5 x 8.5 s stays inside the limited base");
-  record(slow, 16000);
+  for (const firstByteMs of [7723, 8545, 7550, 16000]) record(slow, firstByteMs);
   assert.equal(timeout(slow, true), 24000, "a slower provider widens its own deadline");
-  for (const firstByteMs of [9000, 9500]) record(fast, firstByteMs);
-  assert.equal(timeout(fast, true), Math.ceil(9500 * 1.5),
-    "an 8 s urgent deadline grows past a measured 9.5 s first byte");
   record(fast, 25000);
   assert.equal(timeout(fast, true), 30000, "the adaptive deadline is capped");
 });
 
-test("the RPM setting, not the provider, selects request-limited scheduling", () => {
+test("one request policy for every RPM and provider", () => {
   const load = (settings) => {
     const context = { YTDS_SHARED: loadShared(), settings, getVideo: () => ({ playbackRate: 1 }) };
     vm.createContext(context);
     vm.runInContext(read("content/state-ui.js").split("\n").filter((line) =>
-      /^const (AI_|SEMANTIC_|DEEPSEEK_|COMPATIBLE_)\w+ = [^;]*;/.test(line)).join("\n"), context);
+      /^const (AI_|SEMANTIC_)\w+ = [^;]*;/.test(line)).join("\n"), context);
     vm.runInContext(read("content/semantic-policy.js"), context);
     return (expr) => vm.runInContext(expr, context);
   };
-  const limitedCompatible = load({
-    aiBaseUrl: "https://gateway.example/v1", aiModel: "m", aiRateLimitRpm: 10, aiRequestItems: 256
-  });
-  assert.equal(limitedCompatible("aiRequestLimited()"), true);
-  assert.equal(limitedCompatible("aiMaxSpeculativeRequests()"), 1);
-  assert.equal(limitedCompatible("aiUrgentRequestItems()"), 256);
-
-  const unlimitedGemini = load({
-    aiBaseUrl: GEMINI, aiModel: "gemini-3.5-flash-lite-preview", aiRateLimitRpm: 0, aiRequestItems: 128
-  });
-  assert.equal(unlimitedGemini("aiRequestLimited()"), false);
-  assert.equal(unlimitedGemini("aiSteadyRequestItems()"), 128,
-    "the request-items setting applies to every provider");
+  const lanes = ["aiInitialRequestItems()", "aiUrgentRequestItems()", "aiAcceleratedUrgentRequestItems()",
+    "aiSteadyRequestItems()", "aiMaxRequestItems()", "aiMaxSpeculativeRequests()"];
+  const limited = load({ aiBaseUrl: "https://gateway.example/v1", aiModel: "m", aiRateLimitRpm: 10, aiRequestItems: 256 });
+  const unlimited = load({ aiBaseUrl: GEMINI, aiModel: "gemini-3.5-flash-lite-preview", aiRateLimitRpm: 0, aiRequestItems: 256 });
+  for (const lane of lanes) assert.equal(limited(lane), unlimited(lane), lane);
+  assert.equal(limited("aiUrgentRequestItems()"), 256, "every lane uses the request-items setting");
+  assert.equal(load({})("aiSteadyRequestItems()"), loadShared().DEFAULTS.aiRequestItems);
+  assert.equal(typeof loadShared().aiRequestLimited, "undefined");
 });

@@ -22,7 +22,7 @@ function continueAiLookahead(fromGroup) {
 
 function queueAiCommitPump(ctx) {
   queueMicrotask(() => pumpAiCommitRegion(
-    ctx.regionIndex, aiKeepAcceleratedUrgentLane(ctx.urgent, ctx.state)
+    ctx.regionIndex, aiKeepUrgentLane(ctx.urgent, ctx.state)
   ));
 }
 
@@ -36,7 +36,7 @@ function handleAiBatchCancelled(ctx) {
   else { clearPendingTimer(); repaintActiveAiTranslation(); }
   if (aiUrgentCommitPending(state) && (!request.prefetch || state.cursor === requestStart)) {
     queueMicrotask(() => pumpAiCommitRegion(regionIndex,
-      request.prefetch ? true : aiKeepAcceleratedUrgentLane(ctx.urgent, state)));
+      request.prefetch ? true : aiKeepUrgentLane(ctx.urgent, state)));
   }
 }
 
@@ -207,9 +207,8 @@ function handleAiBatchAccepted(ctx, resp) {
     repaintActiveAiTranslation();
     return;
   }
-  const requestLimited = typeof aiRequestLimited === "function" && aiRequestLimited();
-  const urgentPending = aiUrgentCommitPending(state);
-  if (!requestLimited || !urgentPending) pumpAiSpeculativeRequests(regionIndex, state);
+  // The visible commit lane goes first; speculative lanes resume after it.
+  if (!aiUrgentCommitPending(state)) pumpAiSpeculativeRequests(regionIndex, state);
   repaintActiveAiTranslation();
   if (aiCommitPending(state)) queueAiCommitPump(ctx);
   else continueAiLookahead(state.cursor);

@@ -88,32 +88,17 @@ const MAX_TRACK_TIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SEMANTIC_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
 const AI_CORE_ITEMS = SEMANTIC_CORE_ITEMS;
-const AI_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
-const AI_REQUEST_ITEMS = 80; // normal monotonic request window
-const AI_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
-// Visible window at >=1.75x for every provider. Simulated 64-160: 128 had the
-// fewest stalls and requests at 2x and 3x (160 degraded at 3x with seeks).
-const ACCELERATED_URGENT_REQUEST_ITEMS = 128;
-// Request-limited profiles (low RPM setting) trade request count for width.
-const AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS = 320;
-const AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS = 1;
-const AI_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
-const AI_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
-const AI_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x
+const AI_MAX_REQUEST_ITEMS = 320; // every lane's cap; the window grows toward it
 const AI_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
 const SEMANTIC_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
 const AI_COMMIT_GUARD_ITEMS = SEMANTIC_COMMIT_GUARD_ITEMS;
 const SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
 const AI_MIN_COMMIT_RUNWAY_ITEMS = SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS;
-const AI_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
-const AI_FAST_TARGET_TAIL_ITEMS = 192; // extra runway at >=1.75x playback
-const AI_HIGH_SPEED_TARGET_TAIL_ITEMS = 224; // extra runway at >=2.5x playback
+const AI_URGENT_TARGET_TAIL_ITEMS = 224; // semantic runway after the visible target, at every speed
 const AI_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
 const AI_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
 const AI_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
 const AI_MAX_PREFETCH_BATCHES = 12;
-const AI_FAST_PREFETCH_BATCHES = 3; // keep a bounded runway at >=1.75x
-const AI_HIGH_SPEED_PREFETCH_BATCHES = 4; // keep a bounded runway at >=2.5x
 const AI_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
 const SEMANTIC_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
 const AI_SOFT_PAUSE_MS = SEMANTIC_SOFT_PAUSE_MS;
@@ -144,7 +129,9 @@ function stopForInvalidatedExtensionContext() {
   stopCueLoop();
   stopCueRecovery();
   clearPendingTimer();
+  captionSession.semanticRequestMeta.clear();
   captionSession.transInflight.clear();
+  if (captionSession.semanticRequestHolds) captionSession.semanticRequestHolds.clear();
   document.documentElement.classList.remove("ytds-active");
   stopPlayerToggle();
   removeOverlay();
@@ -221,7 +208,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   let needRecue = false;
   let needRetranslate = false;
   let needDisplayReflow = false;
+  // Scheduling settings never invalidate in-flight work: its translations stay
+  // correct. Only a shorter lookahead reach makes speculative requests surplus.
   let prefetchChanged = false;
+  let lookaheadShrank = false;
   for (const k of Object.keys(changes)) {
     if (k in settings) {
       const oldV = settings[k];
@@ -231,6 +221,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
         settings.aiPrefetchBatches =
           YTDS_SHARED.normalizeAiPrefetchBatches(settings.aiPrefetchBatches);
         prefetchChanged = oldV !== settings.aiPrefetchBatches;
+        lookaheadShrank = settings.aiPrefetchBatches < Number(oldV);
       }
       if (k === "aiRequestItems") {
         settings.aiRequestItems =
@@ -265,7 +256,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (needDisplayReflow) scheduleAiDisplayReflow(true);
   if (enabledChanged) syncCaptions();   // master switch flipped from popup
   if (prefetchChanged) {
-    cancelAiPrefetchRequests();
+    if (lookaheadShrank) cancelAiPrefetchRequests();
     if (settings.enabled && captionSession.activeGroupIdx >= 0) {
       aiRequestBatch(captionSession.activeGroupIdx, true, true);
       prefetchAiBatches(captionSession.activeGroupIdx, false);

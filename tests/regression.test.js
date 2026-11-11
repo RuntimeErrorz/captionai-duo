@@ -28,7 +28,7 @@ test("defaults keep both caption lines visually identical and target DeepSeek", 
   const d = shared.DEFAULTS;
   assert.equal(d.aiContextPast, 1);
   assert.equal(d.aiContextFuture, 1);
-  assert.equal(d.aiPrefetchBatches, 1);
+  assert.equal(d.aiPrefetchBatches, 5);
   assert.equal(d.aiBaseUrl, "https://api.deepseek.com");
   assert.equal(d.aiModel, "deepseek-v4-flash");
   assert.equal(d.aiExtraBodyRevision, 0);

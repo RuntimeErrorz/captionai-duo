@@ -30,7 +30,7 @@ test("DeepSeek prefetch advances by distinct request batches, not adjacent cues"
   ), [6, 12, 18]);
 });
 
-test("aiPrefetchBatchCount respects configured batches and enforces accelerated playback minimums", () => {
+test("aiPrefetchBatchCount is the configured minimum raised by playback speed", () => {
   const fs = require("node:fs");
   const path = require("node:path");
   const vm = require("node:vm");
@@ -43,36 +43,27 @@ test("aiPrefetchBatchCount respects configured batches and enforces accelerated 
   const context = {
     settings: { aiPrefetchBatches: 1 },
     AI_MAX_PREFETCH_BATCHES: 12,
-    AI_FAST_PREFETCH_BATCHES: 3,
-    AI_HIGH_SPEED_PREFETCH_BATCHES: 4,
     getVideo: () => ({ playbackRate: currentRate })
   };
   vm.createContext(context);
   vm.runInContext(playbackSource, context, { filename: "content/cue-playback.js" });
+  const count = (rate, configured) => {
+    currentRate = rate;
+    context.settings.aiPrefetchBatches = configured;
+    return vm.runInContext("aiPrefetchBatchCount()", context);
+  };
 
-  const getCount = () => vm.runInContext("aiPrefetchBatchCount()", context);
-
-  // Normal 1x playback: respects configured value exactly (does not force 10)
-  context.settings.aiPrefetchBatches = 0;
-  assert.equal(getCount(), 0);
-
-  context.settings.aiPrefetchBatches = 1;
-  assert.equal(getCount(), 1);
-
-  context.settings.aiPrefetchBatches = 5;
-  assert.equal(getCount(), 5);
-
-  // Accelerated 1.75x playback: keeps at least 3
-  currentRate = 1.75;
-  context.settings.aiPrefetchBatches = 0;
-  assert.equal(getCount(), 3);
-  context.settings.aiPrefetchBatches = 5;
-  assert.equal(getCount(), 5);
-
-  // High speed 2.5x playback: keeps at least 4
-  currentRate = 2.5;
-  context.settings.aiPrefetchBatches = 1;
-  assert.equal(getCount(), 4);
-  context.settings.aiPrefetchBatches = 6;
-  assert.equal(getCount(), 6);
+  // round(rate + 1) batches at least, continuously in the playback speed.
+  for (const [rate, floor] of [[1, 2], [1.25, 2], [1.5, 3], [1.75, 3], [2, 3], [2.5, 4], [3, 4]]) {
+    assert.equal(count(rate, 0), floor, `${rate}x`);
+    assert.equal(count(rate, 6), 6, "a larger setting is kept");
+  }
+  assert.equal(count(3, 40), 12, "capped");
+  // Monotonic: a faster speed never looks less far ahead.
+  let previous = 0;
+  for (let rate = 0.25; rate <= 4; rate += 0.05) {
+    const value = count(rate, 0);
+    assert.ok(value >= previous);
+    previous = value;
+  }
 });

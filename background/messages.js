@@ -102,7 +102,6 @@ function parseTranslateBatch(msg, sender) {
     fastPath: msg.fastPath === true,
     debug: !!msg.debug,
     maxConcurrency: YTDS_SHARED.normalizeAiMaxConcurrency(msg.maxConcurrency, 4),
-    requestLimited: msg.requestLimited === true,
     commitGuardLocal: Number.isInteger(msg.commitGuardLocal) &&
       msg.commitGuardLocal > 0 && msg.commitGuardLocal < items.length
       ? msg.commitGuardLocal : -1,
@@ -237,7 +236,7 @@ function handleTranslateBatch(msg, sender, sendResponse) {
     return false;
   }
   let release;
-  try { release = acquireAiSlot(sender, batch.urgent, batch.maxConcurrency, batch.requestLimited); }
+  try { release = acquireAiSlot(sender, batch.urgent, batch.maxConcurrency); }
   catch (err) {
     sendResponse(slotUnavailableResponse(err, batch));
     return false;

@@ -42,7 +42,7 @@
   "aiContextFuture": { "message": "Future context lines" },
   "aiPrefetchBatches": { "message": "Prefetch batches" },
   "aiRateLimitRpm": { "message": "Requests per minute" },
-  "aiRateLimitRpmHint": { "message": "Your provider's request limit; 0 means unlimited. At 30 or below, translation uses fewer, wider requests (e.g. Gemini free tier: 15)." },
+  "aiRateLimitRpmHint": { "message": "Your provider's request limit; 0 means unlimited. Request starts are spaced to stay within it (e.g. Gemini free tier: 15)." },
   "aiMaxConcurrency": { "message": "Max concurrent requests" },
   "aiMaxConcurrencyHint": { "message": "Requests one tab may have in flight at once; one always serves the subtitle being watched. Raise it if your provider allows more parallel requests." },
   "aiRequestItems": { "message": "Request batch size" },

@@ -138,14 +138,12 @@ const context = {
   DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48, COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
   COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80, GEMINI_REQUEST_ITEMS: 96,
   GEMINI_MAX_REQUEST_ITEMS: 320, GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
-  AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320, AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS: 1,
+  AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
   AI_NORMAL_MAX_REQUEST_ITEMS: 160, AI_MAX_REQUEST_ITEMS: 320, AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
   AI_MAX_CURRENT_CHARS: 18000, SEMANTIC_COMMIT_GUARD_ITEMS: 16, AI_COMMIT_GUARD_ITEMS: 16,
   SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS: 32, AI_MIN_COMMIT_RUNWAY_ITEMS: 32,
-  AI_URGENT_TARGET_TAIL_ITEMS: 48, AI_FAST_TARGET_TAIL_ITEMS: 192, AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-  AI_SEEK_BACKTRACK_ITEMS: 64, AI_SEEK_LEFT_GUARD_ITEMS: 16, AI_SEEK_SETTLE_MS: 140,
-  AI_MAX_PREFETCH_BATCHES: 12, AI_FAST_PREFETCH_BATCHES: 3, AI_HIGH_SPEED_PREFETCH_BATCHES: 4,
-  AI_CONTEXT_GROUPS: 20, AI_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
+  AI_URGENT_TARGET_TAIL_ITEMS: 224,  AI_SEEK_BACKTRACK_ITEMS: 64, AI_SEEK_LEFT_GUARD_ITEMS: 16, AI_SEEK_SETTLE_MS: 140,
+  AI_MAX_PREFETCH_BATCHES: 12, AI_FAST_PREFETCH_BATCHES: 3,  AI_CONTEXT_GROUPS: 20, AI_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
   AI_RATE_RETRY_LIMIT: 6, AI_PLAYBACK_STARTUP_GRACE_MS: 6000, AI_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
   AI_PLAYBACK_PROGRESS_GRACE_MS: 4000, AI_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
   emitDebug: (event) => { eventCounts[event] = (eventCounts[event] || 0) + 1; },
@@ -202,8 +200,7 @@ context.sendRuntimeMessage = (message, callback) => {
   }
   if (message.type !== "translateBatch") return true;
   // Newer trees send the profile's concurrency; older ones imply it.
-  const maxActive = spec.rpm > 0 && spec.rpm <= 30 ? 1
-    : Number.isInteger(message.maxConcurrency) ? message.maxConcurrency : spec.maxActive;
+  const maxActive = Number.isInteger(message.maxConcurrency) ? message.maxConcurrency : spec.maxActive;
   const status = shared.aiConcurrencyStatus(active, maxActive, !!message.urgent);
   if (!status.allowed) {
     at(now, () => callback({ ok: false, rateLimited: true, retryAfterMs: status.retryAfterMs,
