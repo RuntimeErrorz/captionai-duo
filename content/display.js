@@ -78,7 +78,7 @@ function cacheSemanticDisplayCluster(unitsValue, logPages) {
   if (!source || !translation) return;
   const unitIds = units.map((unit) => unit.unitId).filter(Boolean);
   const alignedChunks = unitIds.flatMap((unitId) =>
-    captionSession.deepseekAlignedChunksCache.get(unitId) || []);
+    captionSession.semanticAlignedChunksCache.get(unitId) || []);
   let displayPlan = null;
   let alignedByChunks = false;
   if (Array.isArray(alignedChunks) && alignedChunks.length) {
@@ -147,7 +147,7 @@ function cacheSemanticDisplayCluster(unitsValue, logPages) {
     const translationPageIndex = sourcePages.length > 1
       ? Math.round(sourcePageIndex * (translationPages.length - 1) / (sourcePages.length - 1))
       : 0;
-    captionSession.deepseekDisplayCache.set(groupKey(members[ordinal]), {
+    captionSession.semanticDisplayCache.set(groupKey(members[ordinal]), {
       source: sourcePages[sourcePageIndex].text,
       translation: translationPages[translationPageIndex].text,
       pageIndex: sourcePageIndex,
@@ -174,16 +174,16 @@ function cacheSemanticDisplayCluster(unitsValue, logPages) {
       members,
       sourceCueIndex: first && first.startIdx,
       durationMs: Math.max(0, Number(last && last.end) - Number(first && first.start)),
-      minimumMs: DEEPSEEK_MIN_DISPLAY_UNIT_MS
+      minimumMs: AI_MIN_DISPLAY_UNIT_MS
     });
   }
 }
 
-function deepseekSemanticDisplayUnits() {
+function aiSemanticDisplayUnits() {
   if (!captionSession.sentGroups) return [];
   const units = new Map();
   for (let id = 0; id < captionSession.sentGroups.length; id++) {
-    const unitId = captionSession.deepseekUnitCache.get(groupKey(id));
+    const unitId = captionSession.semanticUnitCache.get(groupKey(id));
     if (!unitId) continue;
     const unit = units.get(unitId) || { unitId, members: [] };
     unit.members.push(id);
@@ -192,13 +192,13 @@ function deepseekSemanticDisplayUnits() {
   return Array.from(units.values());
 }
 
-function deepseekSemanticDisplayClusters() {
+function aiSemanticDisplayClusters() {
   return YTDS_SHARED.semanticDisplayClusters(
-    deepseekSemanticDisplayUnits(), captionSession.sentGroups, DEEPSEEK_MIN_DISPLAY_UNIT_MS
+    aiSemanticDisplayUnits(), captionSession.sentGroups, AI_MIN_DISPLAY_UNIT_MS
   );
 }
 
-function deepseekTranslationErrorText(value) {
+function aiTranslationErrorText(value) {
   const details = YTDS_SHARED.aiErrorDescriptor(value);
   const code = [details.code, details.providerCode].filter(Boolean).join(" / ");
   const base = String(t("translationError", "Translation failed [$1]")).replace(/\$1/g, code);
@@ -206,7 +206,7 @@ function deepseekTranslationErrorText(value) {
   return message && message !== code ? `${base} — ${message}` : base;
 }
 
-function deepseekUpdateDisplayError(regionIndex, request, runtimeError, response) {
+function aiUpdateDisplayError(regionIndex, request, runtimeError, response) {
   const runtimeInfo = runtimeError && YTDS_SHARED.aiErrorDescriptor(runtimeError);
   const responseHasError = response && (response.ok === false || response.errorCode ||
     response.error || response.streamError);
@@ -214,7 +214,7 @@ function deepseekUpdateDisplayError(regionIndex, request, runtimeError, response
   const cancelled = !!(runtimeInfo && runtimeInfo.code === "AI_CANCELLED") ||
     !!(responseInfo && responseInfo.code === "AI_CANCELLED");
   if (request && request.prefetch) return;
-  const errors = captionSession.deepseekVisibleErrors;
+  const errors = captionSession.semanticVisibleErrors;
   if (!errors || !Number.isInteger(regionIndex)) return;
   const value = runtimeError || (responseHasError ? response : null);
   if (!value || cancelled) {
@@ -229,12 +229,12 @@ function deepseekUpdateDisplayError(regionIndex, request, runtimeError, response
   });
 }
 
-function cacheDeepseekDisplayNeighborhood(changedMembers, logPages) {
+function cacheAiDisplayNeighborhood(changedMembers, logPages) {
   const changed = new Set((Array.isArray(changedMembers) ? changedMembers : []).map(Number));
   const cueIndexes = new Set(Array.from(changed).map((id) =>
     Number(captionSession.sentGroups && captionSession.sentGroups[id] && captionSession.sentGroups[id].startIdx)).filter(Number.isInteger));
-  const unitById = new Map(deepseekSemanticDisplayUnits().map((unit) => [unit.unitId, unit]));
-  for (const cluster of deepseekSemanticDisplayClusters()) {
+  const unitById = new Map(aiSemanticDisplayUnits().map((unit) => [unit.unitId, unit]));
+  for (const cluster of aiSemanticDisplayClusters()) {
     const relevant = cluster.members.some((id) => changed.has(id) ||
       cueIndexes.has(Number(captionSession.sentGroups && captionSession.sentGroups[id] && captionSession.sentGroups[id].startIdx)));
     if (!relevant) continue;
@@ -243,7 +243,7 @@ function cacheDeepseekDisplayNeighborhood(changedMembers, logPages) {
   }
 }
 
-function repaintActiveDeepseekTranslation() {
+function repaintActiveAiTranslation() {
   if (manualTranslationSelected()) {
     if (captionSession.cueList) cueTick();
     return;
@@ -252,13 +252,13 @@ function repaintActiveDeepseekTranslation() {
     ? captionSession.transCache.get(groupKey(captionSession.activeGroupIdx)) : "";
   if (!activeTranslation || captionSession.activeCueIdx < 0 || !captionSession.cueList) {
     if (captionSession.activeGroupIdx >= 0 && captionSession.activeCueIdx >= 0 && captionSession.cueList) {
-      const regionIndex = captionSession.deepseekGroupToCommitRegion[captionSession.activeGroupIdx];
-      const displayError = captionSession.deepseekExhaustedRegions.get(regionIndex) ||
-        captionSession.deepseekVisibleErrors && captionSession.deepseekVisibleErrors.get(regionIndex);
+      const regionIndex = captionSession.semanticGroupToCommitRegion[captionSession.activeGroupIdx];
+      const displayError = captionSession.semanticExhaustedRegions.get(regionIndex) ||
+        captionSession.semanticVisibleErrors && captionSession.semanticVisibleErrors.get(regionIndex);
       if (displayError) {
         clearPendingTimer();
         const source = sourceForDisplayedCue(captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]);
-        setTranslation(deepseekTranslationErrorText(displayError), source, "error");
+        setTranslation(aiTranslationErrorText(displayError), source, "error");
         return;
       }
       armPendingTranslationIndicator(captionSession.activeGroupIdx);
@@ -267,24 +267,24 @@ function repaintActiveDeepseekTranslation() {
   }
   clearPendingTimer();
   const activeSource = sourceForDisplayedCue(captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]);
-  const activeDisplay = captionSession.deepseekDisplayCache.get(groupKey(captionSession.activeGroupIdx));
+  const activeDisplay = captionSession.semanticDisplayCache.get(groupKey(captionSession.activeGroupIdx));
   setOriginal(activeSource);
   setTranslation(activeDisplay && activeDisplay.translation || activeTranslation, activeSource);
 }
 
-function rebuildDeepseekDisplayCache(repaint) {
-  captionSession.deepseekDisplayCache.clear();
+function rebuildAiDisplayCache(repaint) {
+  captionSession.semanticDisplayCache.clear();
   captionSession.semanticLayoutWidth = semanticDisplayWidth();
   if (!captionSession.sentGroups) return;
-  const unitById = new Map(deepseekSemanticDisplayUnits().map((unit) => [unit.unitId, unit]));
-  for (const cluster of deepseekSemanticDisplayClusters()) {
+  const unitById = new Map(aiSemanticDisplayUnits().map((unit) => [unit.unitId, unit]));
+  for (const cluster of aiSemanticDisplayClusters()) {
     const units = cluster.unitIds.map((unitId) => unitById.get(unitId)).filter(Boolean);
     cacheSemanticDisplayCluster(units, false);
   }
   if (repaint && captionSession.activeCueIdx >= 0 && captionSession.activeGroupIdx >= 0 && captionSession.cueList) {
     const cue = captionSession.cueList[captionSession.activeCueIdx];
     const source = sourceForDisplayedCue(captionSession.activeCueIdx, cue);
-    const display = captionSession.deepseekDisplayCache.get(groupKey(captionSession.activeGroupIdx));
+    const display = captionSession.semanticDisplayCache.get(groupKey(captionSession.activeGroupIdx));
     const translation = display && display.translation ||
       captionSession.transCache.get(groupKey(captionSession.activeGroupIdx));
     setOriginal(source);
@@ -295,11 +295,11 @@ function rebuildDeepseekDisplayCache(repaint) {
 // Coalesce live slider/font/layout changes to one rebuild per animation
 // frame. Measuring the connected overlay keeps pagination in lockstep with
 // its real content width instead of a separately estimated percentage.
-function scheduleDeepseekDisplayReflow(repaint) {
+function scheduleAiDisplayReflow(repaint) {
   if (captionSession.semanticReflowFrame != null) return;
   captionSession.semanticReflowFrame = requestAnimationFrame(() => {
     captionSession.semanticReflowFrame = null;
-    rebuildDeepseekDisplayCache(repaint !== false);
+    rebuildAiDisplayCache(repaint !== false);
   });
 }
 
@@ -310,16 +310,16 @@ function observeSemanticLayout() {
   captionSession.semanticResizeObserver = new ResizeObserver(() => {
     const width = semanticDisplayWidth();
     if (!captionSession.semanticLayoutWidth || width !== captionSession.semanticLayoutWidth) {
-      scheduleDeepseekDisplayReflow(true);
+      scheduleAiDisplayReflow(true);
     }
   });
   captionSession.semanticResizeObserver.observe(overlay);
 }
 
 function maybeReflowSemanticDisplay() {
-  if (!captionSession.deepseekUnitCache.size) return;
+  if (!captionSession.semanticUnitCache.size) return;
   const width = semanticDisplayWidth();
   if (!captionSession.semanticLayoutWidth || width !== captionSession.semanticLayoutWidth) {
-    scheduleDeepseekDisplayReflow(true);
+    scheduleAiDisplayReflow(true);
   }
 }

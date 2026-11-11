@@ -7,6 +7,7 @@ const vm = require("node:vm");
 const { execFileSync } = require("node:child_process");
 const {
   SHARED_FILES,
+  MAIN_SHARED_FILES,
   MAIN_FILES,
   CONTENT_FILES,
   BACKGROUND_FILES,
@@ -84,7 +85,7 @@ new vm.Script(readSourceFiles(BACKGROUND_FILES), { filename: "background-runtime
 new vm.Script(readSourceFiles(POPUP_FILES), { filename: "popup-runtime.js" });
 
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
-assert.deepEqual(manifest.content_scripts[0].js, [...SHARED_FILES, ...MAIN_FILES]);
+assert.deepEqual(manifest.content_scripts[0].js, [...MAIN_SHARED_FILES, ...MAIN_FILES]);
 assert.deepEqual(manifest.content_scripts[1].js, [...SHARED_FILES, ...CONTENT_FILES]);
 assert.equal(manifest.background.service_worker, "background.js");
 assert.equal(fs.existsSync(path.join(root, "content.js")), false,
@@ -101,11 +102,30 @@ assert.deepEqual(popupScripts, [...SHARED_FILES, ...POPUP_FILES]);
 
 const shared = loadShared();
 assert.equal(Object.isFrozen(shared), true, "YTDS_SHARED must remain immutable");
+assert.equal(Object.keys(shared).some((key) => key.startsWith("__")), false,
+  "module-private \"__\" helpers must not reach the public shared API");
+
+// The MAIN world shares the page's realm and loads only MAIN_SHARED_FILES, so
+// every YTDS_SHARED member that inject/* references must come from that set.
+const mainShared = (() => {
+  const context = { URL };
+  vm.createContext(context);
+  vm.runInContext(readSourceFiles(MAIN_SHARED_FILES), context, { filename: "main-shared.js" });
+  return context.YTDS_SHARED;
+})();
+assert.equal(Object.isFrozen(mainShared), true);
+const mainSharedUses = new Set(Array.from(
+  readSourceFiles(MAIN_FILES).matchAll(/YTDS_SHARED\.(\w+)/g), (match) => match[1]
+));
+for (const name of mainSharedUses) {
+  assert.equal(typeof mainShared[name], "function",
+    `MAIN world uses YTDS_SHARED.${name}, which MAIN_SHARED_FILES does not provide`);
+}
 assert.equal(typeof shared.preparePromptContexts, "function");
 assert.equal(typeof shared.cueReferenceAtoms, "function");
 assert.equal(typeof shared.alignedTranslationsFromJsonText, "function");
 assert.equal(typeof shared.semanticDisplayPlan, "function");
-assert.equal(typeof shared.deepSeekSseEvents, "function");
+assert.equal(typeof shared.aiSseEvents, "function");
 assert.equal(typeof shared.sanitizeDiagnosticValue, "function");
 assert.equal(typeof shared.aiErrorDescriptor, "function");
 assert.equal(typeof shared.aiErrorMessage, "function");

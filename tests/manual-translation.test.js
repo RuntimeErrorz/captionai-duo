@@ -28,7 +28,7 @@ test("a selected caption track renders directly without an AI request", () => {
     getVideo: () => ({ currentTime: 0.5, playbackRate: 1 }),
     setOriginal: (text) => painted.push({ type: "original", text }),
     setTranslation: (text, source) => painted.push({ type: "translation", text, source }),
-    deepseekRequestBatch: (...args) => aiRequests.push(args),
+    aiRequestBatch: (...args) => aiRequests.push(args),
     extensionContextAlive: () => true,
     emitDebug: () => {}
   };

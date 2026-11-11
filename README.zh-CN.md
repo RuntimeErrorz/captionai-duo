@@ -32,7 +32,7 @@
 | 原文语言 | 自动（原始音轨） | 弹窗会列出当前视频提供的全部字幕轨。自动模式跟随原始音轨的字幕语言；选择列表中的字幕轨后切换原文字幕时间轴。 |
 | 译文字幕 | AI 翻译 | 选择视频已有的字幕轨后，直接将其显示为译文，不再调用 AI 模型。 |
 | 配置方案 | `DeepSeek` | 一套方案包含名称、目标语言、Base URL、模型、API Key、请求参数、上下文条数和预加载批数。它位于模型配置第一行，可新建、就地重命名、删除和切换；整套方案只保存在本机，切换后当前视频按新方案重新翻译。 |
-| API Base URL | `https://api.deepseek.com` | 请求地址的基址。若末尾不是 `/chat/completions`，扩展会自动补上。远程地址只允许 HTTPS；`localhost`、`127.0.0.1` 可使用 HTTP。所有受支持的 API 地址均默认放行，无需单独授权。 |
+| API Base URL | `https://api.deepseek.com` | 请求地址的基址。若末尾不是 `/chat/completions`，扩展会自动补上。远程地址只允许 HTTPS；`localhost`、`127.0.0.1` 可使用 HTTP。安装时只放行 `api.deepseek.com`；其他地址在首次保存时请求一次授权，也可在模型配置下方点击**授权访问**。 |
 | 模型 | `deepseek-v4-flash` | 原样写入 Chat Completions 请求的 `model`。必须与所填接口支持的模型名完全一致。 |
 | API Key | 空 | 按规范化后的 Base URL 分开保存在 `chrome.storage.local`，不会同步。请求时使用 `Authorization: Bearer …`；无鉴权的本地接口可留空，DeepSeek 必须填写。 |
 | 请求参数 | `{}` | 推理参数的唯一配置入口，可填写供应商支持的 `thinking`、`enable_thinking` 或 `reasoning_effort`。JSON 对象会自动保存；可以覆盖普通生成参数，但不能覆盖 `model`、`messages`、`stream`、Token 上限和结构化输出等核心协议字段。检测到推理参数时会自动使用更长的请求超时。 |

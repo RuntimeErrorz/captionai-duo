@@ -14,70 +14,35 @@ function createCaptionSessionState(initialVideoId) {
     cueEpoch: 0,
     transCache: new Map(),
     semanticUnitCache: new Map(),
-    get deepseekUnitCache() { return this.semanticUnitCache; },
     semanticSourceCache: new Map(),
-    get deepseekSourceCache() { return this.semanticSourceCache; },
     semanticAlignedChunksCache: new Map(),
-    get deepseekAlignedChunksCache() { return this.semanticAlignedChunksCache; },
     semanticDisplayCache: new Map(),
-    get deepseekDisplayCache() { return this.semanticDisplayCache; },
     semanticRequestMeta: new Map(),
-    get deepseekRequestMeta() { return this.semanticRequestMeta; },
     semanticRequestSerial: 0,
-    get deepseekRequestSerial() { return this.semanticRequestSerial; },
-    set deepseekRequestSerial(v) { this.semanticRequestSerial = v; },
     semanticCommitRegions: [],
-    get deepseekCommitRegions() { return this.semanticCommitRegions; },
-    set deepseekCommitRegions(v) { this.semanticCommitRegions = v; },
     semanticGroupToCommitRegion: [],
-    get deepseekGroupToCommitRegion() { return this.semanticGroupToCommitRegion; },
-    set deepseekGroupToCommitRegion(v) { this.semanticGroupToCommitRegion = v; },
     semanticCommitStateByRegion: new Map(),
-    get deepseekCommitStateByRegion() { return this.semanticCommitStateByRegion; },
     semanticLayoutWidth: 0,
     semanticResizeObserver: null,
     semanticReflowFrame: null,
     displayMeasureCanvas: null,
     transInflight: new Set(),
     semanticRetryCounts: new Map(),
-    get deepseekRetryCounts() { return this.semanticRetryCounts; },
     semanticExhaustedRegions: new Map(),
-    get deepseekExhaustedRegions() { return this.semanticExhaustedRegions; },
     semanticVisibleErrors: new Map(),
-    get deepseekVisibleErrors() { return this.semanticVisibleErrors; },
     semanticSpeculativeBackoffUntil: 0,
-    get deepseekSpeculativeBackoffUntil() { return this.semanticSpeculativeBackoffUntil; },
-    set deepseekSpeculativeBackoffUntil(v) { this.semanticSpeculativeBackoffUntil = v; },
     semanticSpeculativeBackoffReason: "",
-    get deepseekSpeculativeBackoffReason() { return this.semanticSpeculativeBackoffReason; },
-    set deepseekSpeculativeBackoffReason(v) { this.semanticSpeculativeBackoffReason = v; },
     semanticSpeculativeResumeTimer: null,
-    get deepseekSpeculativeResumeTimer() { return this.semanticSpeculativeResumeTimer; },
-    set deepseekSpeculativeResumeTimer(v) { this.semanticSpeculativeResumeTimer = v; },
     semanticFocusGeneration: 0,
-    get deepseekFocusGeneration() { return this.semanticFocusGeneration; },
-    set deepseekFocusGeneration(v) { this.semanticFocusGeneration = v; },
     semanticFocusedBatchIndex: -1,
-    get deepseekFocusedBatchIndex() { return this.semanticFocusedBatchIndex; },
-    set deepseekFocusedBatchIndex(v) { this.semanticFocusedBatchIndex = v; },
     semanticSeekSettleTimer: null,
-    get deepseekSeekSettleTimer() { return this.semanticSeekSettleTimer; },
-    set deepseekSeekSettleTimer(v) { this.semanticSeekSettleTimer = v; },
     semanticSeekSettling: false,
-    get deepseekSeekSettling() { return this.semanticSeekSettling; },
-    set deepseekSeekSettling(v) { this.semanticSeekSettling = v; },
     semanticPendingSeekTimeMs: 0,
-    get deepseekPendingSeekTimeMs() { return this.semanticPendingSeekTimeMs; },
-    set deepseekPendingSeekTimeMs(v) { this.semanticPendingSeekTimeMs = v; },
     sentGroups: null,
     cueToGroup: null,
     cueToGroups: null,
     semanticBatchWindows: [],
-    get deepseekBatchWindows() { return this.semanticBatchWindows; },
-    set deepseekBatchWindows(v) { this.semanticBatchWindows = v; },
     semanticGroupToBatch: [],
-    get deepseekGroupToBatch() { return this.semanticGroupToBatch; },
-    set deepseekGroupToBatch(v) { this.semanticGroupToBatch = v; },
     activeGroupIdx: -1,
     cueTrackKind: "",
     cueSourceLang: "",
@@ -182,7 +147,7 @@ function resetCaptionSessionState(reason, options) {
   const token = invalidateCaptionSession(reason);
 
   if (opts.cancelRemote !== false && previousVideoId && extensionContextAlive()) {
-    try { sendRuntimeMessage({ type: "cancelDeepSeek", videoId: previousVideoId }); }
+    try { sendRuntimeMessage({ type: "cancelAiTranslation", videoId: previousVideoId }); }
     catch (_e) { /* worker unavailable */ }
   }
   captionSession.transCache.clear();
@@ -202,8 +167,8 @@ function resetCaptionSessionState(reason, options) {
   captionSession.semanticSpeculativeBackoffUntil = 0;
   captionSession.semanticSpeculativeBackoffReason = "";
   if (typeof resetSemanticCommitTimeline === "function") resetSemanticCommitTimeline();
-  else if (typeof resetDeepseekCommitTimeline === "function") resetDeepseekCommitTimeline();
-  clearDeepseekSeekSettle();
+  else if (typeof resetAiCommitTimeline === "function") resetAiCommitTimeline();
+  clearAiSeekSettle();
   clearPendingTimer();
   captionSession.semanticFocusedBatchIndex = -1;
   captionSession.semanticLayoutWidth = 0;

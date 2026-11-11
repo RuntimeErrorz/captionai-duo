@@ -87,10 +87,10 @@ const MAX_CUE_TOTAL_CHARS = 4000000;
 const MAX_TRACK_TIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SEMANTIC_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
-const DEEPSEEK_CORE_ITEMS = SEMANTIC_CORE_ITEMS;
-const DEEPSEEK_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
-const DEEPSEEK_REQUEST_ITEMS = 80; // normal monotonic request window
-const DEEPSEEK_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
+const AI_CORE_ITEMS = SEMANTIC_CORE_ITEMS;
+const AI_INITIAL_REQUEST_ITEMS = 48; // smaller first response for cold-start latency
+const AI_REQUEST_ITEMS = 80; // normal monotonic request window
+const AI_URGENT_REQUEST_ITEMS = 96; // visible-request baseline; target runway may grow it
 const DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS = 64; // keep DeepSeek's visible stream short at >=1.75x; future runway is speculative
 const DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS = 48; // DeepSeek output is slower than playback at >=2.5x; hand off to the staged runway sooner
 const COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS = 80; // generic compatible streams can fill the wider visible runway
@@ -100,32 +100,32 @@ const COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS = 80;
 const GEMINI_REQUEST_ITEMS = 96;
 const GEMINI_MAX_REQUEST_ITEMS = 320;
 const GEMINI_MAX_SPECULATIVE_REQUESTS = 1;
-const DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
-const DEEPSEEK_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
-const DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x
-const DEEPSEEK_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
+const AI_NORMAL_MAX_REQUEST_ITEMS = 160; // ordinary playback/recovery cap
+const AI_MAX_REQUEST_ITEMS = 320; // accelerated-playback runway cap
+const AI_HIGH_SPEED_MAX_REQUEST_ITEMS = 160; // avoid a long recovery stall at >=2.5x
+const AI_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
 const SEMANTIC_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
-const DEEPSEEK_COMMIT_GUARD_ITEMS = SEMANTIC_COMMIT_GUARD_ITEMS;
+const AI_COMMIT_GUARD_ITEMS = SEMANTIC_COMMIT_GUARD_ITEMS;
 const SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
-const DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS = SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS;
-const DEEPSEEK_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
-const DEEPSEEK_FAST_TARGET_TAIL_ITEMS = 192; // extra runway at >=1.75x playback
-const DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS = 224; // extra runway at >=2.5x playback
-const DEEPSEEK_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
-const DEEPSEEK_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
-const DEEPSEEK_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
-const DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-const DEEPSEEK_FAST_PREFETCH_BATCHES = 3; // keep a bounded runway at >=1.75x
-const DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 4; // keep a bounded runway at >=2.5x
-const DEEPSEEK_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
+const AI_MIN_COMMIT_RUNWAY_ITEMS = SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS;
+const AI_URGENT_TARGET_TAIL_ITEMS = 48; // semantic runway after the visible seek target
+const AI_FAST_TARGET_TAIL_ITEMS = 192; // extra runway at >=1.75x playback
+const AI_HIGH_SPEED_TARGET_TAIL_ITEMS = 224; // extra runway at >=2.5x playback
+const AI_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in that fits the urgent cap
+const AI_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
+const AI_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
+const AI_MAX_PREFETCH_BATCHES = 12;
+const AI_FAST_PREFETCH_BATCHES = 3; // keep a bounded runway at >=1.75x
+const AI_HIGH_SPEED_PREFETCH_BATCHES = 4; // keep a bounded runway at >=2.5x
+const AI_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
 const SEMANTIC_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
-const DEEPSEEK_SOFT_PAUSE_MS = SEMANTIC_SOFT_PAUSE_MS;
+const AI_SOFT_PAUSE_MS = SEMANTIC_SOFT_PAUSE_MS;
 const SEMANTIC_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross
-const DEEPSEEK_HARD_PAUSE_MS = SEMANTIC_HARD_PAUSE_MS;
+const AI_HARD_PAUSE_MS = SEMANTIC_HARD_PAUSE_MS;
 const SEMANTIC_MIN_DISPLAY_UNIT_MS = 650; // co-display imperceptibly short units from one raw cue
-const DEEPSEEK_MIN_DISPLAY_UNIT_MS = SEMANTIC_MIN_DISPLAY_UNIT_MS;
-const DEEPSEEK_COLD_RETRY_DELAYS_MS = Object.freeze([400, 1200, 2500]);
-const DEEPSEEK_RATE_RETRY_LIMIT = 6;
+const AI_MIN_DISPLAY_UNIT_MS = SEMANTIC_MIN_DISPLAY_UNIT_MS;
+const AI_COLD_RETRY_DELAYS_MS = Object.freeze([400, 1200, 2500]);
+const AI_RATE_RETRY_LIMIT = 6;
 const PENDING_ELLIPSIS_MS = 400; // show "…" if the active group is still in flight
 
 const INITIAL_CUE_RECOVERY_MS = 7000;
@@ -183,12 +183,12 @@ function loadSettings() {
       got = got || {};
       settings = { ...DEFAULTS, ...got };
       settings.targetLang = YTDS_SHARED.normalizeTargetLang(settings.targetLang);
-      settings.deepseekContextPast =
-        YTDS_SHARED.normalizeAiContextCount(settings.deepseekContextPast, 1);
-      settings.deepseekContextFuture =
-        YTDS_SHARED.normalizeAiContextCount(settings.deepseekContextFuture, 1);
-      settings.deepseekPrefetchBatches =
-        YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
+      settings.aiContextPast =
+        YTDS_SHARED.normalizeAiContextCount(settings.aiContextPast, 1);
+      settings.aiContextFuture =
+        YTDS_SHARED.normalizeAiContextCount(settings.aiContextFuture, 1);
+      settings.aiPrefetchBatches =
+        YTDS_SHARED.normalizeAiPrefetchBatches(settings.aiPrefetchBatches);
       settings.aiRequestItems =
         YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, 96);
       resolve();
@@ -198,9 +198,9 @@ function loadSettings() {
 
 // A language change alters the requested translation but can reuse the cues.
 const RECUE_KEYS = new Set(["targetLang"]);
-const DEEPSEEK_RETRANSLATE_KEYS = new Set([
+const AI_RETRANSLATE_KEYS = new Set([
   "aiBaseUrl", "aiModel", "aiExtraBodyRevision",
-  "deepseekContextPast", "deepseekContextFuture"
+  "aiContextPast", "aiContextFuture"
 ]);
 const LIVE_STYLE_KEYS = new Set([
   "order", "rowGap", "position", "posMode", "posXpct", "posYpct",
@@ -209,7 +209,7 @@ const LIVE_STYLE_KEYS = new Set([
   "showTranslation", "transFont", "transSize", "transFullscreenSize", "transColor", "transBg",
   "transBgOpacity", "transStroke", "transStrokeOpacity", "transStrokeWidth"
 ]);
-const DEEPSEEK_REFLOW_KEYS = new Set([
+const AI_REFLOW_KEYS = new Set([
   "showOriginal", "showTranslation",
   "origFont", "origSize", "origFullscreenSize",
   "transFont", "transSize", "transFullscreenSize"
@@ -226,10 +226,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
       const oldV = settings[k];
       settings[k] = changes[k].newValue;
       if (k === "targetLang") settings.targetLang = YTDS_SHARED.normalizeTargetLang(settings.targetLang);
-      if (k === "deepseekPrefetchBatches") {
-        settings.deepseekPrefetchBatches =
-          YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
-        prefetchChanged = oldV !== settings.deepseekPrefetchBatches;
+      if (k === "aiPrefetchBatches") {
+        settings.aiPrefetchBatches =
+          YTDS_SHARED.normalizeAiPrefetchBatches(settings.aiPrefetchBatches);
+        prefetchChanged = oldV !== settings.aiPrefetchBatches;
       }
       if (k === "aiRequestItems") {
         settings.aiRequestItems =
@@ -239,10 +239,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
       if (RECUE_KEYS.has(k) && oldV !== settings[k]) {
         needRecue = true;
       }
-      if (DEEPSEEK_RETRANSLATE_KEYS.has(k) && oldV !== settings[k]) {
+      if (AI_RETRANSLATE_KEYS.has(k) && oldV !== settings[k]) {
         needRetranslate = true;
       }
-      if (DEEPSEEK_REFLOW_KEYS.has(k) && oldV !== settings[k]) {
+      if (AI_REFLOW_KEYS.has(k) && oldV !== settings[k]) {
         needDisplayReflow = true;
       }
     }
@@ -251,18 +251,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
   applyStateToDom(false);
   syncPlayerToggle();
   if (overlay) styleOverlay();   // position/fonts/colors/bg/stroke/sizes apply live
-  if (needDisplayReflow) scheduleDeepseekDisplayReflow(true);
+  if (needDisplayReflow) scheduleAiDisplayReflow(true);
   if (enabledChanged) syncCaptions();   // master switch flipped from popup
   if (prefetchChanged) {
-    cancelDeepseekPrefetchRequests();
+    cancelAiPrefetchRequests();
     if (settings.enabled && captionSession.activeGroupIdx >= 0) {
-      deepseekRequestBatch(captionSession.activeGroupIdx, true, true);
-      prefetchDeepseekBatches(captionSession.activeGroupIdx, false);
+      aiRequestBatch(captionSession.activeGroupIdx, true, true);
+      prefetchAiBatches(captionSession.activeGroupIdx, false);
     }
   }
   if ((needRecue || needRetranslate) && settings.enabled) {
     resetCaptionSessionState("settings-change");
-    if (captionSession.sentGroups && captionSession.sentGroups.length) buildDeepseekCommitRegions();
+    if (captionSession.sentGroups && captionSession.sentGroups.length) buildAiCommitRegions();
     if (captionSession.cueTimer) {
       setTranslation("", "");
     }

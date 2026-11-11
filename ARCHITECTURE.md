@@ -8,15 +8,24 @@ in `manifest.json` in order, and the service worker loads its modules through
 ## Module boundaries
 
 - `shared/` contains pure, cross-context helpers, including the mandatory
-  diagnostic redaction boundary. `shared.js` is the final API assembler and
-  exposes the frozen `YTDS_SHARED` object.
+  diagnostic redaction boundary. `shared/youtube-url.js` loads first and
+  creates the module registry; `shared.js` is the final API assembler and
+  exposes the frozen `YTDS_SHARED` object. Registry keys starting with `__`
+  pass helpers between shared modules only and never reach `YTDS_SHARED`.
+- The MAIN world shares the page's JavaScript realm, so it loads only
+  `MAIN_SHARED_FILES` (`shared/youtube-url.js` and `shared.js`). The
+  architecture check fails if `inject/*` uses a `YTDS_SHARED` member that set
+  does not provide.
 - `content/` contains the isolated-world subtitle runtime: UI state, the explicit
   `captionSession` owner for video/track/playback/request/display/fallback state,
   its opaque identity and reset boundary, versioned diagnostics, semantic
-  request/retry ownership, semantic translation, export, bridge, and lifecycle.
+  request/retry ownership (`semantic-requests.js`), batch-result commit and
+  retry (`semantic-results.js`), semantic translation, export, bridge, and
+  lifecycle.
 - `background/` contains service-worker state, Chromium network diagnostics,
   HTTP transport, translation, and message routing. `background.js` only
-  declares their deterministic order.
+  declares their deterministic order. Network diagnostics observe only
+  extension-initiated requests (`tabId: -1`).
 - `inject/caption-tracks.js` catalogs the current video's YouTube caption
   tracks in the MAIN world while keeping proof-bearing URLs private.
 - `inject/track-transport.js` fetches and parses proof-bearing json3 tracks in
@@ -26,8 +35,17 @@ in `manifest.json` in order, and the service worker loads its modules through
 - `inject/network-hooks.js` installs XHR, fetch, and Resource Timing observation
   hooks in the MAIN world.
 - `inject.js` is the MAIN-world timedtext interceptor and caption source loader.
-- `popup/` contains local connection-profile/configuration logic;
-  `popup.js` is the remaining popup controller.
+- `popup/` contains local connection-profile/configuration logic and the AI
+  connection controls (`ai-controls.js`), including per-origin host-permission
+  requests; `popup.js` is the remaining popup controller.
+
+## Permissions
+
+Only `https://api.deepseek.com/*` is a required host permission. Every other
+API origin comes from `optional_host_permissions` and is requested for exactly
+that origin from the popup. The worker refuses to send a request without the
+grant (`AI_HOST_PERMISSION_MISSING`) and bumps `aiExtraBodyRevision` on
+`permissions.onAdded`, so open video tabs retry after a grant.
 
 Runtime modules deliberately share classic-script lexical state only inside
 their Chrome execution world. Shared cross-world logic must go through the

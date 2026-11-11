@@ -383,6 +383,7 @@ function setConfigTransferBusy(busy) {
 
 async function onExportConfig() {
   setConfigTransferBusy(true);
+  showConfigMsg("", null);
   try {
     await flushSyncPatch();
     const backup = await readCurrentConfigBackup();
@@ -393,9 +394,11 @@ async function onExportConfig() {
     link.href = blobUrl;
     link.download = `captionai-duo-settings-${date}.json`;
     link.click();
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    // Revoking in the same task can cancel the download before it starts.
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+    showConfigMsg(t("configExported", "配置已导出。"), "ok");
   } catch (_e) {
-    alert(t("configExportFailed", "配置导出失败，请重试。"));
+    showConfigMsg(t("configExportFailed", "配置导出失败，请重试。"), "err");
   } finally {
     setConfigTransferBusy(false);
   }
@@ -407,6 +410,7 @@ async function onImportConfigFile(event) {
   input.value = "";
   if (!file) return;
   setConfigTransferBusy(true);
+  showConfigMsg("", null);
   try {
     if (file.size > CONFIG_BACKUP_MAX_BYTES) throw new Error("invalid-size");
     const backup = parseConfigBackupText(await file.text());
@@ -421,8 +425,9 @@ async function onImportConfigFile(event) {
     bindUI();
     await Promise.all([loadCurrentAiApiKey(), loadCurrentAiExtraBody()]);
     refreshEngineStatus();
+    showConfigMsg(t("configImported", "配置已导入。"), "ok");
   } catch (_e) {
-    alert(t("configImportFailed", "无法导入：文件不是有效的 CaptionAI Duo 配置备份。"));
+    showConfigMsg(t("configImportFailed", "无法导入：文件不是有效的 CaptionAI Duo 配置备份。"), "err");
   } finally {
     setConfigTransferBusy(false);
   }
@@ -485,58 +490,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 // ---- AI service status line ----------------------------------------------
-async function refreshEngineStatus() {
-  const el = $("aiStatus");
-  if (!el) return;
-  el.hidden = true;
-  el.classList.remove("warn", "ok");
-
-  const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(state.aiBaseUrl);
-  if (!baseUrl || !String(state.aiModel || "").trim()) {
-    el.textContent = t("aiBaseMissing", "请输入有效的 API Base URL 和模型名。");
-    el.classList.add("warn");
-    el.hidden = false;
-    return;
-  }
-  const apiKey = await loadCurrentAiApiKey();
-  const endpointKind = YTDS_SHARED.aiEndpointKind(baseUrl);
-  if (endpointKind === "deepseek" && !apiKey) {
-    el.textContent = t("aiKeyMissing", "请先填写 API Key。");
-    el.classList.add("warn");
-    el.hidden = false;
-    return;
-  }
-  try {
-    if (chrome.storage.session) {
-      const got = await chrome.storage.session.get(["ytdsAiStatus", "ytdsDeepSeekStatus"]);
-      const status = got && (got.ytdsAiStatus || got.ytdsDeepSeekStatus);
-      if (status && Date.now() - Number(status.ts || 0) < 10 * 60 * 1000) {
-        const messages = {
-          timeout: t("aiStatusTimeout", "AI 请求超时，扩展已自动重试。"),
-          limited: t("aiStatusLimited", "AI 请求过多，已暂时放慢。"),
-          partial: t("aiStatusPartial", "部分字幕翻译失败，请查看译文中的错误码。"),
-          key: t("aiStatusKey", "API Key 无效，请重新填写。"),
-          error: t("aiStatusError", "AI 请求失败，请查看译文中的错误码。")
-        };
-        const summary = messages[status.kind] || messages.error;
-        const code = status.errorCode ? YTDS_SHARED.aiErrorDescriptor(status).code : "";
-        if (code === "AI_CANCELLED") return;
-        el.textContent = code ? `${summary} [${code}]` : summary;
-        el.classList.add("warn");
-        el.hidden = false;
-      }
-    }
-  } catch (_e) { /* session status unavailable */ }
-}
-
-function showExportMsg(text, kind) {
-  const el = $("exportMsg");
+function showStatusMsg(id, text, kind) {
+  const el = $(id);
   if (!el) return;
   el.textContent = text || "";
   el.classList.remove("ok", "err");
   if (kind) el.classList.add(kind);
   el.hidden = !text;
 }
+
+function showExportMsg(text, kind) { showStatusMsg("exportMsg", text, kind); }
+function showConfigMsg(text, kind) { showStatusMsg("configMsg", text, kind); }
 
 async function onExportClick() {
   const btn = $("exportBtn");
@@ -610,9 +574,9 @@ function bindUI() {
   $("targetLang").value = state.targetLang;
   $("aiBaseUrl").value = state.aiBaseUrl;
   $("aiModel").value = state.aiModel;
-  $("deepseekContextPast").value = String(state.deepseekContextPast);
-  $("deepseekContextFuture").value = String(state.deepseekContextFuture);
-  $("deepseekPrefetchBatches").value = String(state.deepseekPrefetchBatches);
+  $("aiContextPast").value = String(state.aiContextPast);
+  $("aiContextFuture").value = String(state.aiContextFuture);
+  $("aiPrefetchBatches").value = String(state.aiPrefetchBatches);
   $("aiRequestItems").value = String(state.aiRequestItems);
   $("rowGap").value = state.rowGap;
   $("rowGapV").textContent = state.rowGap + "px";
@@ -633,89 +597,7 @@ function wire() {
       else stopCaptionTrackRefresh();
     });
   });
-  $("targetLang").addEventListener("change", async (e) => {
-    const value = YTDS_SHARED.normalizeTargetLang(e.target.value);
-    setKey("targetLang", value);
-    await updateActiveAiConfigProfile({ targetLang: value });
-  });
-
-  $("aiBaseUrl").addEventListener("change", async (e) => {
-    await flushAiExtraBodySave();
-    const value = e.target.value.trim();
-    const normalized = YTDS_SHARED.normalizeAiBaseUrl(value);
-    setKey("aiBaseUrl", normalized || value);
-    e.target.value = state.aiBaseUrl;
-    const [apiKey, extraBody] = await Promise.all([
-      loadCurrentAiApiKey(), loadCurrentAiExtraBody()
-    ]);
-    await updateActiveAiConfigProfile({
-      baseUrl: state.aiBaseUrl, apiKey, extraBody
-    });
-    refreshEngineStatus();
-  });
-  $("aiModel").addEventListener("change", async (e) => {
-    await flushAiExtraBodySave();
-    setKey("aiModel", e.target.value.trim());
-    const extraBody = await loadCurrentAiExtraBody();
-    await updateActiveAiConfigProfile({ model: state.aiModel, extraBody });
-    refreshEngineStatus();
-  });
-  $("aiApiKey").addEventListener("change", async (e) => {
-    if (await saveCurrentAiApiKey(e.target.value)) {
-      if (chrome.storage.session) {
-        await chrome.storage.session.remove(["ytdsAiStatus", "ytdsDeepSeekStatus"]).catch(() => {});
-      }
-      refreshEngineStatus();
-    }
-  });
-  $("toggleApiKey").addEventListener("click", () => {
-    const input = $("aiApiKey");
-    const showing = input.type === "text";
-    input.type = showing ? "password" : "text";
-    $("toggleApiKey").textContent = showing
-      ? t("showApiKey", "显示") : t("hideApiKey", "隐藏");
-  });
-  $("clearApiKey").addEventListener("click", async () => {
-    await saveCurrentAiApiKey("");
-    if (chrome.storage.session) await chrome.storage.session.remove(["ytdsAiStatus", "ytdsDeepSeekStatus"]).catch(() => {});
-    $("aiApiKey").value = "";
-    $("aiApiKey").type = "password";
-    $("toggleApiKey").textContent = t("showApiKey", "显示");
-    refreshEngineStatus();
-  });
-  $("aiExtraBody").addEventListener("input", (e) =>
-    scheduleAiExtraBodySave(e.currentTarget.value));
-  $("aiExtraBody").addEventListener("change", flushAiExtraBodySave);
-  $("aiExtraBody").addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      e.preventDefault();
-      flushAiExtraBodySave();
-    }
-  });
-  $("deepseekContextPast").addEventListener("change", async (e) => {
-    const value = YTDS_SHARED.normalizeAiContextCount(e.target.value, state.deepseekContextPast);
-    e.target.value = String(value);
-    setKey("deepseekContextPast", value);
-    await updateActiveAiConfigProfile({ contextPast: value });
-  });
-  $("deepseekContextFuture").addEventListener("change", async (e) => {
-    const value = YTDS_SHARED.normalizeAiContextCount(e.target.value, state.deepseekContextFuture);
-    e.target.value = String(value);
-    setKey("deepseekContextFuture", value);
-    await updateActiveAiConfigProfile({ contextFuture: value });
-  });
-  $("deepseekPrefetchBatches").addEventListener("change", async (e) => {
-    const value = YTDS_SHARED.normalizeDeepseekPrefetchBatches(e.target.value);
-    e.target.value = String(value);
-    setKey("deepseekPrefetchBatches", value);
-    await updateActiveAiConfigProfile({ prefetchBatches: value });
-  });
-  $("aiRequestItems").addEventListener("change", async (e) => {
-    const value = YTDS_SHARED.normalizeAiRequestItems(e.target.value, state.aiRequestItems);
-    e.target.value = String(value);
-    setKey("aiRequestItems", value);
-    await updateActiveAiConfigProfile({ requestItems: value });
-  });
+  wireAiConnectionControls();
 
   $("debugEnabled").addEventListener("change", (e) => {
     setKey("debugEnabled", e.target.checked);
@@ -823,12 +705,12 @@ chrome.storage.sync.get(null, (got) => {
   const normalizedBase = YTDS_SHARED.normalizeAiBaseUrl(state.aiBaseUrl);
   if (normalizedBase) state.aiBaseUrl = normalizedBase;
   state.aiModel = String(state.aiModel || "").trim();
-  state.deepseekContextPast =
-    YTDS_SHARED.normalizeAiContextCount(state.deepseekContextPast, DEFAULTS.deepseekContextPast);
-  state.deepseekContextFuture =
-    YTDS_SHARED.normalizeAiContextCount(state.deepseekContextFuture, DEFAULTS.deepseekContextFuture);
-  state.deepseekPrefetchBatches =
-    YTDS_SHARED.normalizeDeepseekPrefetchBatches(state.deepseekPrefetchBatches);
+  state.aiContextPast =
+    YTDS_SHARED.normalizeAiContextCount(state.aiContextPast, DEFAULTS.aiContextPast);
+  state.aiContextFuture =
+    YTDS_SHARED.normalizeAiContextCount(state.aiContextFuture, DEFAULTS.aiContextFuture);
+  state.aiPrefetchBatches =
+    YTDS_SHARED.normalizeAiPrefetchBatches(state.aiPrefetchBatches);
   state.aiRequestItems =
     YTDS_SHARED.normalizeAiRequestItems(state.aiRequestItems, DEFAULTS.aiRequestItems);
   chrome.storage.local.get({

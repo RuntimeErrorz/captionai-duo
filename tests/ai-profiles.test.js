@@ -20,9 +20,9 @@ function profileContext(localSeed = {}) {
       aiBaseUrl: "https://api.deepseek.com",
       aiModel: "deepseek-v4-flash",
       aiExtraBodyRevision: 4,
-      deepseekContextPast: 1,
-      deepseekContextFuture: 1,
-      deepseekPrefetchBatches: 2
+      aiContextPast: 1,
+      aiContextFuture: 1,
+      aiPrefetchBatches: 2
     },
     chrome: {
       storage: {
@@ -99,14 +99,14 @@ test("switching a profile materializes secrets locally and emits one unified rev
   assert.equal(local.aiExtraBodyProfiles[requestScope], '{"reasoning_effort":"low"}');
   assert.equal(syncWrites.length, 1);
   assert.deepEqual(Object.keys(syncWrites[0]).sort(), [
-    "aiBaseUrl", "aiExtraBodyRevision", "aiModel", "aiRequestItems", "deepseekContextFuture",
-    "deepseekContextPast", "deepseekPrefetchBatches", "targetLang"
+    "aiBaseUrl", "aiContextFuture", "aiContextPast", "aiExtraBodyRevision", "aiModel",
+    "aiPrefetchBatches", "aiRequestItems", "targetLang"
   ]);
   assert.equal(syncWrites[0].aiExtraBodyRevision, 5);
   assert.equal(syncWrites[0].targetLang, "ko");
-  assert.equal(syncWrites[0].deepseekContextPast, 3);
-  assert.equal(syncWrites[0].deepseekContextFuture, 4);
-  assert.equal(syncWrites[0].deepseekPrefetchBatches, 5);
+  assert.equal(syncWrites[0].aiContextPast, 3);
+  assert.equal(syncWrites[0].aiContextFuture, 4);
+  assert.equal(syncWrites[0].aiPrefetchBatches, 5);
   assert.equal(JSON.stringify(syncWrites[0]).includes("gemini-secret"), false);
 });
 

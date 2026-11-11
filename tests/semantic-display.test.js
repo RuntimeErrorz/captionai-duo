@@ -243,7 +243,7 @@ test("playback clears a completed caption during a long semantic cue hole", () =
         { start: 3241359, end: 3244359, hardAfter: false },
         { start: 3295359, end: 3301720, hardAfter: false }
       ],
-      deepseekUnitCache: new Map([
+      semanticUnitCache: new Map([
         ["video g0", "semantic-same"],
         ["video g1", "semantic-same"]
       ]),

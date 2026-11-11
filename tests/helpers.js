@@ -5,11 +5,13 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const SHARED_FILES = Object.freeze([
+  "shared/youtube-url.js",
   "shared/core.js",
   "shared/diagnostics.js",
   "shared/cues.js",
   "shared/jsonl.js",
   "shared/translation.js",
+  "shared/alignment.js",
   "shared/display.js",
   "shared/stream.js",
   "shared.js"
@@ -24,6 +26,7 @@ const CONTENT_FILES = Object.freeze([
   "content/cue-playback.js",
   "content/display.js",
   "content/semantic-requests.js",
+  "content/semantic-results.js",
   "content/semantic.js",
   "content/cue-indicator.js",
   "content/export.js",
@@ -42,7 +45,14 @@ const BACKGROUND_FILES = Object.freeze([
 const POPUP_FILES = Object.freeze([
   "popup/ai-profiles.js",
   "popup/config-transfer.js",
+  "popup/ai-controls.js",
   "popup.js"
+]);
+
+// The MAIN world shares the page's JS realm; it loads only what inject/* uses.
+const MAIN_SHARED_FILES = Object.freeze([
+  "shared/youtube-url.js",
+  "shared.js"
 ]);
 
 const MAIN_FILES = Object.freeze([
@@ -78,6 +88,7 @@ function loadSharedGlobal() {
 
 module.exports = {
   SHARED_FILES,
+  MAIN_SHARED_FILES,
   MAIN_FILES,
   CONTENT_FILES,
   BACKGROUND_FILES,

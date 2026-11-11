@@ -15,4 +15,5 @@
 - Treat stored and incoming diagnostic entries as untrusted legacy data. Apply
   shared recursive redaction before persistence and again when exporting.
 - Any new external origin requires explicit user authorization and a permission
-  review; do not broaden manifest host permissions as a convenience.
+  review; do not broaden manifest host permissions as a convenience. API
+  origins are optional permissions requested per origin from the popup.

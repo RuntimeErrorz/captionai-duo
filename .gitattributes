@@ -1,3 +1,7 @@
+# Normalize every text file to LF in the repository and the working tree.
+* text=auto eol=lf
+*.png binary
+
 # Keep README screenshots out of the packaged extension zip (git archive)
 docs/ export-ignore
 docs/** export-ignore

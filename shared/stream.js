@@ -20,7 +20,7 @@
     }));
   }
 
-  function deepSeekSseEvents(value, flush) {
+  function aiSseEvents(value, flush) {
     const input = String(value || "");
     const events = [];
     let cursor = 0;
@@ -51,7 +51,6 @@
 
   Object.assign(internal, {
     causalCueGroups,
-    deepSeekSseEvents,
-    aiSseEvents: deepSeekSseEvents
+    aiSseEvents
   });
 })();

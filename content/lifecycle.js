@@ -17,8 +17,8 @@ function teardownAll(reason) {
   captionSession.sentGroups = null;
   captionSession.cueToGroup = null;
   captionSession.cueToGroups = null;
-  captionSession.deepseekBatchWindows = [];
-  captionSession.deepseekGroupToBatch = [];
+  captionSession.semanticBatchWindows = [];
+  captionSession.semanticGroupToBatch = [];
   captionSession.cueTrackKind = "";
   captionSession.cueSourceLang = "";
   captionSession.cueTrackId = "";
@@ -88,18 +88,38 @@ function onNav() {
 // single listener instances (added once; never accumulate)
 window.addEventListener("yt-navigate-finish", onNav, true);
 window.addEventListener("message", onInjectMessage, false);
-// Recover identity when restored tabs delay yt-navigate-finish.
-if (typeof setInterval === "function") captionSession.navigationPollTimer = setInterval(() => {
+// Recover identity when restored tabs delay yt-navigate-finish. A hidden tab
+// cannot show captions, so the poll pauses there and re-checks on return;
+// yt-navigate-finish still drives real navigations in the background.
+function checkNavigationIdentity() {
   const nextVideoId = videoIdFromLocation();
   if (nextVideoId !== captionSession.currentVideoId) onNav();
-}, 500);
+}
+
+function startNavigationPoll() {
+  if (captionSession.navigationPollTimer || typeof setInterval !== "function") return;
+  captionSession.navigationPollTimer = setInterval(checkNavigationIdentity, 500);
+}
+
+function stopNavigationPoll() {
+  if (!captionSession.navigationPollTimer) return;
+  clearInterval(captionSession.navigationPollTimer);
+  captionSession.navigationPollTimer = null;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { stopNavigationPoll(); return; }
+  checkNavigationIdentity();
+  startNavigationPoll();
+}, false);
+if (!document.hidden) startNavigationPoll();
 document.addEventListener("fullscreenchange", () => {
   if (overlay) styleOverlay();
-  scheduleDeepseekDisplayReflow(true);
+  scheduleAiDisplayReflow(true);
 }, false);
-window.addEventListener("resize", () => scheduleDeepseekDisplayReflow(true), false);
+window.addEventListener("resize", () => scheduleAiDisplayReflow(true), false);
 if (document.fonts && typeof document.fonts.addEventListener === "function") {
-  document.fonts.addEventListener("loadingdone", () => scheduleDeepseekDisplayReflow(true));
+  document.fonts.addEventListener("loadingdone", () => scheduleAiDisplayReflow(true));
 }
 
 // ---- boot ----------------------------------------------------------------

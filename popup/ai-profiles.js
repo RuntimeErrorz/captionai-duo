@@ -42,13 +42,13 @@ function normalizeAiConfigProfile(value, index) {
     apiKey: String(raw.apiKey || "").trim(),
     extraBody: parsedExtra.ok ? parsedExtra.canonical : "{}",
     contextPast: YTDS_SHARED.normalizeAiContextCount(
-      raw.contextPast, state.deepseekContextPast
+      raw.contextPast, state.aiContextPast
     ),
     contextFuture: YTDS_SHARED.normalizeAiContextCount(
-      raw.contextFuture, state.deepseekContextFuture
+      raw.contextFuture, state.aiContextFuture
     ),
-    prefetchBatches: YTDS_SHARED.normalizeDeepseekPrefetchBatches(
-      raw.prefetchBatches == null ? state.deepseekPrefetchBatches : raw.prefetchBatches
+    prefetchBatches: YTDS_SHARED.normalizeAiPrefetchBatches(
+      raw.prefetchBatches == null ? state.aiPrefetchBatches : raw.prefetchBatches
     ),
     requestItems: YTDS_SHARED.normalizeAiRequestItems(
       raw.requestItems == null ? state.aiRequestItems : raw.requestItems
@@ -365,18 +365,18 @@ async function materializeAiConfigProfile(profile, forceRevision) {
   const changed = state.targetLang !== profile.targetLang ||
     state.aiBaseUrl !== profile.baseUrl ||
     state.aiModel !== profile.model ||
-    state.deepseekContextPast !== profile.contextPast ||
-    state.deepseekContextFuture !== profile.contextFuture ||
-    state.deepseekPrefetchBatches !== profile.prefetchBatches ||
+    state.aiContextPast !== profile.contextPast ||
+    state.aiContextFuture !== profile.contextFuture ||
+    state.aiPrefetchBatches !== profile.prefetchBatches ||
     state.aiRequestItems !== profile.requestItems;
   const materialChanged = previousKey !== profile.apiKey || !previousExtra.ok ||
     previousExtra.canonical !== profile.extraBody;
   state.targetLang = profile.targetLang;
   state.aiBaseUrl = profile.baseUrl;
   state.aiModel = profile.model;
-  state.deepseekContextPast = profile.contextPast;
-  state.deepseekContextFuture = profile.contextFuture;
-  state.deepseekPrefetchBatches = profile.prefetchBatches;
+  state.aiContextPast = profile.contextPast;
+  state.aiContextFuture = profile.contextFuture;
+  state.aiPrefetchBatches = profile.prefetchBatches;
   state.aiRequestItems = profile.requestItems;
   if (changed || materialChanged || forceRevision) {
     state.aiExtraBodyRevision = Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1;
@@ -384,9 +384,9 @@ async function materializeAiConfigProfile(profile, forceRevision) {
       targetLang: state.targetLang,
       aiBaseUrl: state.aiBaseUrl,
       aiModel: state.aiModel,
-      deepseekContextPast: state.deepseekContextPast,
-      deepseekContextFuture: state.deepseekContextFuture,
-      deepseekPrefetchBatches: state.deepseekPrefetchBatches,
+      aiContextPast: state.aiContextPast,
+      aiContextFuture: state.aiContextFuture,
+      aiPrefetchBatches: state.aiPrefetchBatches,
       aiRequestItems: state.aiRequestItems,
       aiExtraBodyRevision: state.aiExtraBodyRevision
     });
@@ -414,9 +414,9 @@ async function initializeAiConfigProfiles(localValue) {
       model: state.aiModel,
       apiKey: keys[credentialScope] || "",
       extraBody: extras[requestScope] || "{}",
-      contextPast: state.deepseekContextPast,
-      contextFuture: state.deepseekContextFuture,
-      prefetchBatches: state.deepseekPrefetchBatches,
+      contextPast: state.aiContextPast,
+      contextFuture: state.aiContextFuture,
+      prefetchBatches: state.aiPrefetchBatches,
       requestItems: state.aiRequestItems
     }, 0));
   }

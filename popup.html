@@ -121,16 +121,16 @@
 
         <div class="compact-grid grid-2">
           <div class="field">
-            <label for="deepseekContextPast" data-i18n="aiContextPast">上文条数</label>
-            <input id="deepseekContextPast" type="number" min="0" max="20" step="1" inputmode="numeric" />
+            <label for="aiContextPast" data-i18n="aiContextPast">上文条数</label>
+            <input id="aiContextPast" type="number" min="0" max="20" step="1" inputmode="numeric" />
           </div>
           <div class="field">
-            <label for="deepseekContextFuture" data-i18n="aiContextFuture">下文条数</label>
-            <input id="deepseekContextFuture" type="number" min="0" max="20" step="1" inputmode="numeric" />
+            <label for="aiContextFuture" data-i18n="aiContextFuture">下文条数</label>
+            <input id="aiContextFuture" type="number" min="0" max="20" step="1" inputmode="numeric" />
           </div>
           <div class="field">
-            <label for="deepseekPrefetchBatches" data-i18n="aiPrefetchBatches">预加载批数</label>
-            <input id="deepseekPrefetchBatches" type="number" min="0" max="10" step="1" inputmode="numeric" />
+            <label for="aiPrefetchBatches" data-i18n="aiPrefetchBatches">预加载批数</label>
+            <input id="aiPrefetchBatches" type="number" min="0" max="10" step="1" inputmode="numeric" />
           </div>
           <div class="field">
             <label for="aiRequestItems" data-i18n="aiRequestItems">单次请求条数</label>
@@ -147,6 +147,7 @@
         </div>
       </div>
       <p class="engine-msg" id="aiStatus" role="status" aria-live="polite" hidden></p>
+      <button id="aiGrantPermission" type="button" class="grant-btn" data-i18n="aiGrantPermission" hidden>授权访问</button>
     </section>
 
     <!-- ============================ Token usage ============================ -->
@@ -309,18 +310,22 @@
     <button id="reset" type="button" class="danger" data-i18n="resetAll">重置</button>
     <input id="configFileInput" class="visually-hidden" type="file"
            accept="application/json,.json" tabindex="-1" aria-hidden="true" />
+    <p class="export-msg config-msg" id="configMsg" role="status" aria-live="polite" hidden></p>
   </footer>
 
+  <script src="shared/youtube-url.js"></script>
   <script src="shared/core.js"></script>
   <script src="shared/diagnostics.js"></script>
   <script src="shared/cues.js"></script>
   <script src="shared/jsonl.js"></script>
   <script src="shared/translation.js"></script>
+  <script src="shared/alignment.js"></script>
   <script src="shared/display.js"></script>
   <script src="shared/stream.js"></script>
   <script src="shared.js"></script>
   <script src="popup/ai-profiles.js"></script>
   <script src="popup/config-transfer.js"></script>
+  <script src="popup/ai-controls.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

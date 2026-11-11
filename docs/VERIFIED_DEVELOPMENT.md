@@ -50,6 +50,10 @@ Perform the relevant checks whenever behavior crosses the browser boundary:
   and within the configured line budget.
 - Switch configuration profiles, including two profiles sharing one Base URL;
   exactly the selected model/key/parameters apply and only one retranslation starts.
+- Set a new non-DeepSeek Base URL: Chrome asks for that origin only; after
+  granting (even if the popup closed), the open video retries translation. With
+  the grant revoked in `chrome://extensions`, captions show
+  `AI_HOST_PERMISSION_MISSING` and the popup offers **Allow access**.
 - Exercise one successful stream, one usage-only final event, one timeout, and
   one cancellation. Token totals and diagnostics must reflect the real outcome.
 - Inspect extension storage and copied debug logs: no API key or complete secret

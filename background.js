@@ -1,10 +1,12 @@
 // MV3 service-worker entry: deterministic module order, no bundler required.
 importScripts(
+  "shared/youtube-url.js",
   "shared/core.js",
   "shared/diagnostics.js",
   "shared/cues.js",
   "shared/jsonl.js",
   "shared/translation.js",
+  "shared/alignment.js",
   "shared/display.js",
   "shared/stream.js",
   "shared.js",

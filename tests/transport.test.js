@@ -10,7 +10,8 @@ const { loadShared } = require("./helpers");
 const root = path.resolve(__dirname, "..");
 const httpSource = fs.readFileSync(path.join(root, "background/http.js"), "utf8");
 const semanticSource = [
-  "content/semantic-policy.js", "content/semantic-requests.js", "content/semantic.js",
+  "content/semantic-policy.js", "content/semantic-requests.js",
+  "content/semantic-results.js", "content/semantic.js",
   "content/cue-indicator.js"
 ].map((file) =>
   fs.readFileSync(path.join(root, file), "utf8")).join("\n");
@@ -38,7 +39,7 @@ function loadHttpContext(fetchImpl, overrides = {}) {
     clearTimeout,
     fetch: fetchImpl,
     YTDS_SHARED: loadShared(),
-    DEEPSEEK_STREAM_COMPLETION_GRACE_MS: 750
+    AI_STREAM_COMPLETION_GRACE_MS: 750
   };
   Object.assign(context, overrides);
   vm.createContext(context);
@@ -145,45 +146,45 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       cueToGroups: [[0]],
       sentGroups: groups,
       semanticCommitRegions: [{ start: 0, end: limitEnd }],
-      deepseekCommitRegions: [{ start: 0, end: limitEnd }],
+      semanticCommitRegions: [{ start: 0, end: limitEnd }],
       semanticGroupToCommitRegion: new Array(groupCount).fill(0),
-      deepseekGroupToCommitRegion: new Array(groupCount).fill(0),
+      semanticGroupToCommitRegion: new Array(groupCount).fill(0),
       semanticCommitStateByRegion: new Map([[0, state]]),
-      deepseekCommitStateByRegion: new Map([[0, state]]),
+      semanticCommitStateByRegion: new Map([[0, state]]),
       semanticGroupToBatch: batchSize
         ? groups.map((_group, id) => Math.floor(id / batchSize))
         : new Array(groupCount).fill(0),
-      deepseekGroupToBatch: batchSize
+      semanticGroupToBatch: batchSize
         ? groups.map((_group, id) => Math.floor(id / batchSize))
         : new Array(groupCount).fill(0),
       semanticBatchWindows: batchWindows,
-      deepseekBatchWindows: batchWindows,
+      semanticBatchWindows: batchWindows,
       semanticRequestMeta: new Map(),
-      deepseekRequestMeta: new Map(),
+      semanticRequestMeta: new Map(),
       transInflight: new Set(),
       semanticRetryCounts: new Map([[retryKey, retryAttempt]]),
-      deepseekRetryCounts: new Map([[retryKey, retryAttempt]]),
+      semanticRetryCounts: new Map([[retryKey, retryAttempt]]),
       semanticExhaustedRegions: new Map(),
-      deepseekExhaustedRegions: new Map(),
+      semanticExhaustedRegions: new Map(),
       semanticVisibleErrors: new Map(),
-      deepseekVisibleErrors: new Map(),
+      semanticVisibleErrors: new Map(),
       transCache: new Map(),
       semanticUnitCache: new Map(),
-      deepseekUnitCache: new Map(),
+      semanticUnitCache: new Map(),
       semanticSourceCache: new Map(),
-      deepseekSourceCache: new Map(),
+      semanticSourceCache: new Map(),
       semanticAlignedChunksCache: new Map(),
-      deepseekAlignedChunksCache: new Map(),
+      semanticAlignedChunksCache: new Map(),
       semanticDisplayCache: new Map(),
-      deepseekDisplayCache: new Map(),
+      semanticDisplayCache: new Map(),
       semanticRequestSerial: 0,
-      deepseekRequestSerial: 0,
+      semanticRequestSerial: 0,
       semanticFocusGeneration: 0,
-      deepseekFocusGeneration: 0,
+      semanticFocusGeneration: 0,
       semanticFocusedBatchIndex: -1,
-      deepseekFocusedBatchIndex: -1,
+      semanticFocusedBatchIndex: -1,
       semanticSeekSettling: false,
-      deepseekSeekSettling: false,
+      semanticSeekSettling: false,
       semanticLayoutWidth: 0,
       pendingTimer: null,
       pendingIndicatorKey: "",
@@ -195,15 +196,15 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       aiBaseUrl: options.aiBaseUrl || "https://api.deepseek.com",
       aiModel: options.aiModel || "test-model",
       ...(options.prefetchBatches == null
-        ? {} : { deepseekPrefetchBatches: options.prefetchBatches }),
+        ? {} : { aiPrefetchBatches: options.prefetchBatches }),
       ...(options.aiRequestItems == null
         ? {} : { aiRequestItems: options.aiRequestItems })
     },
     SEMANTIC_CORE_ITEMS: 16,
-    DEEPSEEK_CORE_ITEMS: 16,
-    DEEPSEEK_INITIAL_REQUEST_ITEMS: 48,
-    DEEPSEEK_REQUEST_ITEMS: 80,
-    DEEPSEEK_URGENT_REQUEST_ITEMS: 96,
+    AI_CORE_ITEMS: 16,
+    AI_INITIAL_REQUEST_ITEMS: 48,
+    AI_REQUEST_ITEMS: 80,
+    AI_URGENT_REQUEST_ITEMS: 96,
     DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS: 64,
     DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
     COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
@@ -211,32 +212,32 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     GEMINI_REQUEST_ITEMS: 320,
     GEMINI_MAX_REQUEST_ITEMS: 320,
     GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
-    DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_CURRENT_CHARS: 18000,
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
+    AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_CURRENT_CHARS: 18000,
     SEMANTIC_COMMIT_GUARD_ITEMS: 16,
-    DEEPSEEK_COMMIT_GUARD_ITEMS: 16,
+    AI_COMMIT_GUARD_ITEMS: 16,
     SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
-    DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-    DEEPSEEK_SEEK_BACKTRACK_ITEMS: 64,
-    DEEPSEEK_SEEK_LEFT_GUARD_ITEMS: 16,
-    DEEPSEEK_FAST_PREFETCH_BATCHES: 6,
-    DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES: 8,
-    DEEPSEEK_CONTEXT_GROUPS: 20,
-    DEEPSEEK_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
-    DEEPSEEK_RATE_RETRY_LIMIT: 6,
+    AI_MIN_COMMIT_RUNWAY_ITEMS: 32,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_FAST_TARGET_TAIL_ITEMS: 192,
+    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_SEEK_BACKTRACK_ITEMS: 64,
+    AI_SEEK_LEFT_GUARD_ITEMS: 16,
+    AI_FAST_PREFETCH_BATCHES: 6,
+    AI_HIGH_SPEED_PREFETCH_BATCHES: 8,
+    AI_CONTEXT_GROUPS: 20,
+    AI_COLD_RETRY_DELAYS_MS: Object.freeze([400, 1200, 2500]),
+    AI_RATE_RETRY_LIMIT: 6,
     emitDebug: (event, data) => debug.push({ event, data }),
     emitCaptionStateTransition: (machine, transition, data) =>
       debug.push({ event: "state-transition", data: { machine, transition, ...data } }),
     mergeCueTexts: (items) => items.map((item) => item.text).join(" "),
-    cacheDeepseekDisplayNeighborhood: () => {},
+    cacheAiDisplayNeighborhood: () => {},
     semanticDisplayWidth: () => 1000,
-    repaintActiveDeepseekTranslation: () => {},
-    deepseekTranslationErrorText: (value) => {
+    repaintActiveAiTranslation: () => {},
+    aiTranslationErrorText: (value) => {
       const details = loadShared().aiErrorDescriptor(value);
       return `Translation failed [${[details.code, details.providerCode].filter(Boolean).join(" / ")}]`;
     },
@@ -286,9 +287,9 @@ function loadPlaybackPrefetchHarness(options = {}) {
   });
   harness.context.settings.enabled = true;
   for (const [name, value] of Object.entries({
-    DEEPSEEK_MAX_PREFETCH_BATCHES: options.maxPrefetchBatches,
-    DEEPSEEK_FAST_PREFETCH_BATCHES: options.fastPrefetchBatches,
-    DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES: options.highSpeedPrefetchBatches
+    AI_MAX_PREFETCH_BATCHES: options.maxPrefetchBatches,
+    AI_FAST_PREFETCH_BATCHES: options.fastPrefetchBatches,
+    AI_HIGH_SPEED_PREFETCH_BATCHES: options.highSpeedPrefetchBatches
   })) {
     if (value != null) harness.context[name] = value;
   }
@@ -362,11 +363,11 @@ test("HTTP failures retain provider codes without exposing the provider body", a
   }), {
     chrome: { storage: { local: { get: async () => ({ aiApiKeys: {} }) } } },
     AI_NETWORK_TRACE_HEADER: "X-Test-Trace",
-    DEEPSEEK_MAX_ATTEMPTS: 3,
-    DEEPSEEK_TIMEOUT_FAST_MS: 500,
-    DEEPSEEK_TIMEOUT_THINKING_MS: 500,
-    DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS: 200,
-    DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS: 200,
+    AI_MAX_ATTEMPTS: 3,
+    AI_TIMEOUT_FAST_MS: 500,
+    AI_TIMEOUT_THINKING_MS: 500,
+    AI_CONNECT_TIMEOUT_PREFETCH_MS: 200,
+    AI_CONNECT_TIMEOUT_URGENT_MS: 200,
     aiNetworkAttemptTraceId: (_requestId, attempt) => `trace-${attempt}`
   });
   const aiRawCompletion = vm.runInContext("aiRawCompletion", context);
@@ -592,10 +593,10 @@ test("promoting a live prefetch reuses it instead of cancelling it", () => {
     Set,
     Date,
     captionSession: {
-      deepseekRequestMeta: new Map(),
+      semanticRequestMeta: new Map(),
       transInflight: new Set(),
-      deepseekFocusGeneration: 4,
-      deepseekRequestSerial: 10,
+      semanticFocusGeneration: 4,
+      semanticRequestSerial: 10,
       cueVideoId: "video"
     },
     sendRuntimeMessage: (message) => messages.push(message),
@@ -603,11 +604,11 @@ test("promoting a live prefetch reuses it instead of cancelling it", () => {
     emitCaptionStateTransition: () => {}
   };
   const existing = { requestId: "commit:4:10:1-80", urgent: false };
-  context.captionSession.deepseekRequestMeta.set("dsb:1", existing);
+  context.captionSession.semanticRequestMeta.set("dsb:1", existing);
   context.captionSession.transInflight.add("dsb:1");
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const begin = vm.runInContext("beginDeepseekRequest", context);
+  const begin = vm.runInContext("beginAiRequest", context);
   assert.equal(begin("dsb:1", "commit", 1, 80, true), "");
   assert.equal(existing.urgent, true);
   assert.equal(messages.length, 0);
@@ -627,21 +628,21 @@ test("nearby playback overrun defers reseeding until the live prefix commits", (
     Map,
     Set,
     captionSession: {
-      deepseekRequestMeta: new Map([["dsb:1", request]]),
+      semanticRequestMeta: new Map([["dsb:1", request]]),
       cueEpoch: 2,
-      deepseekFocusGeneration: 4
+      semanticFocusGeneration: 4
     },
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
-    DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_FAST_TARGET_TAIL_ITEMS: 192,
+    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => null,
     isCaptionSessionCurrent: (token) => token === sessionToken
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const canContinue = vm.runInContext("canContinueDeepseekInflight", context);
+  const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(canContinue(1, { cursor: 5793 }, 5873), true);
   assert.equal(canContinue(1, { cursor: 5793 }, 5921), false);
   request.focusGeneration = 3;
@@ -659,21 +660,21 @@ test("3x playback keeps a nearby live request instead of reseeding at the old ta
     Map,
     Set,
     captionSession: {
-      deepseekRequestMeta: new Map([["dsb:1", request]]),
+      semanticRequestMeta: new Map([["dsb:1", request]]),
       cueEpoch: 2,
-      deepseekFocusGeneration: 4
+      semanticFocusGeneration: 4
     },
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
-    DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_FAST_TARGET_TAIL_ITEMS: 192,
+    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === request.sessionToken
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const canContinue = vm.runInContext("canContinueDeepseekInflight", context);
+  const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(canContinue(1, { cursor: 5793 }, 6016), true);
   assert.equal(canContinue(1, { cursor: 5793 }, 6097), false);
 });
@@ -697,22 +698,22 @@ test("an accelerated target abandons stale prefetch after its range has been pas
     Set,
     Date,
     captionSession: {
-      deepseekRequestMeta: new Map([["dsb:1", request]]),
+      semanticRequestMeta: new Map([["dsb:1", request]]),
       cueEpoch: 2,
-      deepseekFocusGeneration: 4
+      semanticFocusGeneration: 4
     },
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
-    DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_FAST_TARGET_TAIL_ITEMS: 192,
+    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === sessionToken
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const isStale = vm.runInContext("deepseekRequestIsStaleForTarget", context);
-  const canContinue = vm.runInContext("canContinueDeepseekInflight", context);
+  const isStale = vm.runInContext("aiRequestIsStaleForTarget", context);
+  const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(isStale(request, 5873), true);
   assert.equal(canContinue(1, { cursor: 5793 }, 5873), false);
   request.progressTranslations.push({ id: "5793" });
@@ -746,21 +747,21 @@ test("a future request with a buffered safe prefix is not discarded as stale", (
     Set,
     Date,
     captionSession: {
-      deepseekRequestMeta: new Map([["dsp:1:5793", request]]),
+      semanticRequestMeta: new Map([["dsp:1:5793", request]]),
       cueEpoch: 2,
-      deepseekFocusGeneration: 4
+      semanticFocusGeneration: 4
     },
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
-    DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_FAST_TARGET_TAIL_ITEMS: 192,
+    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === sessionToken
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const isStale = vm.runInContext("deepseekRequestIsStaleForTarget", context);
+  const isStale = vm.runInContext("aiRequestIsStaleForTarget", context);
 
   assert.equal(isStale(request, 5873), false);
 });
@@ -776,15 +777,15 @@ test("an overlapping live prefetch remains the single writer after its start is 
     sessionToken, focusGeneration: 0, progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:0", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:0", request);
   harness.context.captionSession.transInflight.add("dsp:0:0");
   harness.state.cursor = 50;
-  const keep = vm.runInContext("deepseekPrefetchAtCursor", harness.context);
+  const keep = vm.runInContext("aiPrefetchAtCursor", harness.context);
 
   assert.equal(keep(0, 50), true);
   assert.equal(request.urgent, true);
   assert.deepEqual(harness.messages, []);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsp:0:0"), true);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.has("dsp:0:0"), true);
 });
 
 test("an urgent target cancels a stale same-region speculative writer", () => {
@@ -808,19 +809,19 @@ test("an urgent target cancels a stale same-region speculative writer", () => {
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:0", stale);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:0", stale);
   harness.context.captionSession.transInflight.add("dsp:0:0");
   harness.context.sendRuntimeMessage = (message, callback) => {
     harness.messages.push(message);
     if (typeof callback === "function") callback({ ok: true });
   };
 
-  const request = vm.runInContext("deepseekRequestBatch", harness.context);
+  const request = vm.runInContext("aiRequestBatch", harness.context);
   request(60, true, true);
 
-  assert.equal(harness.messages[0].type, "cancelDeepSeekRequest");
+  assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[0].requestId, stale.requestId);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsp:0:0"), false);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.has("dsp:0:0"), false);
   assert.equal(harness.context.captionSession.transInflight.has("dsp:0:0"), false);
   assert.equal(harness.messages.some((message) => message.type === "translateBatch"), true);
   assert.equal(harness.debug.some((entry) =>
@@ -848,17 +849,17 @@ test("accelerated playback rebuilds a live urgent request after its safe cursor 
     Set,
     Date,
     captionSession: {
-      deepseekRequestMeta: new Map([["dsb:1", request]]),
+      semanticRequestMeta: new Map([["dsb:1", request]]),
       cueEpoch: 2,
-      deepseekFocusGeneration: 4
+      semanticFocusGeneration: 4
     },
     getVideo: () => ({ playbackRate: 3 }),
     isCaptionSessionCurrent: (token) => token === sessionToken
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const isLagging = vm.runInContext("deepseekRequestIsPlaybackLagging", context);
-  const canContinue = vm.runInContext("canContinueDeepseekInflight", context);
+  const isLagging = vm.runInContext("aiRequestIsPlaybackLagging", context);
+  const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(isLagging(request, { cursor: 96 }, 128), true);
   assert.equal(canContinue(1, { cursor: 96 }, 128), false);
   request.startedAt = Date.now() - 4000;
@@ -899,17 +900,17 @@ test("Gemini playback lag preserves full startup grace and accounts for cached t
       aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
       aiModel: "gemini-2.5-flash"
     },
-    DEEPSEEK_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
-    DEEPSEEK_PLAYBACK_PROGRESS_GRACE_MS: 4000,
-    DEEPSEEK_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
-    DEEPSEEK_PLAYBACK_STARTUP_GRACE_MS: 6000,
+    AI_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
+    AI_PLAYBACK_PROGRESS_GRACE_MS: 4000,
+    AI_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
+    AI_PLAYBACK_STARTUP_GRACE_MS: 6000,
     GEMINI_PLAYBACK_STARTUP_GRACE_MS: 14000
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
   const groupKey = context.groupKey;
   context.captionSession.transCache.set(groupKey(128), "cached translation");
-  const isLagging = vm.runInContext("deepseekRequestIsPlaybackLagging", context);
+  const isLagging = vm.runInContext("aiRequestIsPlaybackLagging", context);
 
   // At 4000ms with rate 2.6, Gemini has 14000ms startup grace so it is not lagging yet:
   assert.equal(isLagging(request, { cursor: 0 }, 100), false);
@@ -927,7 +928,7 @@ test("Gemini playback lag preserves full startup grace and accounts for cached t
   assert.equal(isLagging(request, { cursor: 0 }, 100), true);
 });
 
-test("reseedDeepseekCommitState advances past already cached items", () => {
+test("reseedAiCommitState advances past already cached items", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 160, targetThrough: 128, urgentTarget: 128, playbackRate: 1
   });
@@ -935,7 +936,7 @@ test("reseedDeepseekCommitState advances past already cached items", () => {
   // Simulate item 100 and 101 being already cached
   harness.context.captionSession.transCache.set(groupKey(100), "already translated");
   harness.context.captionSession.transCache.set(groupKey(101), "already translated");
-  const reseed = vm.runInContext("reseedDeepseekCommitState", harness.context);
+  const reseed = vm.runInContext("reseedAiCommitState", harness.context);
 
   // Reseeding with targetGroup 100 should advance effectiveTarget to 102
   const state = reseed(0, 100);
@@ -961,17 +962,17 @@ test("playback-lag reseed cancels the old urgent writer before rebuilding", () =
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", oldRequest);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", oldRequest);
   harness.context.captionSession.transInflight.add("dsb:0");
   harness.context.sendRuntimeMessage = (message, callback) => {
     harness.messages.push(message);
     return true;
   };
 
-  const request = vm.runInContext("deepseekRequestBatch", harness.context);
+  const request = vm.runInContext("aiRequestBatch", harness.context);
   request(80, true, true);
 
-  assert.equal(harness.messages[0].type, "cancelDeepSeekRequest");
+  assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[0].requestId, oldRequest.requestId);
   assert.equal(harness.messages[1].type, "translateBatch");
   assert.equal(harness.messages[1].requestStart, 56);
@@ -1019,24 +1020,24 @@ test("playback-lag reseed preserves a valid future runway", () => {
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", stalled);
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:48", future);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", stalled);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:48", future);
   harness.context.captionSession.transInflight.add("dsb:0");
   harness.context.captionSession.transInflight.add("dsp:0:48");
   harness.context.sendRuntimeMessage = (message, callback) => {
     harness.messages.push(message);
-    if (message.type === "cancelDeepSeekRequest" && typeof callback === "function") {
+    if (message.type === "cancelAiTranslationRequest" && typeof callback === "function") {
       callback({ ok: true });
     }
     return true;
   };
 
-  vm.runInContext("deepseekRequestBatch(100, true, true)", harness.context);
+  vm.runInContext("aiRequestBatch(100, true, true)", harness.context);
 
-  assert.equal(harness.messages[0].type, "cancelDeepSeekRequest");
+  assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[0].requestId, stalled.requestId);
   assert.equal(harness.messages.some((message) => message.requestId === future.requestId), false);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.get("dsp:0:48"), future);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.get("dsp:0:48"), future);
   assert.equal(future.urgent, true);
   // The preserved future request already covers the reseeded cursor, so it
   // becomes the single visible writer instead of creating a duplicate call.
@@ -1056,7 +1057,7 @@ test("stale prefetch is cancelled before an urgent request is rebuilt", () => {
       callback({ ok: true, translations: giantSemanticResponse(false), deferredIds: [] });
     }
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", {
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", {
     requestId: "commit:0:1:0-47",
     requestEnd: 47,
     startedAt: Date.now() - 3000,
@@ -1070,10 +1071,10 @@ test("stale prefetch is cancelled before an urgent request is rebuilt", () => {
   });
   harness.context.captionSession.transInflight.add("dsb:0");
 
-  const request = vm.runInContext("deepseekRequestBatch", harness.context);
+  const request = vm.runInContext("aiRequestBatch", harness.context);
   request(60, true, true);
 
-  assert.equal(harness.messages[0].type, "cancelDeepSeekRequest");
+  assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[1].type, "translateBatch");
   assert.equal(harness.messages[1].urgent, true);
   assert.equal(harness.messages[1].items.length, 48);
@@ -1093,22 +1094,22 @@ test("2x playback gets the intermediate semantic runway", () => {
     Map,
     Set,
     captionSession: {
-      deepseekRequestMeta: new Map([["dsb:1", request]]),
+      semanticRequestMeta: new Map([["dsb:1", request]]),
       cueEpoch: 2,
-      deepseekFocusGeneration: 4
+      semanticFocusGeneration: 4
     },
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_FAST_TARGET_TAIL_ITEMS: 192,
-    DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_FAST_TARGET_TAIL_ITEMS: 192,
+    AI_HIGH_SPEED_TARGET_TAIL_ITEMS: 224,
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
     getVideo: () => ({ playbackRate: 2 }),
     isCaptionSessionCurrent: (token) => token === request.sessionToken
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
-  const tailItems = vm.runInContext("deepseekUrgentTargetTailItems", context);
-  const canContinue = vm.runInContext("canContinueDeepseekInflight", context);
+  const tailItems = vm.runInContext("aiUrgentTargetTailItems", context);
+  const canContinue = vm.runInContext("canContinueAiInflight", context);
   assert.equal(tailItems(), 192);
   assert.equal(canContinue(1, { cursor: 5793 }, 6064), true);
   assert.equal(canContinue(1, { cursor: 5793 }, 6065), false);
@@ -1116,12 +1117,12 @@ test("2x playback gets the intermediate semantic runway", () => {
 
 test("a maximum-window mega-unit commits through its model-aligned chunks", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 2);
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
 
   assert.equal(harness.state.cursor, 120);
   assert.equal(harness.context.captionSession.transCache.get("video g10"), "分段1");
-  assert.equal(harness.context.captionSession.deepseekRetryCounts.has(harness.retryKey), false);
+  assert.equal(harness.context.captionSession.semanticRetryCounts.has(harness.retryKey), false);
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-aligned-chunk-recovery" && entry.data.nextCursor === 120
   ), true);
@@ -1133,9 +1134,9 @@ test("malformed JSONL falls back to a bounded prefix and exposes the suffix", as
   const context = {
     YTDS_SHARED: loadShared(),
     MAX_PROMPT_SOURCE_CHARS: 28000,
-    DEEPSEEK_STREAM_COMPLETION_GRACE_MS: 750,
+    AI_STREAM_COMPLETION_GRACE_MS: 750,
     AI_PROMPT_CACHE_VERSION: "test",
-    DEEPSEEK_BATCH_INFLIGHT: new Map(),
+    AI_BATCH_INFLIGHT: new Map(),
     getAiConfig: async () => ({
       model: "model", baseUrl: "https://api.example.test", endpointKind: "compatible",
       extraBody: {}, contextPast: 0, contextFuture: 0
@@ -1164,7 +1165,7 @@ test("malformed JSONL falls back to a bounded prefix and exposes the suffix", as
     id: String(id), startMs: id * 200, endMs: id * 200 + 150,
     pauseAfterMs: 0, softAfter: false, hardAfter: false, text: "s"
   }));
-  const result = await context.deepseekTranslateBatch(
+  const result = await context.aiTranslateBatch(
     items, "zh-CN", "en", [], [], false, "test-scope", null,
     { debug: false, requestId: "test-fallback", urgent: true }
   );
@@ -1176,7 +1177,7 @@ test("malformed JSONL falls back to a bounded prefix and exposes the suffix", as
     id: String(id), startMs: id * 1500, endMs: id * 1500 + 1400,
     text: "a deliberately long subtitle atom that consumes the source budget"
   }));
-  assert.equal(context.deepseekFallbackPrefixItems(longItems).length, 12);
+  assert.equal(context.aiFallbackPrefixItems(longItems).length, 12);
 });
 
 test("urgent and speculative lanes share one exact in-flight provider request", async () => {
@@ -1187,9 +1188,9 @@ test("urgent and speculative lanes share one exact in-flight provider request", 
     Array, Date, Map, Math, Number, Object, Promise, Set, String,
     YTDS_SHARED: loadShared(),
     MAX_PROMPT_SOURCE_CHARS: 28000,
-    DEEPSEEK_STREAM_COMPLETION_GRACE_MS: 750,
+    AI_STREAM_COMPLETION_GRACE_MS: 750,
     AI_PROMPT_CACHE_VERSION: "test",
-    DEEPSEEK_BATCH_INFLIGHT: new Map(),
+    AI_BATCH_INFLIGHT: new Map(),
     getAiConfig: async () => ({
       model: "model", baseUrl: "https://api.example.test", endpointKind: "deepseek",
       extraBody: {}, contextPast: 0, contextFuture: 0
@@ -1212,7 +1213,7 @@ test("urgent and speculative lanes share one exact in-flight provider request", 
   };
   vm.createContext(context);
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
-  const translate = vm.runInContext("deepseekTranslateBatch", context);
+  const translate = vm.runInContext("aiTranslateBatch", context);
   const items = [{
     id: "0", cueId: "0", startMs: 0, endMs: 500, pauseAfterMs: 0,
     softAfter: false, hardAfter: false, text: "source"
@@ -1235,7 +1236,7 @@ test("a guard-touching unit expands directly to the maximum recovery window", as
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 80, targetThrough: 40, urgentTarget: 40
   });
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1252,7 +1253,7 @@ test("3x urgent playback keeps the visible request short while runway prefetch f
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 80, targetThrough: 40, urgentTarget: 80, playbackRate: 3
   });
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1266,7 +1267,7 @@ test("urgent giant units wait for a full runway before aligned-chunk recovery", 
   const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 2, {
     windowItems: 48, targetThrough: 40, urgentTarget: 40, playbackRate: 3
   });
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1296,8 +1297,8 @@ test("urgent streamed progress recovers aligned chunks before the final response
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", request);
-  const handle = vm.runInContext("handleDeepseekTranslationProgress", harness.context);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", request);
+  const handle = vm.runInContext("handleAiTranslationProgress", harness.context);
   assert.equal(handle({
     type: "translationBatchProgress",
     requestId: request.requestId,
@@ -1345,8 +1346,8 @@ test("uncommitted left-guard progress does not refresh playback lag grace", () =
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", request);
-  const handle = vm.runInContext("handleDeepseekTranslationProgress", harness.context);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", request);
+  const handle = vm.runInContext("handleAiTranslationProgress", harness.context);
 
   assert.equal(handle({
     type: "translationBatchProgress",
@@ -1381,18 +1382,18 @@ test("accelerated streamed progress hands off from a safe prefix before the long
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", request);
   harness.context.captionSession.transInflight.add("dsb:0");
   const calls = [];
   harness.context.sendRuntimeMessage = (message, callback) => {
     calls.push(message);
-    if (message.type === "cancelDeepSeekRequest" && typeof callback === "function") {
+    if (message.type === "cancelAiTranslationRequest" && typeof callback === "function") {
       callback({ ok: true });
     }
     return true;
   };
 
-  const handle = vm.runInContext("handleDeepseekTranslationProgress", harness.context);
+  const handle = vm.runInContext("handleAiTranslationProgress", harness.context);
   assert.equal(handle({
     type: "translationBatchProgress",
     requestId: request.requestId,
@@ -1403,7 +1404,7 @@ test("accelerated streamed progress hands off from a safe prefix before the long
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(harness.state.cursor, 120);
-  assert.equal(calls[0].type, "cancelDeepSeekRequest");
+  assert.equal(calls[0].type, "cancelAiTranslationRequest");
   assert.equal(calls[1].type, "translateBatch");
   assert.equal(calls[1].requestStart, 120);
   assert.equal(calls[1].urgent, true);
@@ -1437,7 +1438,7 @@ test("Gemini ignores stream handoff even during accelerated playback", async () 
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", request);
   harness.context.captionSession.transInflight.add("dsb:0");
   const calls = [];
   harness.context.sendRuntimeMessage = (message) => {
@@ -1445,7 +1446,7 @@ test("Gemini ignores stream handoff even during accelerated playback", async () 
     return true;
   };
 
-  const handle = vm.runInContext("handleDeepseekTranslationProgress", harness.context);
+  const handle = vm.runInContext("handleAiTranslationProgress", harness.context);
   assert.equal(handle({
     type: "translationBatchProgress",
     requestId: request.requestId,
@@ -1458,14 +1459,14 @@ test("Gemini ignores stream handoff even during accelerated playback", async () 
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-stream-handoff"
   ), false);
-  assert.equal(calls.some((call) => call.type === "cancelDeepSeekRequest"), false);
+  assert.equal(calls.some((call) => call.type === "cancelAiTranslationRequest"), false);
 });
 
 test("accelerated prefetch starts with enough runway before urgent promotion", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 48, targetThrough: 40, urgentTarget: -1, playbackRate: 3
   });
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, false);
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1482,7 +1483,7 @@ test("same semantic region prefetches distinct future ranges concurrently", () =
     harness.messages.push(message);
     callbacks.push(callback);
   };
-  const queue = vm.runInContext("queueDeepseekSpeculativeRequest", harness.context);
+  const queue = vm.runInContext("queueAiSpeculativeRequest", harness.context);
   queue(0, 64);
   queue(0, 160);
   queue(0, 256);
@@ -1499,13 +1500,13 @@ test("an active speculative range cannot be queued again while the runway is ful
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     playbackRate: 3, deferResponses: true
   });
-  const queue = vm.runInContext("queueDeepseekSpeculativeRequest", harness.context);
+  const queue = vm.runInContext("queueAiSpeculativeRequest", harness.context);
   queue(0, 64);
 
   // Fill the remaining speculative slots. The duplicate enqueue below must
   // be rejected while the original 64-range is still the single writer.
   for (const start of [160, 256, 352]) {
-    harness.context.captionSession.deepseekRequestMeta.set(`dsp:0:${start}`, {
+    harness.context.captionSession.semanticRequestMeta.set(`dsp:0:${start}`, {
       requestId: `prefetch:${start}`, prefetch: true, urgent: false,
       regionIndex: 0, requestStart: start, requestEnd: start + 95
     });
@@ -1515,9 +1516,9 @@ test("an active speculative range cannot be queued again while the runway is ful
 
   // Simulate all four requests settling, then pump the scheduler as their
   // callbacks do. The old implementation launches the same 64-range again.
-  harness.context.captionSession.deepseekRequestMeta.clear();
+  harness.context.captionSession.semanticRequestMeta.clear();
   harness.context.captionSession.transInflight.clear();
-  vm.runInContext("pumpDeepseekSpeculativeRequests(0, captionSession.deepseekCommitStateByRegion.get(0))", harness.context);
+  vm.runInContext("pumpAiSpeculativeRequests(0, captionSession.semanticCommitStateByRegion.get(0))", harness.context);
   assert.deepEqual(
     harness.messages.map((message) => message.requestStart),
     [64]
@@ -1539,11 +1540,11 @@ test("a malformed prefetch keeps its diagnostic when promoted to the visible wri
     error: { value: "invalid JSONL line" },
     errorCode: { value: "AI_JSONL_INVALID" }
   });
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle(request, response, null);
   harness.state.cursor = 64;
 
-  const take = vm.runInContext("takeDeepseekPrefetchedResponse", harness.context);
+  const take = vm.runInContext("takeAiPrefetchedResponse", harness.context);
   const promoted = take(harness.state);
   assert.equal(promoted.request.prefetch, false);
   assert.equal(promoted.response.errorCode, "AI_JSONL_INVALID");
@@ -1558,7 +1559,7 @@ test("terminal translation errors retain their code and original safe message", 
   };
   vm.createContext(context);
   vm.runInContext(displaySource, context, { filename: "content/display.js" });
-  const format = vm.runInContext("deepseekTranslationErrorText", context);
+  const format = vm.runInContext("aiTranslationErrorText", context);
 
   assert.equal(
     format({
@@ -1588,14 +1589,14 @@ test("a live JSONL error replaces the pending ellipsis with its diagnostic", () 
       activeGroupIdx: 0,
       activeCueIdx: 0,
       cueList: [{ text: "source", start: 0, end: 1000 }],
-      deepseekGroupToCommitRegion: [0],
-      deepseekExhaustedRegions: new Map(),
-      deepseekVisibleErrors: new Map([[0, {
+      semanticGroupToCommitRegion: [0],
+      semanticExhaustedRegions: new Map(),
+      semanticVisibleErrors: new Map([[0, {
         errorCode: "AI_JSONL_INVALID",
         errorMessage: "invalid JSONL line"
       }]]),
       transCache: new Map(),
-      deepseekDisplayCache: new Map()
+      semanticDisplayCache: new Map()
     },
     groupKey: (id) => `video g${id}`,
     manualTranslationSelected: () => false,
@@ -1607,7 +1608,7 @@ test("a live JSONL error replaces the pending ellipsis with its diagnostic", () 
   };
   vm.createContext(context);
   vm.runInContext(displaySource, context, { filename: "content/display.js" });
-  vm.runInContext("repaintActiveDeepseekTranslation()", context);
+  vm.runInContext("repaintActiveAiTranslation()", context);
 
   assert.deepEqual(painted.at(-1), {
     text: "Translation failed [AI_JSONL_INVALID] — invalid JSONL line",
@@ -1618,7 +1619,7 @@ test("a live JSONL error replaces the pending ellipsis with its diagnostic", () 
 test("a partial JSONL error is retained while the commit range is retried", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
   vm.runInContext(displaySource, harness.context, { filename: "content/display.js" });
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle({
     regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
     requestId: "commit:0:1:0-159", urgent: true, itemCount: 160,
@@ -1628,7 +1629,7 @@ test("a partial JSONL error is retained while the commit range is retried", () =
     error: "invalid JSONL line", errorCode: "AI_JSONL_INVALID"
   }, null);
 
-  const visibleError = harness.context.captionSession.deepseekVisibleErrors.get(0);
+  const visibleError = harness.context.captionSession.semanticVisibleErrors.get(0);
   assert.equal(visibleError.errorCode, "AI_JSONL_INVALID");
   assert.equal(visibleError.providerCode, "");
   assert.equal(visibleError.errorMessage, "invalid JSONL line");
@@ -1640,7 +1641,7 @@ test("a partial JSONL error is retained while the commit range is retried", () =
 test("a rate-limit code is painted instead of being replaced by no-progress", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
   vm.runInContext(displaySource, harness.context, { filename: "content/display.js" });
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle({
     regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
     requestId: "commit:0:1:0-159", urgent: true, sessionToken: harness.context.captureCaptionSession()
@@ -1663,7 +1664,7 @@ test("a cancelled commit response re-establishes a live writer", async () => {
     requestId: "commit:0:1:0-159", urgent: true,
     sessionToken: harness.context.captureCaptionSession()
   };
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle(request, {
     ok: false,
     error: "AI request cancelled",
@@ -1680,14 +1681,14 @@ test("a cancelled commit response re-establishes a live writer", async () => {
 
 test("retry exhaustion forwards the original error text to the subtitle state", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 3);
-  const schedule = vm.runInContext("scheduleDeepSeekBatchRetry", harness.context);
+  const schedule = vm.runInContext("scheduleAiBatchRetry", harness.context);
   schedule(0, 0, 159, "video", 1, "provider connection closed", {
     urgent: true,
     error: { error: "provider connection closed" }
   });
 
   assert.equal(
-    harness.context.captionSession.deepseekExhaustedRegions.get(0).errorMessage,
+    harness.context.captionSession.semanticExhaustedRegions.get(0).errorMessage,
     "provider connection closed"
   );
 });
@@ -1697,7 +1698,7 @@ test("accelerated prefetch skips the live writer and uses the fast transport pat
     windowItems: 80, targetThrough: 40, urgentTarget: 0, playbackRate: 3
   });
   const sessionToken = harness.context.captureCaptionSession();
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", {
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", {
     requestId: "commit:0:1:0-79", regionIndex: 0, requestStart: 0,
     requestEnd: 79, urgent: true, reqEpoch: 1, reqVid: "video",
     sessionToken, focusGeneration: 0
@@ -1709,7 +1710,7 @@ test("accelerated prefetch skips the live writer and uses the fast transport pat
     callbacks.push(callback);
   };
 
-  const queue = vm.runInContext("queueDeepseekSpeculativeRequest", harness.context);
+  const queue = vm.runInContext("queueAiSpeculativeRequest", harness.context);
   queue(0, 80);
   queue(0, 176);
   queue(0, 272);
@@ -1742,10 +1743,10 @@ test("3x DeepSeek uses a short visible writer while Gemini keeps the wider lane"
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
     batchSize: 32, maxPrefetchBatches: 12, highSpeedPrefetchBatches: 12
   });
-  const deepseekRequests = deepseek.requests;
-  assert.equal(deepseekRequests[0].requestStart, 0);
-  assert.equal(deepseekRequests[0].items.length, 48);
-  assert.ok(deepseekRequests[1].requestStart > deepseekRequests[0].requestEnd);
+  const aiRequests = deepseek.requests;
+  assert.equal(aiRequests[0].requestStart, 0);
+  assert.equal(aiRequests[0].items.length, 48);
+  assert.ok(aiRequests[1].requestStart > aiRequests[0].requestEnd);
 
   const gemini = loadPlaybackPrefetchHarness({
     windowItems: 48, targetThrough: 0, urgentTarget: 0, playbackRate: 3,
@@ -1763,7 +1764,7 @@ test("Gemini Flash Lite uses the configured request window at ordinary playback"
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     aiModel: "gemini-3.1-flash-lite-preview"
   });
-  vm.runInContext("pumpDeepseekCommitRegion(0, true)", harness.context);
+  vm.runInContext("pumpAiCommitRegion(0, true)", harness.context);
 
   const requests = harness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(requests.length, 1);
@@ -1776,7 +1777,7 @@ test("Gemini Flash Lite uses the configured request window at ordinary playback"
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     aiModel: "gemini-3.1-flash-lite-preview"
   });
-  vm.runInContext("pumpDeepseekCommitRegion(0, true)", customHarness.context);
+  vm.runInContext("pumpAiCommitRegion(0, true)", customHarness.context);
   const customRequests = customHarness.messages.filter((message) => message.type === "translateBatch");
   assert.equal(customRequests.length, 1);
   assert.equal(customRequests[0].items.length, 160);
@@ -1834,9 +1835,9 @@ test("3x playback consumes staged future ranges while the current response is sl
     batchSize: 64, deferResponses: true
   });
   harness.context.settings.enabled = true;
-  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 10;
-  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 6;
-  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 10;
+  harness.context.AI_MAX_PREFETCH_BATCHES = 10;
+  harness.context.AI_FAST_PREFETCH_BATCHES = 6;
+  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 10;
   harness.context.captionSession.activeGroupIdx = 0;
   vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
   vm.runInContext("prefetchFrom(0)", harness.context);
@@ -1904,7 +1905,7 @@ test("a commit supersedes only the overlapping provisional prefix and reuses the
     ...unitSemanticResponse(96, 159, "semantic-96-159"),
     ...unitSemanticResponse(160, 191, "semantic-160-191")
   ];
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle(prefetchRequest, {
     ok: true, translations: prefetchResponse, deferredIds: [],
     httpDiagnostics: { attempts: [] }
@@ -1966,10 +1967,10 @@ test("3x playback consumes a streamed future prefix before its response settles"
     progressTranslations: rangeSemanticResponse(80, 95),
     progressRecoveryTranslations: rangeSemanticResponse(80, 95)
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:80", request);
   harness.context.captionSession.transInflight.add("dsp:0:80");
 
-  vm.runInContext("pumpDeepseekCommitRegion(0, true)", harness.context);
+  vm.runInContext("pumpAiCommitRegion(0, true)", harness.context);
 
   assert.equal(harness.state.cursor, 96);
   assert.equal(harness.context.captionSession.transCache.has("video g80"), true);
@@ -2002,16 +2003,16 @@ test("a gapped future stream cannot block the accelerated urgent writer", () => 
     progressTranslations: rangeSemanticResponse(96, 110),
     progressRecoveryTranslations: rangeSemanticResponse(96, 110)
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:80", request);
   harness.context.captionSession.transInflight.add("dsp:0:80");
   harness.context.sendRuntimeMessage = (message, callback) => {
     harness.messages.push(message);
     if (typeof callback === "function") callback({ ok: true });
   };
 
-  vm.runInContext("pumpDeepseekCommitRegion(0, true)", harness.context);
+  vm.runInContext("pumpAiCommitRegion(0, true)", harness.context);
 
-  assert.equal(harness.messages[0].type, "cancelDeepSeekRequest");
+  assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[0].requestId, request.requestId);
   assert.ok(harness.messages.some((message) =>
     message.type === "translateBatch" && message.requestStart === 80 && message.urgent
@@ -2037,15 +2038,15 @@ test("a speculative provider 429 backs off and requeues the same range", () => {
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:80", request);
   harness.context.captionSession.transInflight.add("dsp:0:80");
   // The production callback finishes ownership before handing the response
   // to the result handler; mirror that ordering so the retry is not mistaken
   // for a duplicate live writer.
-  harness.context.captionSession.deepseekRequestMeta.delete("dsp:0:80");
+  harness.context.captionSession.semanticRequestMeta.delete("dsp:0:80");
   harness.context.captionSession.transInflight.delete("dsp:0:80");
 
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle(request, {
     ok: false,
     rateLimited: true,
@@ -2054,7 +2055,7 @@ test("a speculative provider 429 backs off and requeues the same range", () => {
   }, null);
 
   assert.equal(harness.state.prefetchQueued.has(80), true);
-  assert.ok(harness.context.captionSession.deepseekSpeculativeBackoffUntil > Date.now());
+  assert.ok(harness.context.captionSession.semanticSpeculativeBackoffUntil > Date.now());
   assert.equal(harness.messages.length, 0);
   assert.equal(harness.debug.some((entry) =>
     entry.event === "semantic-speculative-backoff"
@@ -2080,12 +2081,12 @@ test("speculative local concurrency backoff requeues and pauses further speculat
     progressTranslations: [],
     progressRecoveryTranslations: []
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", request);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:80", request);
   harness.context.captionSession.transInflight.add("dsp:0:80");
-  harness.context.captionSession.deepseekRequestMeta.delete("dsp:0:80");
+  harness.context.captionSession.semanticRequestMeta.delete("dsp:0:80");
   harness.context.captionSession.transInflight.delete("dsp:0:80");
 
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle(request, {
     ok: false,
     rateLimited: true,
@@ -2094,12 +2095,12 @@ test("speculative local concurrency backoff requeues and pauses further speculat
   }, null);
 
   assert.equal(harness.state.prefetchQueued.has(80), true);
-  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffReason, "local-concurrency");
-  assert.ok(harness.context.captionSession.deepseekSpeculativeBackoffUntil > Date.now());
+  assert.equal(harness.context.captionSession.semanticSpeculativeBackoffReason, "local-concurrency");
+  assert.ok(harness.context.captionSession.semanticSpeculativeBackoffUntil > Date.now());
   assert.equal(harness.messages.length, 0);
 
   // While local-concurrency backoff is active, pumping speculative requests does not launch requests
-  const pump = vm.runInContext("pumpDeepseekSpeculativeRequests", harness.context);
+  const pump = vm.runInContext("pumpAiSpeculativeRequests", harness.context);
   pump(0, harness.state);
   assert.equal(harness.messages.length, 0);
 });
@@ -2110,12 +2111,12 @@ test("settling an active request clears local-concurrency backoff and pumps spec
     groupCount: 401, limitEnd: 400, deferResponses: true
   });
 
-  vm.runInContext("pumpDeepseekCommitRegion(0, true)", harness.context);
+  vm.runInContext("pumpAiCommitRegion(0, true)", harness.context);
   assert.equal(harness.pendingCallbacks.length, 1);
 
-  harness.context.captionSession.deepseekSpeculativeBackoffReason = "local-concurrency";
-  harness.context.captionSession.deepseekSpeculativeBackoffUntil = Date.now() + 5000;
-  vm.runInContext("deepseekPrefetchState", harness.context)(harness.state);
+  harness.context.captionSession.semanticSpeculativeBackoffReason = "local-concurrency";
+  harness.context.captionSession.semanticSpeculativeBackoffUntil = Date.now() + 5000;
+  vm.runInContext("aiPrefetchState", harness.context)(harness.state);
   harness.state.prefetchQueued.add(80);
   harness.state.prefetchQueue.push(80);
 
@@ -2126,53 +2127,53 @@ test("settling an active request clears local-concurrency backoff and pumps spec
     translations: giantSemanticResponse(false)
   });
 
-  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffReason, "");
-  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffUntil, 0);
+  assert.equal(harness.context.captionSession.semanticSpeculativeBackoffReason, "");
+  assert.equal(harness.context.captionSession.semanticSpeculativeBackoffUntil, 0);
   assert.ok(harness.messages.some((msg) => msg.type === "translateBatch" && msg.requestStart === 80));
 });
 
-test("prefetchDeepseekBatches does not cross commit region boundary into inactive regions", () => {
+test("prefetchAiBatches does not cross commit region boundary into inactive regions", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     groupCount: 64, limitEnd: 63, prefetchBatches: 4
   });
-  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 12;
-  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 6;
-  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 8;
+  harness.context.AI_MAX_PREFETCH_BATCHES = 12;
+  harness.context.AI_FAST_PREFETCH_BATCHES = 6;
+  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 8;
   harness.context.captionSession.semanticCommitRegions = [
     { start: 0, end: 31 },
     { start: 32, end: 63 }
   ];
-  harness.context.captionSession.deepseekCommitRegions = harness.context.captionSession.semanticCommitRegions;
+  harness.context.captionSession.semanticCommitRegions = harness.context.captionSession.semanticCommitRegions;
   harness.context.captionSession.semanticGroupToCommitRegion = [
     ...new Array(32).fill(0),
     ...new Array(32).fill(1)
   ];
-  harness.context.captionSession.deepseekGroupToCommitRegion = harness.context.captionSession.semanticGroupToCommitRegion;
+  harness.context.captionSession.semanticGroupToCommitRegion = harness.context.captionSession.semanticGroupToCommitRegion;
   harness.context.captionSession.semanticBatchWindows = [
     { start: 0, end: 15 },
     { start: 16, end: 31 },
     { start: 32, end: 47 },
     { start: 48, end: 63 }
   ];
-  harness.context.captionSession.deepseekBatchWindows = harness.context.captionSession.semanticBatchWindows;
+  harness.context.captionSession.semanticBatchWindows = harness.context.captionSession.semanticBatchWindows;
   harness.context.captionSession.semanticGroupToBatch = [
     ...new Array(16).fill(0),
     ...new Array(16).fill(1),
     ...new Array(16).fill(2),
     ...new Array(16).fill(3)
   ];
-  harness.context.captionSession.deepseekGroupToBatch = harness.context.captionSession.semanticGroupToBatch;
+  harness.context.captionSession.semanticGroupToBatch = harness.context.captionSession.semanticGroupToBatch;
 
   vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
-  const prefetchBatches = vm.runInContext("prefetchDeepseekBatches", harness.context);
+  const prefetchBatches = vm.runInContext("prefetchAiBatches", harness.context);
   prefetchBatches(0, false);
 
   assert.ok(harness.messages.some((msg) => msg.requestStart === 16));
-  assert.equal(harness.context.captionSession.deepseekCommitStateByRegion.has(1), false);
+  assert.equal(harness.context.captionSession.semanticCommitStateByRegion.has(1), false);
   assert.equal(harness.messages.some((msg) => msg.requestStart >= 32), false);
 });
 
-test("non-urgent deepseekRequestBatch on an inactive region does not commit", () => {
+test("non-urgent aiRequestBatch on an inactive region does not commit", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     groupCount: 64, limitEnd: 63
   });
@@ -2181,18 +2182,18 @@ test("non-urgent deepseekRequestBatch on an inactive region does not commit", ()
     { start: 0, end: 31 },
     { start: 32, end: 63 }
   ];
-  harness.context.captionSession.deepseekCommitRegions = harness.context.captionSession.semanticCommitRegions;
+  harness.context.captionSession.semanticCommitRegions = harness.context.captionSession.semanticCommitRegions;
   harness.context.captionSession.semanticGroupToCommitRegion = [
     ...new Array(32).fill(0),
     ...new Array(32).fill(1)
   ];
-  harness.context.captionSession.deepseekGroupToCommitRegion = harness.context.captionSession.semanticGroupToCommitRegion;
+  harness.context.captionSession.semanticGroupToCommitRegion = harness.context.captionSession.semanticGroupToCommitRegion;
 
-  const requestBatch = vm.runInContext("deepseekRequestBatch", harness.context);
+  const requestBatch = vm.runInContext("aiRequestBatch", harness.context);
   requestBatch(32, true, false);
 
   assert.equal(harness.messages.some((msg) => msg.requestStart === 32), false);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsb:1"), false);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.has("dsb:1"), false);
 });
 
 test("entering a new semantic region cancels obsolete old-region writers", () => {
@@ -2203,15 +2204,15 @@ test("entering a new semantic region cancels obsolete old-region writers", () =>
     requestId: "commit:old:0-79", regionIndex: -1, requestStart: 0, requestEnd: 79,
     urgent: false, reqEpoch: 1, reqVid: "video"
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:-1", oldRequest);
+  harness.context.captionSession.semanticRequestMeta.set("dsb:-1", oldRequest);
   harness.context.captionSession.transInflight.add("dsb:-1");
   harness.context.sendRuntimeMessage = (message) => harness.messages.push(message);
 
-  vm.runInContext("deepseekRequestBatch(0, true, true)", harness.context);
+  vm.runInContext("aiRequestBatch(0, true, true)", harness.context);
 
-  assert.equal(harness.messages[0].type, "cancelDeepSeekRequest");
+  assert.equal(harness.messages[0].type, "cancelAiTranslationRequest");
   assert.equal(harness.messages[0].requestId, oldRequest.requestId);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsb:-1"), false);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.has("dsb:-1"), false);
   assert.equal(harness.messages[1].type, "translateBatch");
 });
 
@@ -2227,17 +2228,17 @@ test("entering a new semantic region preserves future runway requests", () => {
     requestId: "prefetch:future", regionIndex: 2, requestStart: 160, requestEnd: 255,
     prefetch: true, urgent: false, reqEpoch: 1, reqVid: "video"
   };
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:0", oldRequest);
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:2:160", futureRequest);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:0", oldRequest);
+  harness.context.captionSession.semanticRequestMeta.set("dsp:2:160", futureRequest);
   harness.context.captionSession.transInflight.add("dsp:0:0");
   harness.context.captionSession.transInflight.add("dsp:2:160");
   harness.context.sendRuntimeMessage = (message) => harness.messages.push(message);
 
-  vm.runInContext("cancelDeepseekRequestsBeforeRegion(1)", harness.context);
+  vm.runInContext("cancelAiRequestsBeforeRegion(1)", harness.context);
 
   assert.deepEqual(harness.messages.map((message) => message.requestId), [oldRequest.requestId]);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsp:0:0"), false);
-  assert.equal(harness.context.captionSession.deepseekRequestMeta.has("dsp:2:160"), true);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.has("dsp:0:0"), false);
+  assert.equal(harness.context.captionSession.semanticRequestMeta.has("dsp:2:160"), true);
   assert.equal(harness.context.captionSession.transInflight.has("dsp:2:160"), true);
 });
 
@@ -2250,7 +2251,7 @@ test("a future response bridge keeps only the boundary overlap", () => {
   harness.state.targetThrough = 200;
   harness.state.urgentTarget = 64;
   const sessionToken = harness.context.captureCaptionSession();
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:80", {
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:80", {
     requestId: "prefetch:0:1:80-175", prefetch: true, regionIndex: 0,
     requestStart: 80, requestEnd: 175, urgent: false,
     reqEpoch: 1, reqVid: "video", sessionToken, focusGeneration: 0
@@ -2261,14 +2262,14 @@ test("a future response bridge keeps only the boundary overlap", () => {
     harness.callback = callback;
   };
 
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   assert.equal(harness.messages[0].requestStart, 64);
   assert.equal(harness.messages[0].requestEnd, 111);
   assert.equal(harness.debug.some((entry) => entry.event === "semantic-prefetch-bridge"), true);
 
   harness.messages.length = 0;
-  harness.context.captionSession.deepseekRequestMeta.delete("dsb:0");
+  harness.context.captionSession.semanticRequestMeta.delete("dsb:0");
   harness.context.captionSession.transInflight.delete("dsb:0");
   harness.state.cursor = 80;
   harness.state.commitFloor = 80;
@@ -2280,7 +2281,7 @@ test("a bridge overlaps an adjacent future start so a cross-join unit can resolv
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     playbackRate: 3
   });
-  const bridge = vm.runInContext("deepseekBridgeRequestItems", harness.context);
+  const bridge = vm.runInContext("aiBridgeRequestItems", harness.context);
   assert.equal(bridge(80, 81, 160, 500), 33);
 });
 
@@ -2288,10 +2289,10 @@ test("bridge sizing mathematically guarantees positive commit progress and cross
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     playbackRate: 3
   });
-  const bridge = vm.runInContext("deepseekBridgeRequestItems", harness.context);
+  const bridge = vm.runInContext("aiBridgeRequestItems", harness.context);
   const guardStartHelper = vm.runInContext("YTDS_SHARED.semanticCommitGuardStart", harness.context);
-  const minRunway = vm.runInContext("DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS", harness.context);
-  const guardLimit = vm.runInContext("DEEPSEEK_COMMIT_GUARD_ITEMS", harness.context);
+  const minRunway = vm.runInContext("AI_MIN_COMMIT_RUNWAY_ITEMS", harness.context);
+  const guardLimit = vm.runInContext("AI_COMMIT_GUARD_ITEMS", harness.context);
 
   let seed = 0x7c3a91;
   const random = () => {
@@ -2340,14 +2341,14 @@ test("a max-planned short bridge recovers past its future join instead of exhaus
     groupCount: 301, limitEnd: 300, deferResponses: true
   });
   const sessionToken = harness.context.captureCaptionSession();
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:2", {
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:2", {
     requestId: "prefetch:0:1:2-97", prefetch: true, regionIndex: 0,
     requestStart: 2, requestEnd: 97, urgent: false,
     reqEpoch: 1, reqVid: "video", sessionToken, focusGeneration: 0
   });
   harness.context.captionSession.transInflight.add("dsp:0:2");
 
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle({
     requestId: "commit:0:2:0-2", urgent: true, regionIndex: 0,
     requestStart: 0, requestEnd: 2, commitFloor: 0, limitEnd: 300,
@@ -2376,13 +2377,13 @@ test("adaptive no-progress enters recovery instead of replaying the same cached 
   });
   harness.state.commitFloor = 10;
   const sessionToken = harness.context.captureCaptionSession();
-  harness.context.captionSession.deepseekRequestMeta.set("dsp:0:9", {
+  harness.context.captionSession.semanticRequestMeta.set("dsp:0:9", {
     requestId: "prefetch:0:1:9-104", prefetch: true, regionIndex: 0,
     requestStart: 9, requestEnd: 104, reqEpoch: 1, reqVid: "video",
     sessionToken, focusGeneration: 0
   });
 
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle({
     requestId: "commit:0:2:0-9", urgent: true, regionIndex: 0,
     requestStart: 0, requestEnd: 9, commitFloor: 10, limitEnd: 300,
@@ -2409,7 +2410,7 @@ test("a repeated no-progress range is delayed and bypasses cache", async () => {
   harness.state.commitFloor = 10;
   harness.state.recoveryWindowItems = true;
   harness.state.noProgressRange = "0:9";
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle({
     requestId: "commit:0:3:0-9", urgent: true, regionIndex: 0,
     requestStart: 0, requestEnd: 9, commitFloor: 10, limitEnd: 300,
@@ -2431,9 +2432,9 @@ test("same-language captions are shown directly without translation requests", (
     deferResponses: true
   });
   harness.context.settings.enabled = true;
-  harness.context.DEEPSEEK_MAX_PREFETCH_BATCHES = 0;
-  harness.context.DEEPSEEK_FAST_PREFETCH_BATCHES = 0;
-  harness.context.DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES = 0;
+  harness.context.AI_MAX_PREFETCH_BATCHES = 0;
+  harness.context.AI_FAST_PREFETCH_BATCHES = 0;
+  harness.context.AI_HIGH_SPEED_PREFETCH_BATCHES = 0;
   harness.context.PENDING_ELLIPSIS_MS = 400;
   harness.context.captionSession.activeGroupIdx = 0;
   vm.runInContext(playbackSource, harness.context, { filename: "content/cue-playback.js" });
@@ -2454,19 +2455,19 @@ test("accelerated playback prefetches the current semantic batch before promotio
   const batchStarts = Array.from({ length: 9 }, (_value, index) => index);
   const context = {
     Number,
-    settings: { enabled: true, deepseekPrefetchBatches: 3 },
+    settings: { enabled: true, aiPrefetchBatches: 3 },
     captionSession: {
       cueList: [{ start: 0, end: 1000 }],
       cueToGroup: [0],
       cueToGroups: [[0]],
       sentGroups: batchStarts.map((group) => ({ start: group, end: group })),
-      deepseekBatchWindows: batchStarts.map((group) => ({ start: group, end: group })),
-      deepseekGroupToBatch: batchStarts,
+      semanticBatchWindows: batchStarts.map((group) => ({ start: group, end: group })),
+      semanticGroupToBatch: batchStarts,
       activeCueIdx: 0,
       activeGroupIdx: 0
     },
     getVideo: () => ({ playbackRate: 3 }),
-    deepseekRequestBatch: (group, _includePredecessor, urgent) =>
+    aiRequestBatch: (group, _includePredecessor, urgent) =>
       calls.push({ group, urgent: !!urgent }),
     YTDS_SHARED: {
       isSameLanguage: () => false,
@@ -2475,10 +2476,10 @@ test("accelerated playback prefetches the current semantic batch before promotio
         return batchStarts.slice(1, ahead + 1);
       }
     },
-    DEEPSEEK_MAX_PREFETCH_BATCHES: 10,
-    DEEPSEEK_FAST_PREFETCH_BATCHES: 6,
-    DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES: 8,
-    deepseekGroupForCueAt: () => 0
+    AI_MAX_PREFETCH_BATCHES: 10,
+    AI_FAST_PREFETCH_BATCHES: 6,
+    AI_HIGH_SPEED_PREFETCH_BATCHES: 8,
+    aiGroupForCueAt: () => 0
   };
   vm.createContext(context);
   vm.runInContext(playbackSource, context, { filename: "content/cue-playback.js" });
@@ -2496,35 +2497,35 @@ test("same-group playback watchdog and rate change re-arm accelerated current pr
   const context = {
     Map, Set, Date, Math, Number, String, Array, Object, Promise,
     groupKey: (id) => `video g${id}`,
-    settings: { enabled: true, deepseekPrefetchBatches: 0 },
+    settings: { enabled: true, aiPrefetchBatches: 0 },
     captionSession: {
       cueList: [{ text: "source", start: 0, end: 1000 }],
       cueToGroup: [0], cueToGroups: [[0]],
       sentGroups: [{ start: 0, end: 0, hardAfter: false }],
-      deepseekBatchWindows: [{ start: 0, end: 0 }],
-      deepseekGroupToBatch: [0], deepseekGroupToCommitRegion: [0],
-      deepseekExhaustedRegions: new Set(), transCache: new Map(),
-      deepseekDisplayCache: new Map(), deepseekSourceCache: new Map(),
-      deepseekUnitCache: new Map(), activeCueIdx: 0, activeGroupIdx: 0,
-      deepseekSeekSettling: false, pendingTimer: null, pendingIndicatorKey: "",
+      semanticBatchWindows: [{ start: 0, end: 0 }],
+      semanticGroupToBatch: [0], semanticGroupToCommitRegion: [0],
+      semanticExhaustedRegions: new Set(), transCache: new Map(),
+      semanticDisplayCache: new Map(), semanticSourceCache: new Map(),
+      semanticUnitCache: new Map(), activeCueIdx: 0, activeGroupIdx: 0,
+      semanticSeekSettling: false, pendingTimer: null, pendingIndicatorKey: "",
       cueVideoId: "video", currentVideoId: "video", cueEpoch: 1,
-      deepseekFocusGeneration: 0
+      semanticFocusGeneration: 0
     },
     getVideo: () => ({ currentTime: 0, playbackRate: 3 }),
-    DEEPSEEK_MAX_PREFETCH_BATCHES: 10,
-    DEEPSEEK_FAST_PREFETCH_BATCHES: 6,
-    DEEPSEEK_HIGH_SPEED_PREFETCH_BATCHES: 8,
+    AI_MAX_PREFETCH_BATCHES: 10,
+    AI_FAST_PREFETCH_BATCHES: 6,
+    AI_HIGH_SPEED_PREFETCH_BATCHES: 8,
     extensionContextAlive: () => true,
     maybeReflowSemanticDisplay: () => {},
     armPendingTranslationIndicator: () => {},
-    deepseekRequestBatch: (group, includePredecessor, urgent) => {
+    aiRequestBatch: (group, includePredecessor, urgent) => {
       calls.push({ group, includePredecessor, urgent: !!urgent });
       context.captionSession.transCache.set("video g0", "ready");
     },
     YTDS_SHARED: {
       isSameLanguage: () => false,
       semanticPrefetchBatchStarts: () => [],
-      pendingTranslationScopeKey: () => "deepseek-batch:0"
+      pendingTranslationScopeKey: () => "ai-batch:0"
     },
     captureCaptionSession: () => sessionToken,
     isCaptionSessionCurrent: (token) => token === sessionToken,
@@ -2555,45 +2556,45 @@ test("cached translations are normalized again while preserving sentence spacing
     { id: "1", unitId: "semantic-0-1", translation: "缓存。译文。" }
   ];
   const harness = loadSemanticCommitHarness(cached, 0);
-  const commit = vm.runInContext("commitDeepseekResponsePrefix", harness.context);
+  const commit = vm.runInContext("commitAiResponsePrefix", harness.context);
   const nextCursor = commit(0, 0, 1, 0, 500, cached, 0);
 
   assert.equal(nextCursor, 2);
   assert.equal(harness.context.captionSession.transCache.get("video g0"), "缓存 译文");
   assert.equal(
-    harness.context.captionSession.deepseekAlignedChunksCache.get("semantic-0-1")[0].translation,
+    harness.context.captionSession.semanticAlignedChunksCache.get("semantic-0-1")[0].translation,
     "缓存 译文"
   );
 });
 
 test("an unrecoverable no-progress response keeps a bounded budget and bypasses cache", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 2);
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
 
   const retry = harness.debug.find((entry) => entry.event === "batch-retry");
   assert.equal(retry.data.attempt, 3);
-  assert.equal(harness.context.captionSession.deepseekRetryCounts.get(harness.retryKey), 3);
+  assert.equal(harness.context.captionSession.semanticRetryCounts.get(harness.retryKey), 3);
   assert.equal(harness.timers.length, 1);
 
   const retried = [];
-  harness.context.deepseekRequestBatch = (...args) => retried.push(args);
+  harness.context.aiRequestBatch = (...args) => retried.push(args);
   harness.timers[0].callback();
   assert.equal(retried[0][3].bypassCache, true);
 
-  const schedule = vm.runInContext("scheduleDeepSeekBatchRetry", harness.context);
+  const schedule = vm.runInContext("scheduleAiBatchRetry", harness.context);
   schedule(0, 0, 159, "video", 1, "no immutable semantic prefix", {
     urgent: true, bypassCache: true,
     errorCode: "HTTP_400", providerCode: "invalid_request_error"
   });
   assert.equal(harness.debug.at(-1).event, "batch-retry-exhausted");
-  assert.equal(harness.context.captionSession.deepseekExhaustedRegions.has(0), true);
+  assert.equal(harness.context.captionSession.semanticExhaustedRegions.has(0), true);
   assert.equal(harness.painted.at(-1), "Translation failed [HTTP_400 / invalid_request_error]");
 });
 
 test("a non-retryable provider response is painted at the active subtitle", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
-  const handle = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handle = vm.runInContext("handleAiBatchResult", harness.context);
   handle({
     regionIndex: 0, requestStart: 0, requestEnd: 159, reqVid: "video", reqEpoch: 1,
     requestId: "commit:0:1:0-159", urgent: true,
@@ -2606,23 +2607,23 @@ test("a non-retryable provider response is painted at the active subtitle", () =
   }, null);
 
   assert.equal(harness.painted.at(-1), "Translation failed [HTTP_400 / invalid_request_error]");
-  assert.equal(harness.context.captionSession.deepseekExhaustedRegions.get(0).errorCode, "HTTP_400");
+  assert.equal(harness.context.captionSession.semanticExhaustedRegions.get(0).errorCode, "HTTP_400");
 });
 
 test("an invalidated semantic retry timer cannot resurrect its request", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0);
-  const pump = vm.runInContext("pumpDeepseekCommitRegion", harness.context);
+  const pump = vm.runInContext("pumpAiCommitRegion", harness.context);
   pump(0, true);
   assert.equal(harness.timers.length, 1);
 
   const retried = [];
-  harness.context.deepseekRequestBatch = (...args) => retried.push(args);
+  harness.context.aiRequestBatch = (...args) => retried.push(args);
   harness.invalidateSession();
   harness.timers[0].callback();
 
   assert.deepEqual(retried, []);
   assert.equal(
-    harness.context.captionSession.deepseekRetryCounts.has(harness.retryKey),
+    harness.context.captionSession.semanticRetryCounts.has(harness.retryKey),
     false
   );
 });
@@ -2641,17 +2642,17 @@ test("a no-progress retry bypasses a cached semantic response and replaces it", 
     Promise,
     YTDS_SHARED: loadShared(),
     AI_PROMPT_CACHE_VERSION: "test",
-    DEEPSEEK_BATCH_INFLIGHT: new Map(),
+    AI_BATCH_INFLIGHT: new Map(),
     getAiConfig: async () => ({ model: "model", endpointKind: "compatible", extraBody: {} }),
     aiResponseCacheId: () => "cache-id",
     readAiResponseCache: async () => { cacheReads++; return cached; },
     writeAiResponseCache: async () => { cacheWrites++; },
-    deepseekSegmentBatchFetch: async () => fresh
+    aiSegmentBatchFetch: async () => fresh
   };
   vm.createContext(context);
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
-  context.deepseekSegmentBatchFetch = async () => { freshRequests++; return fresh; };
-  const translate = vm.runInContext("deepseekTranslateBatch", context);
+  context.aiSegmentBatchFetch = async () => { freshRequests++; return fresh; };
+  const translate = vm.runInContext("aiTranslateBatch", context);
   const items = [{ id: "0", text: "source" }];
 
   const ordinary = await translate(items, "zh-CN", "en", [], [], false, "scope", null, {});
@@ -2673,34 +2674,35 @@ test("seeking and seeked only schedule a trailing-edge focus change", () => {
   const messages = [];
   const context = {
     captionSession: {
-      deepseekSeekSettleTimer: null,
-      deepseekSeekSettling: false,
-      deepseekPendingSeekTimeMs: 0,
-      deepseekFocusGeneration: 7
+      semanticSeekSettleTimer: null,
+      semanticSeekSettling: false,
+      semanticPendingSeekTimeMs: 0,
+      semanticFocusGeneration: 7
     },
     setTimeout: (callback) => { timers.push(callback); return timers.length; },
     clearTimeout: () => {},
     sendRuntimeMessage: (message) => messages.push(message),
-    DEEPSEEK_SEEK_SETTLE_MS: 140
+    AI_SEEK_SETTLE_MS: 140
   };
   vm.createContext(context);
   vm.runInContext(playbackSource, context, { filename: "content/cue-playback.js" });
-  const begin = vm.runInContext("beginDeepseekSeek", context);
-  const finish = vm.runInContext("finishDeepseekSeek", context);
+  const begin = vm.runInContext("beginAiSeek", context);
+  const finish = vm.runInContext("finishAiSeek", context);
   begin(1000);
   finish(2000);
   finish(3000);
-  assert.equal(context.captionSession.deepseekFocusGeneration, 7);
+  assert.equal(context.captionSession.semanticFocusGeneration, 7);
   assert.equal(messages.length, 0);
-  assert.equal(context.captionSession.deepseekSeekSettling, true);
-  assert.equal(context.captionSession.deepseekPendingSeekTimeMs, 3000);
+  assert.equal(context.captionSession.semanticSeekSettling, true);
+  assert.equal(context.captionSession.semanticPendingSeekTimeMs, 3000);
   assert.equal(timers.length, 3);
 });
 
 test("webRequest diagnostics preserve Chromium's underlying net error", () => {
   const listeners = {};
+  const filters = {};
   const event = (name) => ({
-    addListener: (listener) => { listeners[name] = listener; }
+    addListener: (listener, filter) => { listeners[name] = listener; filters[name] = filter; }
   });
   const debug = [];
   const context = {
@@ -2732,4 +2734,7 @@ test("webRequest diagnostics preserve Chromium's underlying net error", () => {
   const lookup = vm.runInContext("aiNetworkFailureForTrace", context);
   assert.equal(lookup("commit:1:2:3-4.1").error, "net::ERR_HTTP2_PROTOCOL_ERROR");
   assert.equal(debug[0][1], "ai-network-error");
+  for (const name of ["before", "error", "completed"]) {
+    assert.equal(filters[name].tabId, -1, `${name} must not observe page traffic`);
+  }
 });

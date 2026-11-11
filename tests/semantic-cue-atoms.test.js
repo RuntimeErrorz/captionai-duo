@@ -16,18 +16,18 @@ function buildSemanticGroups(cues) {
   const context = {
     YTDS_SHARED: shared,
     SEMANTIC_CORE_ITEMS: 32,
-    DEEPSEEK_CORE_ITEMS: 32,
+    AI_CORE_ITEMS: 32,
     SEMANTIC_SOFT_PAUSE_MS: 900,
-    DEEPSEEK_SOFT_PAUSE_MS: 900,
+    AI_SOFT_PAUSE_MS: 900,
     SEMANTIC_HARD_PAUSE_MS: 4000,
-    DEEPSEEK_HARD_PAUSE_MS: 4000,
+    AI_HARD_PAUSE_MS: 4000,
     captionSession: {
       sentGroups: [],
-      semanticBatchWindows: [], deepseekBatchWindows: [],
-      semanticGroupToBatch: [], deepseekGroupToBatch: [],
-      semanticCommitRegions: [], deepseekCommitRegions: [],
-      semanticGroupToCommitRegion: [], deepseekGroupToCommitRegion: [],
-      semanticCommitStateByRegion: new Map(), deepseekCommitStateByRegion: new Map(),
+      semanticBatchWindows: [],
+      semanticGroupToBatch: [],
+      semanticCommitRegions: [],
+      semanticGroupToCommitRegion: [],
+      semanticCommitStateByRegion: new Map(),
       cueToGroups: [], cueToGroup: []
     },
     resetCaptionSessionState: () => {}
@@ -317,10 +317,10 @@ test("loading scope remains stable while fast lexical tokens advance inside one 
   for (let group = 2063; group <= 2120; group++) {
     assert.equal(shared.pendingTranslationScopeKey(group, groupToBatch), first);
   }
-  assert.equal(first, "deepseek-batch:31");
+  assert.equal(first, "ai-batch:31");
   assert.equal(
     shared.pendingTranslationScopeKey(2121, groupToBatch),
-    "deepseek-batch:32"
+    "ai-batch:32"
   );
 });
 

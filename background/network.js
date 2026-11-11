@@ -32,7 +32,10 @@ function aiNetworkFailureForTrace(traceId) {
 function registerAiNetworkDiagnostics() {
   if (!chrome.webRequest || !chrome.webRequest.onBeforeSendHeaders ||
       !chrome.webRequest.onErrorOccurred) return;
-  const filter = { urls: ["https://*/*", "http://*/*"] };
+  // Only extension-initiated requests (tabId -1) can carry our trace header.
+  // Filtering here keeps Chromium from waking the worker for page traffic;
+  // host permissions further limit events to the granted AI origins.
+  const filter = { urls: ["https://*/*", "http://*/*"], tabId: -1 };
   chrome.webRequest.onBeforeSendHeaders.addListener((details) => {
     const headers = Array.isArray(details.requestHeaders) ? details.requestHeaders : [];
     const traceHeader = headers.find(

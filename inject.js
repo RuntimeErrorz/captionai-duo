@@ -675,10 +675,29 @@
     } catch (_e) { /* never throw */ }
     return false;
   }
-  setInterval(() => {
+  // Track-catalog polling only matters while captions can be seen. Hidden
+  // tabs pause it; content's navigation config message still resets state.
+  function pollVideoAndTracks() {
     checkVideoChange();
     postCaptionTracks(false);
-  }, 500);
+  }
+  let videoPollTimer = null;
+  const pageDocument = typeof document === "object" && document ? document : null;
+  const pageHidden = () => !!(pageDocument && pageDocument.hidden === true);
+  function syncVideoPoll() {
+    const hidden = pageHidden();
+    if (hidden) {
+      if (videoPollTimer) { clearInterval(videoPollTimer); videoPollTimer = null; }
+      return;
+    }
+    if (videoPollTimer) return;
+    pollVideoAndTracks();
+    videoPollTimer = setInterval(pollVideoAndTracks, 500);
+  }
+  if (pageDocument && typeof pageDocument.addEventListener === "function") {
+    pageDocument.addEventListener("visibilitychange", syncVideoPoll, false);
+  }
+  if (!pageHidden()) videoPollTimer = setInterval(pollVideoAndTracks, 500);
 
   // ---- nocues watchdog -----------------------------------------------------
   function armNocuesTimer() {

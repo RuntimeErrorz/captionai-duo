@@ -11,7 +11,7 @@ function clearPendingTimer() {
 }
 
 function pendingTranslationScopeKey(gIdx) {
-  return YTDS_SHARED.pendingTranslationScopeKey(gIdx, captionSession.deepseekGroupToBatch);
+  return YTDS_SHARED.pendingTranslationScopeKey(gIdx, captionSession.semanticGroupToBatch);
 }
 
 // Lexical token groups can advance several times inside 400 ms. The old
@@ -112,8 +112,8 @@ function onCues(data) {
     trackKind: captionSession.cueTrackKind,
     sourceLang: captionSession.cueSourceLang,
     groupCount: captionSession.sentGroups ? captionSession.sentGroups.length : 0,
-    batchCount: captionSession.deepseekBatchWindows.length,
-    regionCount: captionSession.deepseekCommitRegions.length,
+    batchCount: captionSession.semanticBatchWindows.length,
+    regionCount: captionSession.semanticCommitRegions.length,
     firstCueStartMs: captionSession.cueList.length ? captionSession.cueList[0].start : 0,
     lastCueEndMs: captionSession.cueList.length ? captionSession.cueList[captionSession.cueList.length - 1].end : 0,
     sourceChars: captionSession.cueList.reduce((sum, cue) => sum + String(cue.text || "").length, 0)

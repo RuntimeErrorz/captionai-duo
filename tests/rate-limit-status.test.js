@@ -27,7 +27,7 @@ function loadRateLimitHarness(errorValue, urgent = false) {
     cleanSourceLang: () => "en",
     cleanContext: () => [],
     YTDS_SHARED: { ...loadShared(), videoIdMatchesPageUrls: () => true },
-    acquireDeepSeekSlot: () => { throw errorValue; },
+    acquireAiSlot: () => { throw errorValue; },
     persistAiStatus: (...args) => statuses.push(args)
   };
   vm.createContext(context);
@@ -62,9 +62,9 @@ function loadPartialResultHarness(translations, urgent = true, fastPath = false)
     cleanSourceLang: () => "en",
     cleanContext: () => [],
     YTDS_SHARED: { ...loadShared(), videoIdMatchesPageUrls: () => true },
-    acquireDeepSeekSlot: () => () => {},
-    registerDeepSeekController: () => () => {},
-    deepseekTranslateBatch: async () => translations,
+    acquireAiSlot: () => () => {},
+    registerAiController: () => () => {},
+    aiTranslateBatch: async () => translations,
     persistAiStatus: (...args) => statuses.push(args)
   };
   vm.createContext(context);

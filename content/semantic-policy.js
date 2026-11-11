@@ -25,8 +25,6 @@ function isGeminiProvider() {
   return aiEndpointKind() === "gemini";
 }
 
-const deepseekEndpointKind = aiEndpointKind;
-const deepseekIsGemini = isGeminiProvider;
 const aiIsGemini = isGeminiProvider;
 
 function aiConfiguredRequestItems(fallbackValue) {
@@ -41,21 +39,21 @@ function aiConfiguredRequestItems(fallbackValue) {
 }
 
 function aiInitialRequestItems() {
-  return isGeminiProvider() ? aiConfiguredRequestItems(96) : DEEPSEEK_INITIAL_REQUEST_ITEMS;
+  return isGeminiProvider() ? aiConfiguredRequestItems(96) : AI_INITIAL_REQUEST_ITEMS;
 }
 
 function aiSteadyRequestItems() {
-  return isGeminiProvider() ? aiConfiguredRequestItems(96) : DEEPSEEK_REQUEST_ITEMS;
+  return isGeminiProvider() ? aiConfiguredRequestItems(96) : AI_REQUEST_ITEMS;
 }
 
 function aiUrgentRequestItems() {
-  return isGeminiProvider() ? aiConfiguredRequestItems(96) : DEEPSEEK_URGENT_REQUEST_ITEMS;
+  return isGeminiProvider() ? aiConfiguredRequestItems(96) : AI_URGENT_REQUEST_ITEMS;
 }
 
 function aiNormalMaxRequestItems() {
   return isGeminiProvider()
     ? Math.max(aiConfiguredRequestItems(96), GEMINI_MAX_REQUEST_ITEMS)
-    : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
+    : AI_NORMAL_MAX_REQUEST_ITEMS;
 }
 
 function aiMaxSpeculativeRequests() {
@@ -96,18 +94,10 @@ function aiMaxRequestItems() {
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
   if (Number.isFinite(rate) && rate >= 2.5) {
-    const configured = typeof DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS === "number"
-      ? DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS : 160;
-    return Math.min(DEEPSEEK_MAX_REQUEST_ITEMS, Math.max(1, configured));
+    const configured = typeof AI_HIGH_SPEED_MAX_REQUEST_ITEMS === "number"
+      ? AI_HIGH_SPEED_MAX_REQUEST_ITEMS : 160;
+    return Math.min(AI_MAX_REQUEST_ITEMS, Math.max(1, configured));
   }
   return Number.isFinite(rate) && rate >= 1.75
-    ? DEEPSEEK_MAX_REQUEST_ITEMS : DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS;
+    ? AI_MAX_REQUEST_ITEMS : AI_NORMAL_MAX_REQUEST_ITEMS;
 }
-
-const deepseekInitialRequestItems = aiInitialRequestItems;
-const deepseekSteadyRequestItems = aiSteadyRequestItems;
-const deepseekUrgentRequestItems = aiUrgentRequestItems;
-const deepseekNormalMaxRequestItems = aiNormalMaxRequestItems;
-const deepseekMaxSpeculativeRequests = aiMaxSpeculativeRequests;
-const deepseekAcceleratedUrgentRequestItems = aiAcceleratedUrgentRequestItems;
-const deepseekMaxRequestItems = aiMaxRequestItems;

@@ -23,8 +23,8 @@ test("one session reset revokes every old callback and clears semantic owners", 
     videoIdFromLocation: () => "video",
     extensionContextAlive: () => true,
     sendRuntimeMessage: (message) => messages.push(message),
-    resetDeepseekCommitTimeline: () => calls.push("reset-timeline"),
-    clearDeepseekSeekSettle: () => calls.push("clear-seek"),
+    resetAiCommitTimeline: () => calls.push("reset-timeline"),
+    clearAiSeekSettle: () => calls.push("clear-seek"),
     clearPendingTimer: () => calls.push("clear-pending")
   };
   vm.createContext(context);
@@ -34,8 +34,8 @@ test("one session reset revokes every old callback and clears semantic owners", 
     cueEpoch: 5,
     cueVideoId: "video",
     currentVideoId: "video",
-    deepseekFocusGeneration: 3,
-    deepseekFocusedBatchIndex: 4,
+    semanticFocusGeneration: 3,
+    semanticFocusedBatchIndex: 4,
     semanticLayoutWidth: 1200,
     activeGroupIdx: 10,
     activeCueIdx: 20,
@@ -43,14 +43,14 @@ test("one session reset revokes every old callback and clears semantic owners", 
   });
   for (const cache of [
     session.transCache,
-    session.deepseekUnitCache,
-    session.deepseekSourceCache,
-    session.deepseekAlignedChunksCache,
-    session.deepseekDisplayCache,
-    session.deepseekRequestMeta,
-    session.deepseekRetryCounts,
-    session.deepseekExhaustedRegions,
-    session.deepseekVisibleErrors
+    session.semanticUnitCache,
+    session.semanticSourceCache,
+    session.semanticAlignedChunksCache,
+    session.semanticDisplayCache,
+    session.semanticRequestMeta,
+    session.semanticRetryCounts,
+    session.semanticExhaustedRegions,
+    session.semanticVisibleErrors
   ]) cache.set("old", true);
   session.transInflight.add("dsb:0");
   const capture = vm.runInContext("captureCaptionSession", context);
@@ -65,20 +65,20 @@ test("one session reset revokes every old callback and clears semantic owners", 
   assert.equal(newToken.reason, "configuration-change");
   assert.equal(session.cueEpoch, 6);
   assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, "cancelDeepSeek");
+  assert.equal(messages[0].type, "cancelAiTranslation");
   assert.equal(messages[0].videoId, "video");
   assert.deepEqual(calls, ["reset-timeline", "clear-seek", "clear-pending"]);
   for (const cache of [
     session.transCache,
-    session.deepseekUnitCache,
-    session.deepseekSourceCache,
-    session.deepseekRequestMeta,
+    session.semanticUnitCache,
+    session.semanticSourceCache,
+    session.semanticRequestMeta,
     session.transInflight,
-    session.deepseekRetryCounts,
-    session.deepseekExhaustedRegions,
-    session.deepseekVisibleErrors
+    session.semanticRetryCounts,
+    session.semanticExhaustedRegions,
+    session.semanticVisibleErrors
   ]) assert.equal(cache.size, 0);
-  assert.equal(session.deepseekFocusedBatchIndex, -1);
+  assert.equal(session.semanticFocusedBatchIndex, -1);
   assert.equal(session.semanticLayoutWidth, 0);
   assert.equal(session.activeGroupIdx, -1);
   assert.equal(session.activeCueIdx, -1);

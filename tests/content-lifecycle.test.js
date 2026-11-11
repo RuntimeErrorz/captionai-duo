@@ -49,7 +49,7 @@ test("same-video navigate-finish preserves the active caption session", () => {
     scheduleCueRecovery: () => calls.push(["scheduleRecovery"]),
     syncCaptions: () => calls.push(["syncCaptions"]),
     onInjectMessage: () => {},
-    scheduleDeepseekDisplayReflow: () => {},
+    scheduleAiDisplayReflow: () => {},
     styleOverlay: () => {},
     overlay: null,
     loadSettings: () => ({ then: () => {} }),
@@ -100,7 +100,7 @@ test("cold-start URL discovery enters the video session even without yt-navigate
     scheduleCueRecovery: (...args) => calls.push(["scheduleRecovery", ...args]),
     syncCaptions: (...args) => calls.push(["syncCaptions", ...args]),
     onInjectMessage: () => {},
-    scheduleDeepseekDisplayReflow: () => {},
+    scheduleAiDisplayReflow: () => {},
     styleOverlay: () => {},
     overlay: null,
     loadSettings: () => ({ then: () => {} }),
@@ -137,4 +137,61 @@ test("cold-start URL discovery enters the video session even without yt-navigate
   currentUrlVideoId = "";
   intervals[0].callback();
   assert.equal(context.captionSession.currentVideoId, "");
+});
+
+test("navigation polling pauses in hidden tabs and re-checks identity on return", () => {
+  const documentListeners = new Map();
+  const intervals = new Map();
+  const calls = [];
+  let nextTimer = 0;
+  let currentUrlVideoId = "";
+  const context = {
+    settings: { enabled: true },
+    INITIAL_CUE_RECOVERY_MS: 7000,
+    captionSession: { currentVideoId: "", cueList: null, weEnabledCC: false },
+    videoIdFromLocation: () => currentUrlVideoId,
+    emitCaptionStateTransition: () => {},
+    emitDebug: () => {},
+    stopCueLoop: () => {},
+    resetCaptionSessionState: (reason) => calls.push(["reset", reason]),
+    removeOverlay: () => {},
+    stopCueRecovery: () => {},
+    ensureOverlay: () => {},
+    sendConfig: (...args) => calls.push(["sendConfig", ...args]),
+    scheduleCueRecovery: () => {},
+    syncCaptions: () => {},
+    onInjectMessage: () => {},
+    scheduleAiDisplayReflow: () => {},
+    styleOverlay: () => {},
+    overlay: null,
+    loadSettings: () => ({ then: () => {} }),
+    applyStateToDom: () => {},
+    setInterval: (callback, delay) => { intervals.set(++nextTimer, { callback, delay }); return nextTimer; },
+    clearInterval: (id) => intervals.delete(id),
+    document: {
+      hidden: false,
+      addEventListener: (type, callback) => documentListeners.set(type, callback),
+      fonts: null,
+      readyState: "complete",
+      documentElement: { classList: { toggle: () => {} } }
+    },
+    window: { addEventListener: () => {} }
+  };
+  vm.createContext(context);
+  vm.runInContext(lifecycleSource, context);
+  assert.equal(intervals.size, 1);
+
+  context.document.hidden = true;
+  documentListeners.get("visibilitychange")();
+  assert.equal(intervals.size, 0, "a hidden tab must not keep polling");
+
+  currentUrlVideoId = "abcdefghijk";
+  context.document.hidden = false;
+  documentListeners.get("visibilitychange")();
+  assert.equal(intervals.size, 1);
+  assert.equal(context.captionSession.currentVideoId, "abcdefghijk");
+  assert.equal(calls.some(([name]) => name === "sendConfig"), true, JSON.stringify(calls));
+
+  documentListeners.get("visibilitychange")();
+  assert.equal(intervals.size, 1, "visibility events must not stack intervals");
 });

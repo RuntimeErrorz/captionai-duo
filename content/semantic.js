@@ -1,29 +1,29 @@
 // DeepSeek semantic timeline, commit and request pipeline.
 "use strict";
 function groupKey(gIdx) { return captionSession.cueVideoId + " g" + gIdx; }
-function deepseekPauseAfter(list, index) {
+function aiPauseAfter(list, index) {
   if (index >= list.length - 1) return Number.POSITIVE_INFINITY;
   return Math.max(0, Number(YTDS_SHARED.cuePauseMs(list[index], list[index + 1])) || 0);
 }
 function resetSemanticCommitTimeline() {
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const regions = captionSession.semanticCommitRegions;
   if (regions) regions.length = 0;
   else captionSession.semanticCommitRegions = [];
-  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion;
+  const groupToRegion = captionSession.semanticGroupToCommitRegion;
   if (groupToRegion) groupToRegion.length = 0;
   else captionSession.semanticGroupToCommitRegion = [];
-  const stateByRegion = captionSession.semanticCommitStateByRegion || captionSession.deepseekCommitStateByRegion;
+  const stateByRegion = captionSession.semanticCommitStateByRegion;
   if (stateByRegion) stateByRegion.clear();
   else captionSession.semanticCommitStateByRegion = new Map();
 }
-const resetDeepseekCommitTimeline = resetSemanticCommitTimeline;
+const resetAiCommitTimeline = resetSemanticCommitTimeline;
 
 function buildSemanticCommitRegions() {
   resetSemanticCommitTimeline();
   if (!captionSession.sentGroups || !captionSession.sentGroups.length) return;
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions || [];
+  const regions = captionSession.semanticCommitRegions || [];
   captionSession.semanticCommitRegions = regions;
-  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion || [];
+  const groupToRegion = captionSession.semanticGroupToCommitRegion || [];
   captionSession.semanticGroupToCommitRegion = groupToRegion;
   let start = 0;
   for (let end = 0; end < captionSession.sentGroups.length; end++) {
@@ -34,7 +34,7 @@ function buildSemanticCommitRegions() {
     start = end + 1;
   }
 }
-const buildDeepseekCommitRegions = buildSemanticCommitRegions;
+const buildAiCommitRegions = buildSemanticCommitRegions;
 // Preserve the player's cue timeline while exposing addressable lexical
 // references. DeepSeek alone chooses semantic groups; local scopes only
 // control preloading distance and pending-indicator stability.
@@ -53,43 +53,43 @@ function buildHybridCueGroups(list) {
     captionSession.cueToGroups[sourceCueIndex].push(group);
   }
   captionSession.cueToGroup = captionSession.cueToGroups.map((groups) => groups.length ? groups[0] : -1);
-  captionSession.deepseekBatchWindows = YTDS_SHARED.referenceBatchWindows(
+  captionSession.semanticBatchWindows = YTDS_SHARED.referenceBatchWindows(
     list, atoms, 0, 0, true,
-    { coreItems: DEEPSEEK_CORE_ITEMS, requestItems: DEEPSEEK_CORE_ITEMS }
+    { coreItems: AI_CORE_ITEMS, requestItems: AI_CORE_ITEMS }
   );
-  captionSession.deepseekGroupToBatch = new Array(captionSession.sentGroups.length);
-  for (let batchIndex = 0; batchIndex < captionSession.deepseekBatchWindows.length; batchIndex++) {
-    const batch = captionSession.deepseekBatchWindows[batchIndex];
+  captionSession.semanticGroupToBatch = new Array(captionSession.sentGroups.length);
+  for (let batchIndex = 0; batchIndex < captionSession.semanticBatchWindows.length; batchIndex++) {
+    const batch = captionSession.semanticBatchWindows[batchIndex];
     for (let i = batch.start; i <= batch.end; i++) {
-      captionSession.deepseekGroupToBatch[i] = batchIndex;
+      captionSession.semanticGroupToBatch[i] = batchIndex;
       const atom = atoms[i] || {};
       const sourceCueIndex = captionSession.sentGroups[i].startIdx;
       const nextSourceCueIndex = i + 1 < captionSession.sentGroups.length ? captionSession.sentGroups[i + 1].startIdx : -1;
       const crossesCue = sourceCueIndex !== nextSourceCueIndex;
       const timingPauseMs = Math.max(0, Number(atom.pauseAfterMs) || 0);
-      const rawCuePauseMs = crossesCue ? deepseekPauseAfter(list, sourceCueIndex) : 0;
+      const rawCuePauseMs = crossesCue ? aiPauseAfter(list, sourceCueIndex) : 0;
       // A timed JSON3 atom has a more precise adjacent-onset signal than the
       // rolling caption window's display duration. A long raw-cue hole is the
       // exception: the final timed atom has no following word onset, but a
       // hard-sized hole is still an unambiguous semantic/display boundary.
       const hardRawCuePauseMs = Number.isFinite(rawCuePauseMs) &&
-        rawCuePauseMs >= DEEPSEEK_HARD_PAUSE_MS ? rawCuePauseMs : 0;
+        rawCuePauseMs >= AI_HARD_PAUSE_MS ? rawCuePauseMs : 0;
       const pauseAfterMs = atom.timed === true
         ? Math.max(timingPauseMs, hardRawCuePauseMs)
         : crossesCue ? rawCuePauseMs : 0;
       const pauseKind = YTDS_SHARED.semanticPauseKind(
-        pauseAfterMs, DEEPSEEK_SOFT_PAUSE_MS, DEEPSEEK_HARD_PAUSE_MS
+        pauseAfterMs, AI_SOFT_PAUSE_MS, AI_HARD_PAUSE_MS
       );
       captionSession.sentGroups[i].pauseAfterMs = Number.isFinite(pauseAfterMs)
-        ? Math.round(pauseAfterMs) : DEEPSEEK_HARD_PAUSE_MS;
+        ? Math.round(pauseAfterMs) : AI_HARD_PAUSE_MS;
       captionSession.sentGroups[i].softAfter = pauseKind !== "none";
       captionSession.sentGroups[i].hardAfter = i >= captionSession.sentGroups.length - 1 ||
         pauseKind === "hard";
     }
   }
-  buildDeepseekCommitRegions();
+  buildAiCommitRegions();
 }
-function deepseekBatchEntry(gIdx, withTranslation) {
+function aiBatchEntry(gIdx, withTranslation) {
   const group = captionSession.sentGroups[gIdx];
   const entry = {
     id: String(gIdx),
@@ -107,7 +107,7 @@ function deepseekBatchEntry(gIdx, withTranslation) {
   }
   return entry;
 }
-function deepseekCueContextEntry(cueIdx, temporal) {
+function aiCueContextEntry(cueIdx, temporal) {
   const cue = captionSession.cueList && captionSession.cueList[cueIdx];
   if (!cue) return null;
   return {
@@ -145,29 +145,29 @@ function cueTrackFingerprint(videoId, trackKind, sourceLang, trackId, cues) {
   }
   return `${cues.length}:${hash >>> 0}`;
 }
-function deepseekContextsForRange(requestStart, requestEnd) {
+function aiContextsForRange(requestStart, requestEnd) {
   const startCue = Math.max(0,
     Number(captionSession.sentGroups[requestStart] && captionSession.sentGroups[requestStart].startIdx) || 0);
   const endCue = Math.max(startCue,
     Number(captionSession.sentGroups[requestEnd] && captionSession.sentGroups[requestEnd].endIdx) || startCue);
   const contextBefore = [];
-  for (let i = Math.max(0, startCue - DEEPSEEK_CONTEXT_GROUPS); i < startCue; i++) {
-    const entry = deepseekCueContextEntry(i, "past");
+  for (let i = Math.max(0, startCue - AI_CONTEXT_GROUPS); i < startCue; i++) {
+    const entry = aiCueContextEntry(i, "past");
     if (entry) contextBefore.push(entry);
   }
   const contextAfter = [];
   for (let i = endCue + 1;
-       i <= Math.min(captionSession.cueList.length - 1, endCue + DEEPSEEK_CONTEXT_GROUPS); i++) {
-    const entry = deepseekCueContextEntry(i, "future");
+       i <= Math.min(captionSession.cueList.length - 1, endCue + AI_CONTEXT_GROUPS); i++) {
+    const entry = aiCueContextEntry(i, "future");
     if (entry) contextAfter.push(entry);
   }
   return { contextBefore, contextAfter };
 }
 function semanticCommitState(regionIndex) {
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const regions = captionSession.semanticCommitRegions;
   const region = regions ? regions[regionIndex] : null;
   if (!region) return null;
-  const stateByRegion = captionSession.semanticCommitStateByRegion || captionSession.deepseekCommitStateByRegion;
+  const stateByRegion = captionSession.semanticCommitStateByRegion;
   let state = stateByRegion ? stateByRegion.get(regionIndex) : null;
   if (!state && stateByRegion) {
     state = {
@@ -176,7 +176,7 @@ function semanticCommitState(regionIndex) {
       limitEnd: region.end,
       targetThrough: region.start - 1,
       urgentTarget: region.start - 1,
-      windowItems: deepseekInitialRequestItems(),
+      windowItems: aiInitialRequestItems(),
       recoveryWindowItems: false, noProgressRange: "",
       prefetchQueue: [],
       prefetchQueued: new Set(),
@@ -186,14 +186,14 @@ function semanticCommitState(regionIndex) {
   }
   return state;
 }
-const deepseekCommitState = semanticCommitState;
+const aiCommitState = semanticCommitState;
 
-function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
+function aiPrefetchAtCursor(regionIndex, cursorValue) {
   const cursor = Math.floor(Number(cursorValue));
   if (!Number.isInteger(cursor)) return false;
-  const state = deepseekCommitState(regionIndex);
+  const state = aiCommitState(regionIndex);
   if (!state) return false;
-  const candidates = Array.from(captionSession.deepseekRequestMeta.values())
+  const candidates = Array.from(captionSession.semanticRequestMeta.values())
     .filter((request) => request && request.prefetch && request.regionIndex === regionIndex &&
       Number.isInteger(Math.floor(Number(request.requestStart))) &&
       Number.isInteger(Math.floor(Number(request.requestEnd))) &&
@@ -214,20 +214,20 @@ function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
           if (!request.urgent) {
             request.urgent = true;
             request.promotedAt = Date.now();
-            emitDebug("deepseek-prefetch-promoted", {
+            emitDebug("ai-prefetch-promoted", {
               requestId: request.requestId, regionIndex, cursor: state.cursor
             });
           }
           return true;
         }
-        const owner = Array.from(captionSession.deepseekRequestMeta.entries()).find(([, value]) => value === request);
-        if (request.requestId) sendRuntimeMessage({ type: "cancelDeepSeekRequest", videoId: captionSession.cueVideoId, requestId: request.requestId });
-        if (owner) { captionSession.deepseekRequestMeta.delete(owner[0]); captionSession.transInflight.delete(owner[0]); }
+        const owner = Array.from(captionSession.semanticRequestMeta.entries()).find(([, value]) => value === request);
+        if (request.requestId) sendRuntimeMessage({ type: "cancelAiTranslationRequest", videoId: captionSession.cueVideoId, requestId: request.requestId });
+        if (owner) { captionSession.semanticRequestMeta.delete(owner[0]); captionSession.transInflight.delete(owner[0]); }
         break;
       }
-      if (typeof handleDeepseekTranslationProgress !== "function") break;
+      if (typeof handleAiTranslationProgress !== "function") break;
       const previousCursor = state.cursor;
-      handleDeepseekTranslationProgress({
+      handleAiTranslationProgress({
         type: "translationBatchProgress",
         requestId: request.requestId,
         videoId: request.reqVid,
@@ -250,16 +250,16 @@ function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
     if (bufferedAfterConsume.length &&
         !bufferedAfterConsume.some((item) => Number(item && item.id) === state.cursor)) {
       let inflightKey = "";
-      for (const [key, value] of captionSession.deepseekRequestMeta.entries()) {
+      for (const [key, value] of captionSession.semanticRequestMeta.entries()) {
         if (value === request) { inflightKey = key; break; }
       }
       if (request.requestId) sendRuntimeMessage({
-        type: "cancelDeepSeekRequest",
+        type: "cancelAiTranslationRequest",
         videoId: captionSession.cueVideoId,
         requestId: request.requestId
       });
       if (inflightKey) {
-        captionSession.deepseekRequestMeta.delete(inflightKey);
+        captionSession.semanticRequestMeta.delete(inflightKey);
         captionSession.transInflight.delete(inflightKey);
       }
       emitCaptionStateTransition("semantic-request", "cancelled", {
@@ -278,7 +278,7 @@ function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
       if (!request.urgent) {
         request.urgent = true;
         request.promotedAt = Date.now();
-        emitDebug("deepseek-prefetch-promoted", {
+        emitDebug("ai-prefetch-promoted", {
           requestId: request.requestId, regionIndex, cursor: state.cursor
         });
       }
@@ -291,7 +291,7 @@ function deepseekPrefetchAtCursor(regionIndex, cursorValue) {
 // Preserve safe aligned chunks when a future response settles or is cancelled after a
 // valid prefix), otherwise the content side would throw away work that already
 // crossed the stream boundary and start the same range again.
-function deepseekResponseWithBufferedProgress(request, response, state) {
+function aiResponseWithBufferedProgress(request, response, state) {
   const buffered = Array.isArray(request && request.progressTranslations)
     ? request.progressTranslations : [];
   const responseTranslations = response && response.ok &&
@@ -321,13 +321,13 @@ function deepseekResponseWithBufferedProgress(request, response, state) {
 }
 
 function reseedSemanticCommitState(regionIndex, targetGroup) {
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const regions = captionSession.semanticCommitRegions;
   const region = regions ? regions[regionIndex] : null;
   const state = semanticCommitState(regionIndex);
   if (!region || !state) return state;
-  const exhausted = captionSession.semanticExhaustedRegions || captionSession.deepseekExhaustedRegions;
+  const exhausted = captionSession.semanticExhaustedRegions;
   if (exhausted) exhausted.delete(regionIndex);
-  const visibleErrors = captionSession.semanticVisibleErrors || captionSession.deepseekVisibleErrors;
+  const visibleErrors = captionSession.semanticVisibleErrors;
   if (visibleErrors) visibleErrors.delete(regionIndex);
   let effectiveTarget = targetGroup;
   while (effectiveTarget <= region.end && captionSession.transCache.has(groupKey(effectiveTarget))) {
@@ -341,7 +341,7 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
     state.urgentTarget = region.end;
     return state;
   }
-  let requestStart = Math.max(region.start, effectiveTarget - deepseekSeekBacktrackItems());
+  let requestStart = Math.max(region.start, effectiveTarget - aiSeekBacktrackItems());
   // A previously committed unit immediately to the left is already a proven
   // semantic boundary. Start after it instead of inventing another guard.
   for (let id = effectiveTarget - 1; id >= requestStart; id--) {
@@ -358,17 +358,17 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
     }
   }
   // Replace only the stalled writer; preserve future ranges that still reach the new cursor.
-  cancelDeepseekRegionRequests(regionIndex, requestStart);
+  cancelAiRegionRequests(regionIndex, requestStart);
   const provenLeftBoundary = requestStart === region.start ||
     (requestStart > region.start && captionSession.transCache.has(groupKey(requestStart - 1)));
   state.cursor = requestStart;
   state.commitFloor = provenLeftBoundary
     ? requestStart
-    : Math.min(effectiveTarget, requestStart + DEEPSEEK_SEEK_LEFT_GUARD_ITEMS);
+    : Math.min(effectiveTarget, requestStart + AI_SEEK_LEFT_GUARD_ITEMS);
   state.limitEnd = Math.max(effectiveTarget, limitEnd);
   state.targetThrough = requestStart - 1;
   state.urgentTarget = requestStart - 1;
-  state.windowItems = deepseekInitialRequestItems();
+  state.windowItems = aiInitialRequestItems();
   state.recoveryWindowItems = false; state.noProgressRange = "";
   emitDebug("semantic-commit-reseeded", {
     regionIndex,
@@ -380,28 +380,28 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
   });
   return state;
 }
-const reseedDeepseekCommitState = reseedSemanticCommitState;
-function canContinueDeepseekInflight(regionIndex, state, targetGroup) {
-  const request = captionSession.deepseekRequestMeta.get(`dsb:${regionIndex}`);
+const reseedAiCommitState = reseedSemanticCommitState;
+function canContinueAiInflight(regionIndex, state, targetGroup) {
+  const request = captionSession.semanticRequestMeta.get(`dsb:${regionIndex}`);
   if (!request || !state || request.reqEpoch !== captionSession.cueEpoch ||
-      request.focusGeneration !== captionSession.deepseekFocusGeneration ||
+      request.focusGeneration !== captionSession.semanticFocusGeneration ||
       !isCaptionSessionCurrent(request.sessionToken)) return false;
   // Normal or accelerated playback may overtake the private guard just before
   // a response completes. Preserve that response when the new target is close
   // enough for its committed prefix plus one continuation request to reach.
   // A real random seek changes focus generation after seek settlement and is
   // still free to reseed immediately.
-  if (deepseekRequestIsStaleForTarget(request, targetGroup)) return false;
-  if (deepseekRequestIsPlaybackLagging(request, state, targetGroup)) return false;
+  if (aiRequestIsStaleForTarget(request, targetGroup)) return false;
+  if (aiRequestIsPlaybackLagging(request, state, targetGroup)) return false;
   return targetGroup >= state.cursor &&
-    targetGroup <= request.requestEnd + deepseekUrgentTargetTailItems();
+    targetGroup <= request.requestEnd + aiUrgentTargetTailItems();
 }
 
 function commitSemanticResponsePrefix(
   regionIndex, requestStart, requestEnd, commitFloor, limitEnd, translations, guardItems,
   minimumRunwayItems
 ) {
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const regions = captionSession.semanticCommitRegions;
   const region = regions ? regions[regionIndex] : null;
   const state = semanticCommitState(regionIndex);
   const runwayRequirement = minimumRunwayItems == null ? 0 : minimumRunwayItems;
@@ -440,7 +440,7 @@ function commitSemanticResponsePrefix(
     if (parts.length !== unit.members.length) return requestStart;
     unit.source = mergeCueTexts(parts);
     for (const id of unit.members) {
-      const unitCache = captionSession.semanticUnitCache || captionSession.deepseekUnitCache;
+      const unitCache = captionSession.semanticUnitCache;
       if (captionSession.transCache.has(groupKey(id)) || (unitCache && unitCache.has(groupKey(id)))) {
         emitDebug("semantic-commit-invariant-violation", {
           regionIndex, requestStart, requestEnd, id, unitId: unit.unitId
@@ -452,30 +452,30 @@ function commitSemanticResponsePrefix(
   }
   if (expected - 1 !== plan.commitThrough) return requestStart;
 
-  const unitCache = captionSession.semanticUnitCache || captionSession.deepseekUnitCache;
-  const sourceCache = captionSession.semanticSourceCache || captionSession.deepseekSourceCache;
-  const chunkCache = captionSession.semanticAlignedChunksCache || captionSession.deepseekAlignedChunksCache;
+  const unitCache = captionSession.semanticUnitCache;
+  const sourceCache = captionSession.semanticSourceCache;
+  const chunkCache = captionSession.semanticAlignedChunksCache;
   for (const unit of units) {
     for (const id of unit.members) {
       const key = groupKey(id);
       captionSession.transCache.set(key, unit.translation);
       if (unitCache) unitCache.set(key, unit.unitId);
       if (sourceCache) sourceCache.set(key, unit.source);
-      if (captionSession.deepseekUnitCache && captionSession.deepseekUnitCache !== unitCache) {
-        captionSession.deepseekUnitCache.set(key, unit.unitId);
+      if (captionSession.semanticUnitCache && captionSession.semanticUnitCache !== unitCache) {
+        captionSession.semanticUnitCache.set(key, unit.unitId);
       }
-      if (captionSession.deepseekSourceCache && captionSession.deepseekSourceCache !== sourceCache) {
-        captionSession.deepseekSourceCache.set(key, unit.source);
+      if (captionSession.semanticSourceCache && captionSession.semanticSourceCache !== sourceCache) {
+        captionSession.semanticSourceCache.set(key, unit.source);
       }
     }
     if (unit.alignedChunks && unit.alignedChunks.length) {
       if (chunkCache) chunkCache.set(unit.unitId, unit.alignedChunks);
-      if (captionSession.deepseekAlignedChunksCache && captionSession.deepseekAlignedChunksCache !== chunkCache) {
-        captionSession.deepseekAlignedChunksCache.set(unit.unitId, unit.alignedChunks);
+      if (captionSession.semanticAlignedChunksCache && captionSession.semanticAlignedChunksCache !== chunkCache) {
+        captionSession.semanticAlignedChunksCache.set(unit.unitId, unit.alignedChunks);
       }
     }
   }
-  cacheDeepseekDisplayNeighborhood(units.flatMap((unit) => unit.members), true);
+  cacheAiDisplayNeighborhood(units.flatMap((unit) => unit.members), true);
   captionSession.semanticLayoutWidth = semanticDisplayWidth();
   emitDebug("semantic-prefix-committed", {
     regionIndex,
@@ -488,9 +488,9 @@ function commitSemanticResponsePrefix(
   });
   return plan.carryStart;
 }
-const commitDeepseekResponsePrefix = commitSemanticResponsePrefix;
-function handleDeepseekTranslationProgress(msg) {
-  const found = deepseekRequestById(msg && msg.requestId);
+const commitAiResponsePrefix = commitSemanticResponsePrefix;
+function handleAiTranslationProgress(msg) {
+  const found = aiRequestById(msg && msg.requestId);
   if (!found) {
     emitCaptionStateTransition("semantic-progress", "discarded", {
       requestId: String(msg && msg.requestId || ""),
@@ -546,25 +546,25 @@ function handleDeepseekTranslationProgress(msg) {
   request.progressRecoveryTranslations = Array.from(recoveryById.values())
     .sort((a, b) => Number(a.id) - Number(b.id));
 
-  const state = deepseekCommitState(request.regionIndex);
+  const state = aiCommitState(request.regionIndex);
   if (!state || state.cursor < request.requestStart || state.cursor > request.requestEnd) return false;
   const pending = request.progressTranslations.filter(
     (item) => Number(item && item.id) >= state.cursor
   );
   const previousCursor = state.cursor;
-  let nextCursor = commitDeepseekResponsePrefix(
+  let nextCursor = commitAiResponsePrefix(
     request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
     request.limitEnd, pending, request.effectiveGuardItems,
-    DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS
+    AI_MIN_COMMIT_RUNWAY_ITEMS
   );
   if ((!Number.isInteger(nextCursor) || nextCursor <= previousCursor) && request.urgent) {
     const recoveredTranslations = YTDS_SHARED.semanticUnitsFromAlignedChunks(
-      deepseekAlignedRecoveryInput(request.progressRecoveryTranslations, previousCursor)
+      aiAlignedRecoveryInput(request.progressRecoveryTranslations, previousCursor)
     );
-    const recoveredCursor = commitDeepseekResponsePrefix(
+    const recoveredCursor = commitAiResponsePrefix(
       request.regionIndex, previousCursor, request.requestEnd, state.commitFloor,
       request.limitEnd, recoveredTranslations, request.effectiveGuardItems,
-      DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS
+      AI_MIN_COMMIT_RUNWAY_ITEMS
     );
     if (Number.isInteger(recoveredCursor) && recoveredCursor > previousCursor) {
       nextCursor = recoveredCursor;
@@ -578,7 +578,7 @@ function handleDeepseekTranslationProgress(msg) {
     }
   }
   if (!Number.isInteger(nextCursor) || nextCursor <= previousCursor) return false;
-  if (captionSession.deepseekVisibleErrors) captionSession.deepseekVisibleErrors.delete(request.regionIndex);
+  if (captionSession.semanticVisibleErrors) captionSession.semanticVisibleErrors.delete(request.regionIndex);
   // Refresh lag grace only after the immutable commit cursor advanced. A
   // provisional/left-guard fragment must not make a stalled playback request
   // look healthy indefinitely.
@@ -586,14 +586,14 @@ function handleDeepseekTranslationProgress(msg) {
   request.progressCursor = nextCursor;
   state.cursor = nextCursor;
   state.commitFloor = nextCursor;
-  reconcileDeepseekPrefetchCandidates(state, nextCursor);
-  state.windowItems = deepseekSteadyRequestItems();
+  reconcileAiPrefetchCandidates(state, nextCursor);
+  state.windowItems = aiSteadyRequestItems();
   state.recoveryWindowItems = false; state.noProgressRange = "";
-  captionSession.deepseekExhaustedRegions.delete(request.regionIndex);
+  captionSession.semanticExhaustedRegions.delete(request.regionIndex);
   request.progressTranslations = request.progressTranslations.filter(
     (item) => Number(item && item.id) >= nextCursor
   );
-  captionSession.deepseekRetryCounts.delete(deepseekBatchRetryKey(
+  captionSession.semanticRetryCounts.delete(aiBatchRetryKey(
     request.requestStart, request.requestEnd, request.reqVid, request.reqEpoch
   ));
   emitDebug("semantic-jsonl-progress-committed", {
@@ -603,86 +603,86 @@ function handleDeepseekTranslationProgress(msg) {
     previousCursor,
     nextCursor
   });
-  if (deepseekStreamHandoffReady(
-    request, state, deepseekMaxRequestItems(), deepseekNormalMaxRequestItems()
-  )) handoffDeepseekStream(request.regionIndex, request, state);
-  repaintActiveDeepseekTranslation();
+  if (aiStreamHandoffReady(
+    request, state, aiMaxRequestItems(), aiNormalMaxRequestItems()
+  )) handoffAiStream(request.regionIndex, request, state);
+  repaintActiveAiTranslation();
   return true;
 }
 
-function deepseekUrgentTargetTailItems() {
+function aiUrgentTargetTailItems() {
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
   if (Number.isFinite(rate) && rate >= 2.5) {
-    return Math.min(deepseekMaxRequestItems(), Math.max(
-      DEEPSEEK_URGENT_TARGET_TAIL_ITEMS, DEEPSEEK_HIGH_SPEED_TARGET_TAIL_ITEMS
+    return Math.min(aiMaxRequestItems(), Math.max(
+      AI_URGENT_TARGET_TAIL_ITEMS, AI_HIGH_SPEED_TARGET_TAIL_ITEMS
     ));
   }
   if (Number.isFinite(rate) && rate >= 1.75) {
-    return Math.min(DEEPSEEK_MAX_REQUEST_ITEMS, Math.max(
-      DEEPSEEK_URGENT_TARGET_TAIL_ITEMS, DEEPSEEK_FAST_TARGET_TAIL_ITEMS
+    return Math.min(AI_MAX_REQUEST_ITEMS, Math.max(
+      AI_URGENT_TARGET_TAIL_ITEMS, AI_FAST_TARGET_TAIL_ITEMS
     ));
   }
-  return DEEPSEEK_URGENT_TARGET_TAIL_ITEMS;
+  return AI_URGENT_TARGET_TAIL_ITEMS;
 }
 
-function deepseekKeepAcceleratedUrgentLane(requestWasUrgent, state) {
+function aiKeepAcceleratedUrgentLane(requestWasUrgent, state) {
   const video = typeof getVideo === "function" ? getVideo() : null;
   const rate = Number(video && video.playbackRate);
   return !!requestWasUrgent && Number.isFinite(rate) && rate >= 1.75 && !!state &&
     state.cursor <= state.targetThrough && state.cursor <= state.limitEnd;
 }
 
-function deepseekAcceleratedPrefetchItems(targetTailItems) {
+function aiAcceleratedPrefetchItems(targetTailItems) {
   const tailItems = Math.max(0, Math.floor(Number(targetTailItems) || 0));
-  if (tailItems <= DEEPSEEK_URGENT_TARGET_TAIL_ITEMS) return 0;
+  if (tailItems <= AI_URGENT_TARGET_TAIL_ITEMS) return 0;
   return Math.min(
-    deepseekMaxRequestItems(),
-    tailItems + DEEPSEEK_COMMIT_GUARD_ITEMS + 64
+    aiMaxRequestItems(),
+    tailItems + AI_COMMIT_GUARD_ITEMS + 64
   );
 }
-function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
+  const regions = captionSession.semanticCommitRegions;
   const region = regions ? regions[regionIndex] : null;
   const state = semanticCommitState(regionIndex);
   if (!region || !state || state.cursor > state.limitEnd || state.cursor > state.targetThrough) return;
-  const prefetched = takeDeepseekPrefetchedResponse(state);
+  const prefetched = takeAiPrefetchedResponse(state);
   if (prefetched) {
-    handleDeepseekBatchResult(prefetched.request, prefetched.response, null);
+    handleAiBatchResult(prefetched.request, prefetched.response, null);
     return;
   }
   const requestStart = state.cursor;
   // A live future response beginning at the cursor is already an acceptable
   // writer. Waiting for it avoids an urgent duplicate and preserves the
   // provider work that was started ahead of playback.
-  if (deepseekPrefetchAtCursor(regionIndex, requestStart)) return;
+  if (aiPrefetchAtCursor(regionIndex, requestStart)) return;
   const commitFloor = state.commitFloor;
   const limitEnd = state.limitEnd;
   const requestUrgent = !!urgent || state.urgentTarget >= requestStart;
-  const targetTailItems = deepseekUrgentTargetTailItems();
-  const maxRequestItems = deepseekMaxRequestItems();
+  const targetTailItems = aiUrgentTargetTailItems();
+  const maxRequestItems = aiMaxRequestItems();
   const video = typeof getVideo === "function" ? getVideo() : null;
   const playbackRate = Number(video && video.playbackRate);
   const acceleratedPlayback = Number.isFinite(playbackRate) && playbackRate >= 1.75;
-  const acceleratedUrgentItems = deepseekAcceleratedUrgentRequestItems();
+  const acceleratedUrgentItems = aiAcceleratedUrgentRequestItems();
   const recoveryWindow = state.recoveryWindowItems;
   const inflightKey = `dsb:${regionIndex}`;
-  const existingRequest = captionSession.deepseekRequestMeta.get(inflightKey);
+  const existingRequest = captionSession.semanticRequestMeta.get(inflightKey);
   if (captionSession.transInflight.has(inflightKey) &&
       (!requestUrgent || !existingRequest || existingRequest.urgent)) return;
   const urgentRequestTailItems = acceleratedPlayback && requestUrgent && !recoveryWindow
     ? 0 : targetTailItems;
   const acceleratedPrefetchItems = !requestUrgent
-    ? deepseekAcceleratedPrefetchItems(targetTailItems) : 0;
+    ? aiAcceleratedPrefetchItems(targetTailItems) : 0;
   const acceleratedUrgentWindowItems = acceleratedPlayback && requestUrgent && !recoveryWindow
     ? Math.max(state.windowItems, acceleratedUrgentItems) : state.windowItems;
   const planningWindowItems = Math.max(acceleratedUrgentWindowItems, acceleratedPrefetchItems);
   const planningState = planningWindowItems > state.windowItems
     ? { ...state, windowItems: planningWindowItems } : state;
   const initialUrgentItems = acceleratedPlayback && requestUrgent && !recoveryWindow
-    ? acceleratedUrgentItems : deepseekUrgentRequestItems();
+    ? acceleratedUrgentItems : aiUrgentRequestItems();
   const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
-    ? SEMANTIC_COMMIT_GUARD_ITEMS : DEEPSEEK_COMMIT_GUARD_ITEMS;
+    ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
   const requestPlan = YTDS_SHARED.semanticCommitRequestPlan(
     planningState, requestStart, guardItems,
     maxRequestItems, requestUrgent, initialUrgentItems,
@@ -690,7 +690,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   );
   const targetAwareItems = requestPlan.itemCount;
   let requestEnd = Math.min(limitEnd, requestStart + targetAwareItems - 1);
-  const futureStart = deepseekNextFuturePrefetchStart(regionIndex, state, requestStart);
+  const futureStart = aiNextFuturePrefetchStart(regionIndex, state, requestStart);
   if (!recoveryWindow && futureStart > requestStart && futureStart <= requestEnd) {
     const bridgeItems = semanticBridgeRequestItems(
       requestStart, futureStart, maxRequestItems, limitEnd
@@ -705,25 +705,25 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   const items = [];
   let currentChars = 0;
   for (let id = requestStart; id <= requestEnd; id++) {
-    const entry = deepseekBatchEntry(id, false);
+    const entry = aiBatchEntry(id, false);
     const nextChars = String(entry.text || "").length;
-    if (items.length && currentChars + nextChars > DEEPSEEK_MAX_CURRENT_CHARS) break;
+    if (items.length && currentChars + nextChars > AI_MAX_CURRENT_CHARS) break;
     items.push(entry);
     currentChars += nextChars;
   }
   requestEnd = requestStart + items.length - 1;
   const effectiveGuardItems = YTDS_SHARED.semanticEffectiveGuardItems(
-    items.length, DEEPSEEK_COMMIT_GUARD_ITEMS
+    items.length, AI_COMMIT_GUARD_ITEMS
   );
-  const { contextBefore, contextAfter } = deepseekContextsForRange(requestStart, requestEnd);
-  const requestId = beginDeepseekRequest(
+  const { contextBefore, contextAfter } = aiContextsForRange(requestStart, requestEnd);
+  const requestId = beginAiRequest(
     inflightKey, "commit", requestStart, requestEnd, requestUrgent
   );
   if (!requestId) return;
   const reqVid = captionSession.cueVideoId;
   const reqEpoch = captionSession.cueEpoch;
   const requestSessionToken = captureCaptionSession();
-  const liveRequest = captionSession.deepseekRequestMeta.get(inflightKey);
+  const liveRequest = captionSession.semanticRequestMeta.get(inflightKey);
   if (liveRequest && liveRequest.requestId === requestId) {
     Object.assign(liveRequest, {
       regionIndex,
@@ -735,7 +735,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
       reqVid,
       reqEpoch,
       sessionToken: requestSessionToken,
-      focusGeneration: captionSession.deepseekFocusGeneration,
+      focusGeneration: captionSession.semanticFocusGeneration,
       itemCount: items.length,
       targetAwareItems,
       maxRequestItems
@@ -743,7 +743,7 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
   }
   sendRuntimeMessage({
     type: "translateBatch",
-    endpointKind: deepseekEndpointKind(),
+    endpointKind: aiEndpointKind(),
     debug: !!settings.debugEnabled,
     requestId,
     videoId: captionSession.cueVideoId,
@@ -756,12 +756,12 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
     requestEnd,
     bypassCache: !!(requestOptions && requestOptions.bypassCache),
     urgent: requestUrgent,
-    focusGeneration: captionSession.deepseekFocusGeneration,
+    focusGeneration: captionSession.semanticFocusGeneration,
     items,
     contextBefore,
     contextAfter
   }, (resp, runtimeError) => {
-    const finishedRequest = finishDeepseekRequest(inflightKey, requestId);
+    const finishedRequest = finishAiRequest(inflightKey, requestId);
     if (!finishedRequest) return;
     if (!isCaptionSessionCurrent(requestSessionToken)) {
       emitCaptionStateTransition("semantic-response", "discarded", {
@@ -770,42 +770,42 @@ function pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions) {
       });
       return;
     }
-    handleDeepseekBatchResult(finishedRequest, resp, runtimeError);
+    handleAiBatchResult(finishedRequest, resp, runtimeError);
   });
 }
 
-function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, requestOptions) {
-  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) || captionSession.deepseekSeekSettling) return;
+function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, requestOptions) {
+  if (YTDS_SHARED.isSameLanguage(captionSession.cueSourceLang, settings.targetLang) || captionSession.semanticSeekSettling) return;
   if (!captionSession.sentGroups || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
-  const groupToRegion = captionSession.semanticGroupToCommitRegion || captionSession.deepseekGroupToCommitRegion;
+  const groupToRegion = captionSession.semanticGroupToCommitRegion;
   const regionIndex = groupToRegion ? groupToRegion[gIdx] : undefined;
-  const regions = captionSession.semanticCommitRegions || captionSession.deepseekCommitRegions;
+  const regions = captionSession.semanticCommitRegions;
   const region = regions && regionIndex != null ? regions[regionIndex] : null;
   let state = semanticCommitState(regionIndex);
   if (!region || !state) return;
   if (urgent) {
-    cancelDeepseekRequestsBeforeRegion(regionIndex);
-    cancelDeepseekStaleSpeculativeRequests(regionIndex, gIdx);
+    cancelAiRequestsBeforeRegion(regionIndex);
+    cancelAiStaleSpeculativeRequests(regionIndex, gIdx);
   }
   const currentMissing = !captionSession.transCache.has(groupKey(gIdx));
-  const targetTailItems = deepseekUrgentTargetTailItems();
+  const targetTailItems = aiUrgentTargetTailItems();
   const urgentRequestItems = Math.max(
-    deepseekUrgentRequestItems(),
-    targetTailItems + DEEPSEEK_COMMIT_GUARD_ITEMS
+    aiUrgentRequestItems(),
+    targetTailItems + AI_COMMIT_GUARD_ITEMS
   );
-  const maxRequestItems = deepseekMaxRequestItems();
+  const maxRequestItems = aiMaxRequestItems();
   const randomAccessDistance = (urgent
     ? Math.min(maxRequestItems, urgentRequestItems) : maxRequestItems) -
-    DEEPSEEK_COMMIT_GUARD_ITEMS;
+    AI_COMMIT_GUARD_ITEMS;
   const shouldReseed = YTDS_SHARED.shouldReseedSemanticCommitState(
     currentMissing, gIdx, state, randomAccessDistance, urgent, captionSession.activeGroupIdx >= 0
   );
-  const liveRequest = captionSession.deepseekRequestMeta.get(`dsb:${regionIndex}`);
-  const stalePrefetch = urgent && deepseekRequestIsStaleForTarget(liveRequest, gIdx);
-  const playbackLagging = urgent && deepseekRequestIsPlaybackLagging(liveRequest, state, gIdx);
+  const liveRequest = captionSession.semanticRequestMeta.get(`dsb:${regionIndex}`);
+  const stalePrefetch = urgent && aiRequestIsStaleForTarget(liveRequest, gIdx);
+  const playbackLagging = urgent && aiRequestIsPlaybackLagging(liveRequest, state, gIdx);
   if ((shouldReseed || stalePrefetch || playbackLagging) &&
-      !canContinueDeepseekInflight(regionIndex, state, gIdx)) {
-    state = reseedDeepseekCommitState(regionIndex, gIdx);
+      !canContinueAiInflight(regionIndex, state, gIdx)) {
+    state = reseedAiCommitState(regionIndex, gIdx);
     if (stalePrefetch) emitDebug("semantic-stale-prefetch-reseed", {
       regionIndex, targetGroup: gIdx, requestEnd: liveRequest.requestEnd,
       ageMs: Math.max(0, Date.now() - Number(liveRequest.startedAt))
@@ -819,20 +819,20 @@ function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, 
       regionIndex,
       targetGroup: gIdx,
       cursor: state.cursor,
-      requestId: (captionSession.deepseekRequestMeta.get(`dsb:${regionIndex}`) || {}).requestId || ""
+      requestId: (captionSession.semanticRequestMeta.get(`dsb:${regionIndex}`) || {}).requestId || ""
     });
   }
-  if (captionSession.deepseekExhaustedRegions.has(regionIndex)) return;
-  const batchIndex = captionSession.deepseekGroupToBatch[gIdx];
-  const batch = captionSession.deepseekBatchWindows[batchIndex];
+  if (captionSession.semanticExhaustedRegions.has(regionIndex)) return;
+  const batchIndex = captionSession.semanticGroupToBatch[gIdx];
+  const batch = captionSession.semanticBatchWindows[batchIndex];
   const targetThrough = Math.min(state.limitEnd, batch ? batch.end : gIdx);
   state.targetThrough = Math.max(state.targetThrough, targetThrough);
   if (urgent) {
     state.urgentTarget = gIdx;
-    if (Number.isInteger(batchIndex)) captionSession.deepseekFocusedBatchIndex = batchIndex;
+    if (Number.isInteger(batchIndex)) captionSession.semanticFocusedBatchIndex = batchIndex;
   }
   if (!urgent && gIdx > state.cursor) {
-    queueDeepseekSpeculativeRequest(regionIndex, gIdx);
+    queueAiSpeculativeRequest(regionIndex, gIdx);
     return;
   }
   if (!urgent && (captionSession.activeGroupIdx >= 0
@@ -840,6 +840,6 @@ function deepseekRequestBatch(gIdx, _includePredecessor = true, urgent = false, 
       : regionIndex !== 0)) {
     return;
   }
-  pumpDeepseekCommitRegion(regionIndex, urgent, requestOptions);
+  pumpAiCommitRegion(regionIndex, urgent, requestOptions);
 }
 

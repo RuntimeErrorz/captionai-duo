@@ -295,7 +295,7 @@ async function fetchAiStreamWithTimeout(
     const applyStreamControl = (control) => {
       if (!control || typeof control !== "object") return false;
       if ((control.coverageComplete || control.protocolDone) && !stopDeadline) {
-        stopDeadline = Date.now() + DEEPSEEK_STREAM_COMPLETION_GRACE_MS;
+        stopDeadline = Date.now() + AI_STREAM_COMPLETION_GRACE_MS;
       }
       if (control.stop) {
         earlyStopped = true;
@@ -331,7 +331,7 @@ async function fetchAiStreamWithTimeout(
         break;
       }
       buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
-      const parsed = YTDS_SHARED.deepSeekSseEvents(buffer, !!part.done);
+      const parsed = YTDS_SHARED.aiSseEvents(buffer, !!part.done);
       buffer = parsed.rest;
       let observerStopped = false;
       for (const event of parsed.events) {
@@ -396,7 +396,7 @@ async function fetchAiStreamWithTimeout(
   }
 }
 
-function registerDeepSeekController(
+function registerAiController(
   sender, videoId, controller, focusGeneration, requestId, urgent
 ) {
   const tabId = sender && sender.tab && sender.tab.id;
@@ -408,18 +408,18 @@ function registerDeepSeekController(
     urgent: !!urgent,
     controller
   };
-  const set = deepseekControllers.get(tabId) || new Set();
+  const set = aiControllers.get(tabId) || new Set();
   set.add(entry);
-  deepseekControllers.set(tabId, set);
+  aiControllers.set(tabId, set);
   return () => {
     set.delete(entry);
-    if (!set.size) deepseekControllers.delete(tabId);
+    if (!set.size) aiControllers.delete(tabId);
   };
 }
 
-function cancelDeepSeekRequestForSender(sender, videoId, requestId) {
+function cancelAiRequestForSender(sender, videoId, requestId) {
   const tabId = sender && sender.tab && sender.tab.id;
-  const set = deepseekControllers.get(tabId);
+  const set = aiControllers.get(tabId);
   const wanted = String(requestId || "");
   if (!set || !wanted) return false;
   let cancelled = false;
@@ -432,9 +432,9 @@ function cancelDeepSeekRequestForSender(sender, videoId, requestId) {
   return cancelled;
 }
 
-function cancelDeepSeekForSender(sender, videoId, beforeFocusGeneration) {
+function cancelAiForSender(sender, videoId, beforeFocusGeneration) {
   const tabId = sender && sender.tab && sender.tab.id;
-  const set = deepseekControllers.get(tabId);
+  const set = aiControllers.get(tabId);
   if (!set) return;
   const cutoff = Number(beforeFocusGeneration);
   for (const entry of Array.from(set)) {
@@ -510,9 +510,157 @@ async function getAiConfig() {
     model,
     extraBody: parsedExtra.ok ? parsedExtra.value : {},
     extraBodyCanonical: parsedExtra.ok ? parsedExtra.canonical : "{}",
-    contextPast: YTDS_SHARED.normalizeAiContextCount(stored.deepseekContextPast, 1),
-    contextFuture: YTDS_SHARED.normalizeAiContextCount(stored.deepseekContextFuture, 1)
+    contextPast: YTDS_SHARED.normalizeAiContextCount(stored.aiContextPast, 1),
+    contextFuture: YTDS_SHARED.normalizeAiContextCount(stored.aiContextFuture, 1)
   };
+}
+
+function aiDelay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function aiApiKeyForConfig(config) {
+  const stored = await chrome.storage.local.get({ aiApiKeys: {} });
+  const keys = stored.aiApiKeys && typeof stored.aiApiKeys === "object"
+    ? stored.aiApiKeys : {};
+  const apiKey = String(keys[YTDS_SHARED.aiCredentialScope(config.baseUrl)] || "").trim();
+  if (config.endpointKind === "deepseek" && !apiKey) {
+    const err = new Error("AI API key is not configured");
+    err.needsKey = true;
+    err.errorCode = "AI_KEY_MISSING";
+    throw err;
+  }
+  return apiKey;
+}
+
+async function ensureAiHostPermission(config) {
+  const permissions = chrome.permissions;
+  if (!permissions || typeof permissions.contains !== "function") return;
+  const pattern = YTDS_SHARED.aiHostPermissionPattern(config.baseUrl);
+  if (pattern && await permissions.contains({ origins: [pattern] })) return;
+  const err = new Error("AI API host permission has not been granted");
+  err.needsPermission = true;
+  err.errorCode = "AI_HOST_PERMISSION_MISSING";
+  throw err;
+}
+
+function aiCompletionRequestOptions(config, apiKey, messages, maxTokens, temperature, jsonLines) {
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  return {
+    method: "POST",
+    headers,
+    body: JSON.stringify(YTDS_SHARED.aiChatCompletionBody(
+      config, messages, maxTokens || 2048, temperature == null ? 0.2 : temperature,
+      { jsonLines }
+    ))
+  };
+}
+
+function recordAiAttemptResult(attemptInfo, result) {
+  const text = String(result.text || "");
+  attemptInfo.totalMs = result.totalMs;
+  attemptInfo.bodyMs = Math.max(0, result.totalMs - result.firstByteMs);
+  attemptInfo.responseChars = text.length;
+  attemptInfo.earlyStopped = !!result.earlyStopped;
+  attemptInfo.earlyStopReason = String(result.earlyStopReason || "");
+  if (!result.response.ok) {
+    const providerCode = aiProviderErrorCode(text);
+    if (providerCode) attemptInfo.providerCode = providerCode;
+  }
+}
+
+function aiAttemptNetworkError(cause, cancelled, attemptInfo, attempts) {
+  const aborted = !!(cause && (cause.name === "AbortError" || cause.timedOut));
+  const err = new Error(aborted
+    ? (cancelled ? "AI request cancelled" : "AI request timed out")
+    : "AI request failed");
+  err.netfail = true;
+  err.cancelled = cancelled;
+  err.timeout = aborted && !cancelled;
+  err.connectTimeout = !!(cause && cause.connectTimedOut && !cancelled);
+  err.errorCode = cancelled ? "AI_CANCELLED" :
+    String(cause && cause.errorCode || "") ||
+    (attemptInfo.netError || (err.connectTimeout ? "AI_CONNECT_TIMEOUT" :
+      err.timeout ? "AI_TIMEOUT" : "AI_NETWORK_ERROR"));
+  if (attemptInfo.netError) err.netError = attemptInfo.netError;
+  err.httpDiagnostics = { attempts };
+  return err;
+}
+
+function aiAttemptTraceFields(trace, attemptInfo) {
+  return {
+    requestId: trace.requestId || "",
+    requestClass: trace.requestClass || "",
+    attempt: attemptInfo.attempt
+  };
+}
+
+async function fetchAiCompletionAttempt(config, requestOptions, attemptInfo, trace, externalSignal) {
+  const attemptOptions = {
+    ...requestOptions,
+    headers: { ...requestOptions.headers, [AI_NETWORK_TRACE_HEADER]: attemptInfo.networkTraceId }
+  };
+  const result = await fetchAiStreamWithTimeout(
+    config.endpoint, attemptOptions, attemptInfo.timeoutMs, attemptInfo.connectTimeoutMs,
+    externalSignal,
+    (response, firstByteMs) => {
+      attemptInfo.firstByteMs = firstByteMs;
+      attemptInfo.status = response.status;
+      if (trace.debug) appendDebug("background", "ai-http-first-byte", {
+        ...aiAttemptTraceFields(trace, attemptInfo),
+        firstByteMs,
+        status: response.status
+      });
+    },
+    typeof trace.onTextDelta === "function" ? trace.onTextDelta : null
+  );
+  recordAiAttemptResult(attemptInfo, result);
+  if (trace.debug) appendDebug("background", "ai-http-body-complete", {
+    ...aiAttemptTraceFields(trace, attemptInfo),
+    status: result.response.status,
+    firstByteMs: result.firstByteMs,
+    bodyMs: attemptInfo.bodyMs,
+    totalMs: result.totalMs,
+    responseChars: String(result.text || "").length,
+    earlyStopped: attemptInfo.earlyStopped,
+    earlyStopReason: attemptInfo.earlyStopReason
+  });
+  return result;
+}
+
+// Network-level failures retry only while nothing has streamed: once units
+// were delivered, a replay could duplicate or reorder committed captions.
+async function noteAiAttemptFailure(cause, attemptInfo, trace, externalSignal, attempt) {
+  attemptInfo.phase = cause && cause.phase || "unknown";
+  attemptInfo.totalMs = Number(cause && cause.elapsedMs) || 0;
+  attemptInfo.timeout = !!(cause && cause.timedOut);
+  attemptInfo.connectTimeout = !!(cause && cause.connectTimedOut);
+  // webRequest's onErrorOccurred normally precedes the rejected Fetch
+  // promise, but yield once so its net::ERR_* detail can join this attempt.
+  await aiDelay(0);
+  const networkFailure = aiNetworkFailureForTrace(attemptInfo.networkTraceId);
+  if (networkFailure) attemptInfo.netError = networkFailure.error;
+  const cancelled = !!(externalSignal && externalSignal.aborted) || !!(cause && cause.cancelled);
+  const hasStreamProgress = typeof trace.hasStreamProgress === "function" &&
+    trace.hasStreamProgress();
+  const willRetry = !cancelled && !hasStreamProgress && attempt + 1 < AI_MAX_ATTEMPTS;
+  const delayMs = willRetry ? retryDelayMs(null, attempt) : 0;
+  if (trace.debug) appendDebug("background", "ai-http-attempt-error", {
+    ...aiAttemptTraceFields(trace, attemptInfo),
+    phase: attemptInfo.phase,
+    durationMs: attemptInfo.totalMs,
+    timeout: attemptInfo.timeout,
+    connectTimeout: attemptInfo.connectTimeout,
+    connectTimeoutMs: attemptInfo.connectTimeoutMs,
+    cancelled,
+    willRetry,
+    retryDelayMs: delayMs,
+    error: String(cause),
+    netError: attemptInfo.netError || "",
+    networkTraceId: attemptInfo.networkTraceId
+  });
+  return { cancelled, willRetry, delayMs };
 }
 
 async function aiRawCompletion(
@@ -524,42 +672,23 @@ async function aiRawCompletion(
     err.errorCode = "AI_CONFIG_MISSING";
     throw err;
   }
-  const stored = await chrome.storage.local.get({
-    aiApiKeys: {}
-  });
-  const keys = stored.aiApiKeys && typeof stored.aiApiKeys === "object"
-    ? stored.aiApiKeys : {};
-  const credentialScope = YTDS_SHARED.aiCredentialScope(config.baseUrl);
-  const apiKey = String(keys[credentialScope] || "").trim();
-  if (config.endpointKind === "deepseek" && !apiKey) {
-    const err = new Error("AI API key is not configured");
-    err.needsKey = true;
-    err.errorCode = "AI_KEY_MISSING";
-    throw err;
-  }
-
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  const apiKey = await aiApiKeyForConfig(config);
+  await ensureAiHostPermission(config);
   const trace = traceValue && typeof traceValue === "object" ? traceValue : {};
-  const requestOptions = {
-      method: "POST",
-      headers,
-      body: JSON.stringify(YTDS_SHARED.aiChatCompletionBody(
-        config, messages, maxTokens || 2048, temperature == null ? 0.2 : temperature,
-        { jsonLines: !!trace.jsonLines }
-      ))
-    };
+  const requestOptions = aiCompletionRequestOptions(
+    config, apiKey, messages, maxTokens, temperature, !!trace.jsonLines
+  );
 
   let res;
   let responseText = "";
   let responseUsage = null;
   const attempts = [];
   const timeoutMs = YTDS_SHARED.aiExtraBodyUsesThinking(config.extraBody)
-    ? DEEPSEEK_TIMEOUT_THINKING_MS : DEEPSEEK_TIMEOUT_FAST_MS;
+    ? AI_TIMEOUT_THINKING_MS : AI_TIMEOUT_FAST_MS;
   const requestClass = String(trace.requestClass || "");
   const connectTimeoutMs = requestClass.startsWith("urgent")
-    ? DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS : DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS;
-  for (let attempt = 0; attempt < DEEPSEEK_MAX_ATTEMPTS; attempt++) {
+    ? AI_CONNECT_TIMEOUT_URGENT_MS : AI_CONNECT_TIMEOUT_PREFETCH_MS;
+  for (let attempt = 0; attempt < AI_MAX_ATTEMPTS; attempt++) {
     const attemptNumber = attempt + 1;
     const networkTraceId = aiNetworkAttemptTraceId(trace.requestId, attemptNumber);
     const attemptInfo = { attempt: attemptNumber, timeoutMs, connectTimeoutMs, networkTraceId };
@@ -572,7 +701,7 @@ async function aiRawCompletion(
       throw slotErr;
     }
     if (typeof trace.onAttemptStart === "function") trace.onAttemptStart(attemptNumber);
-    if (trace.debug) appendDebug("background", "deepseek-http-attempt-start", {
+    if (trace.debug) appendDebug("background", "ai-http-attempt-start", {
       requestId: trace.requestId || "",
       requestClass: trace.requestClass || "",
       attempt: attemptNumber,
@@ -583,99 +712,19 @@ async function aiRawCompletion(
       requestChars: requestOptions.body.length
     });
     try {
-      const attemptOptions = {
-        ...requestOptions,
-        headers: { ...requestOptions.headers, [AI_NETWORK_TRACE_HEADER]: networkTraceId }
-      };
-      const result = await fetchAiStreamWithTimeout(
-        config.endpoint, attemptOptions, timeoutMs, connectTimeoutMs, externalSignal,
-        (response, firstByteMs) => {
-          attemptInfo.firstByteMs = firstByteMs;
-          attemptInfo.status = response.status;
-          if (trace.debug) appendDebug("background", "deepseek-http-first-byte", {
-            requestId: trace.requestId || "",
-            requestClass: trace.requestClass || "",
-            attempt: attemptNumber,
-            firstByteMs,
-            status: response.status
-          });
-        },
-        typeof trace.onTextDelta === "function" ? trace.onTextDelta : null
+      const result = await fetchAiCompletionAttempt(
+        config, requestOptions, attemptInfo, trace, externalSignal
       );
       res = result.response;
       responseText = result.text;
       responseUsage = result.usage || null;
-      attemptInfo.totalMs = result.totalMs;
-      attemptInfo.bodyMs = Math.max(0, result.totalMs - result.firstByteMs);
-      attemptInfo.responseChars = responseText.length;
-      attemptInfo.earlyStopped = !!result.earlyStopped;
-      attemptInfo.earlyStopReason = String(result.earlyStopReason || "");
-      if (!res.ok) {
-        const providerCode = aiProviderErrorCode(responseText);
-        if (providerCode) attemptInfo.providerCode = providerCode;
-      }
-      if (trace.debug) appendDebug("background", "deepseek-http-body-complete", {
-        requestId: trace.requestId || "",
-        requestClass: trace.requestClass || "",
-        attempt: attemptNumber,
-        status: res.status,
-        firstByteMs: result.firstByteMs,
-        bodyMs: attemptInfo.bodyMs,
-        totalMs: result.totalMs,
-        responseChars: responseText.length,
-        earlyStopped: attemptInfo.earlyStopped,
-        earlyStopReason: attemptInfo.earlyStopReason
-      });
     } catch (cause) {
-      attemptInfo.phase = cause && cause.phase || "unknown";
-      attemptInfo.totalMs = Number(cause && cause.elapsedMs) || 0;
-      attemptInfo.timeout = !!(cause && cause.timedOut);
-      attemptInfo.connectTimeout = !!(cause && cause.connectTimedOut);
-      // webRequest's onErrorOccurred normally precedes the rejected Fetch
-      // promise, but yield once so its net::ERR_* detail can join this attempt.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      const networkFailure = aiNetworkFailureForTrace(networkTraceId);
-      if (networkFailure) attemptInfo.netError = networkFailure.error;
-      const cancelled = !!(externalSignal && externalSignal.aborted) || !!(cause && cause.cancelled);
-      const hasStreamProgress = typeof trace.hasStreamProgress === "function" &&
-        trace.hasStreamProgress();
-      const willRetry = !cancelled && !hasStreamProgress &&
-        attempt + 1 < DEEPSEEK_MAX_ATTEMPTS;
-      const delayMs = willRetry ? retryDelayMs(null, attempt) : 0;
-      if (trace.debug) appendDebug("background", "deepseek-http-attempt-error", {
-        requestId: trace.requestId || "",
-        requestClass: trace.requestClass || "",
-        attempt: attemptNumber,
-        phase: attemptInfo.phase,
-        durationMs: attemptInfo.totalMs,
-        timeout: attemptInfo.timeout,
-        connectTimeout: attemptInfo.connectTimeout,
-        connectTimeoutMs,
-        cancelled,
-        willRetry,
-        retryDelayMs: delayMs,
-        error: String(cause),
-        netError: attemptInfo.netError || "",
-        networkTraceId
-      });
-      if (willRetry) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const failure = await noteAiAttemptFailure(cause, attemptInfo, trace, externalSignal, attempt);
+      if (failure.willRetry) {
+        await aiDelay(failure.delayMs);
         continue;
       }
-      const err = new Error((cause && (cause.name === "AbortError" || cause.timedOut))
-        ? (cancelled ? "AI request cancelled" : "AI request timed out")
-        : "AI request failed");
-      err.netfail = true;
-      err.cancelled = cancelled;
-      err.timeout = !!(cause && (cause.name === "AbortError" || cause.timedOut) && !err.cancelled);
-      err.connectTimeout = !!(cause && cause.connectTimedOut && !err.cancelled);
-      err.errorCode = err.cancelled ? "AI_CANCELLED" :
-        String(cause && cause.errorCode || "") ||
-        (attemptInfo.netError || (err.connectTimeout ? "AI_CONNECT_TIMEOUT" :
-          err.timeout ? "AI_TIMEOUT" : "AI_NETWORK_ERROR"));
-      if (attemptInfo.netError) err.netError = attemptInfo.netError;
-      err.httpDiagnostics = { attempts };
-      throw err;
+      throw aiAttemptNetworkError(cause, failure.cancelled, attemptInfo, attempts);
     }
     if (res.status === 401 || res.status === 403) {
       const err = annotateAiHttpError(new Error("AI API key was rejected"), res, responseText);
@@ -684,18 +733,18 @@ async function aiRawCompletion(
       throw err;
     }
     if ([408, 429, 500, 502, 503, 504].includes(res.status) &&
-        attempt + 1 < DEEPSEEK_MAX_ATTEMPTS) {
+        attempt + 1 < AI_MAX_ATTEMPTS) {
       const delayMs = retryDelayMs(res, attempt);
       attemptInfo.retryStatus = res.status;
       attemptInfo.retryDelayMs = delayMs;
-      if (trace.debug) appendDebug("background", "deepseek-http-retry", {
+      if (trace.debug) appendDebug("background", "ai-http-retry", {
         requestId: trace.requestId || "",
         requestClass: trace.requestClass || "",
         attempt: attemptNumber,
         status: res.status,
         retryDelayMs: delayMs
       });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await aiDelay(delayMs);
       continue;
     }
     break;

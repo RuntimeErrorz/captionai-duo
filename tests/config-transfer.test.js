@@ -23,9 +23,9 @@ function transferContext(seed = {}) {
       aiBaseUrl: "https://api.deepseek.com",
       aiModel: "deepseek-v4-flash",
       aiExtraBodyRevision: 0,
-      deepseekContextPast: 1,
-      deepseekContextFuture: 1,
-      deepseekPrefetchBatches: 2
+      aiContextPast: 1,
+      aiContextFuture: 1,
+      aiPrefetchBatches: 2
     },
     chrome: {
       storage: {
@@ -136,9 +136,9 @@ test("configuration backup round-trips settings, profiles, and API keys", () => 
   assert.equal(restored.version, 1);
   assert.equal(restored.settings.enabled, false);
   assert.equal(restored.settings.targetLang, "ja");
-  assert.equal(restored.settings.deepseekContextPast, 3);
-  assert.equal(restored.settings.deepseekContextFuture, 4);
-  assert.equal(restored.settings.deepseekPrefetchBatches, 5);
+  assert.equal(restored.settings.aiContextPast, 3);
+  assert.equal(restored.settings.aiContextFuture, 4);
+  assert.equal(restored.settings.aiPrefetchBatches, 5);
   assert.equal(restored.settings.rowGap, 17);
   assert.equal("aiThinking" in restored.settings, false);
   assert.equal(restored.local.aiApiKeys.deepseek, "deepseek-secret");
@@ -173,9 +173,9 @@ test("restore allow-lists storage fields and emits one newer configuration revis
   await vm.runInContext("restoreConfigBackup(backup)", context);
 
   assert.equal(sync.targetLang, "ja");
-  assert.equal(sync.deepseekContextPast, 3);
-  assert.equal(sync.deepseekContextFuture, 4);
-  assert.equal(sync.deepseekPrefetchBatches, 5);
+  assert.equal(sync.aiContextPast, 3);
+  assert.equal(sync.aiContextFuture, 4);
+  assert.equal(sync.aiPrefetchBatches, 5);
   assert.equal(sync.aiExtraBodyRevision, 13);
   assert.equal(sync.untrusted, undefined);
   assert.equal(sync.unrelatedSyncData, "keep");
@@ -198,4 +198,18 @@ test("invalid backup is rejected before storage is changed", async () => {
     /unsupported-backup/
   );
   assert.deepEqual(writes, []);
+});
+
+test("legacy provider-specific sync keys migrate without overwriting new keys", () => {
+  const shared = loadShared();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(shared.legacySettingsMigration({
+      deepseekContextPast: 3, deepseekPrefetchBatches: 4, aiPrefetchBatches: 2
+    }))),
+    { set: { aiContextPast: 3 }, remove: ["deepseekContextPast", "deepseekPrefetchBatches"] }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(shared.legacySettingsMigration({ aiContextPast: 1 }))),
+    { set: {}, remove: [] }
+  );
 });

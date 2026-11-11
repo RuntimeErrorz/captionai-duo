@@ -10,7 +10,7 @@
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg) return;
   if (msg.type === "translationBatchProgress") {
-    sendResponse({ ok: handleDeepseekTranslationProgress(msg) });
+    sendResponse({ ok: handleAiTranslationProgress(msg) });
     return;
   }
   if (msg.type === "getCaptionTracks") {
@@ -35,13 +35,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     let needDisplayReflow = false;
     for (const [key, value] of Object.entries(patch)) {
       if (!LIVE_STYLE_KEYS.has(key)) continue;
-      if (DEEPSEEK_REFLOW_KEYS.has(key) && settings[key] !== value) {
+      if (AI_REFLOW_KEYS.has(key) && settings[key] !== value) {
         needDisplayReflow = true;
       }
       settings[key] = value;
     }
     if (overlay) styleOverlay();
-    if (needDisplayReflow) scheduleDeepseekDisplayReflow(true);
+    if (needDisplayReflow) scheduleAiDisplayReflow(true);
     sendResponse({ ok: true });
     return;
   }
@@ -136,7 +136,7 @@ function triggerDownload(text, filename) {
   }
 }
 
-function fullyCachedDeepSeekCues() {
+function fullyCachedAiCues() {
   if (!captionSession.cueList || !captionSession.cueToGroup ||
       captionSession.cueToGroup.length !== captionSession.cueList.length) return null;
   const out = [];
@@ -145,7 +145,7 @@ function fullyCachedDeepSeekCues() {
     const group = captionSession.cueToGroup[i];
     const key = Number.isInteger(group) ? groupKey(group) : "";
     const translation = key ? captionSession.transCache.get(key) : "";
-    const unitId = key ? captionSession.deepseekUnitCache.get(key) : "";
+    const unitId = key ? captionSession.semanticUnitCache.get(key) : "";
     if (!translation || !unitId) return null;
     if (!current || current.unitId !== unitId) {
       current = {
@@ -188,7 +188,7 @@ async function handleExport(variant) {
   }
 
   // TRANSLATION / BILINGUAL.
-  const cues = fullyCachedDeepSeekCues();
+  const cues = fullyCachedAiCues();
 
   if (!cues || !cues.length) return { ok: false, reason: "nocues" };
   if (!cues.some((c) => c.trans)) return { ok: false, reason: "notrans" };

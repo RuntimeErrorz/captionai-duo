@@ -100,32 +100,32 @@ test("background validation admits the accelerated 320-item runway", () => {
 test("provider-specific concurrency admits DeepSeek runway without overdriving compatible APIs", () => {
   const context = loadConcurrencyHarness();
   const sender = { tab: { id: 17 } };
-  const deepseekReleases = [];
+  const aiReleases = [];
   for (let i = 0; i < 12; i++) {
-    deepseekReleases.push(context.acquireDeepSeekSlot(sender, false, "deepseek"));
+    aiReleases.push(context.acquireAiSlot(sender, false, "deepseek"));
   }
   assert.throws(
-    () => context.acquireDeepSeekSlot(sender, false, "deepseek"),
+    () => context.acquireAiSlot(sender, false, "deepseek"),
     /local concurrency guard busy/
   );
-  for (const release of deepseekReleases) release();
+  for (const release of aiReleases) release();
 
   const compatibleReleases = [];
   for (let i = 0; i < 4; i++) {
-    compatibleReleases.push(context.acquireDeepSeekSlot(sender, false, "compatible"));
+    compatibleReleases.push(context.acquireAiSlot(sender, false, "compatible"));
   }
   assert.throws(
-    () => context.acquireDeepSeekSlot(sender, false, "compatible"),
+    () => context.acquireAiSlot(sender, false, "compatible"),
     /local concurrency guard busy/
   );
-  const urgentRelease = context.acquireDeepSeekSlot(sender, true, "compatible");
+  const urgentRelease = context.acquireAiSlot(sender, true, "compatible");
   assert.equal(typeof urgentRelease, "function");
   urgentRelease();
   for (const release of compatibleReleases) release();
 
-  const geminiRelease = context.acquireDeepSeekSlot(sender, false, "gemini");
+  const geminiRelease = context.acquireAiSlot(sender, false, "gemini");
   assert.throws(
-    () => context.acquireDeepSeekSlot(sender, false, "gemini"),
+    () => context.acquireAiSlot(sender, false, "gemini"),
     /local concurrency guard busy/
   );
   geminiRelease();
@@ -163,7 +163,7 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   };
   vm.createContext(context);
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
-  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const fetch = vm.runInContext("aiSegmentBatchFetch", context);
   const items = [{
     id: "500", cueId: "cue-500", text: "source", startMs: 0, endMs: 500,
     pauseAfterMs: 0, softAfter: false, hardAfter: false
@@ -174,10 +174,10 @@ test("all segmentation lanes use compact alignment ranges", async () => {
   await fetch(items, "zh-CN", "en", [], [], config, null, { requestClass: "prefetch" });
   await fetch(items, "zh-CN", "en", [], [], config, null, { requestClass: "prefetch-fast" });
 
-  const deepseekConfig = { ...config, endpointKind: "deepseek" };
-  await fetch(items, "zh-CN", "en", [], [], deepseekConfig, null, { requestClass: "urgent" });
-  await fetch(items, "zh-CN", "en", [], [], deepseekConfig, null, { requestClass: "prefetch-fast" });
-  await fetch(items, "zh-CN", "en", [], [], deepseekConfig, null, { requestClass: "prefetch" });
+  const aiConfig = { ...config, endpointKind: "deepseek" };
+  await fetch(items, "zh-CN", "en", [], [], aiConfig, null, { requestClass: "urgent" });
+  await fetch(items, "zh-CN", "en", [], [], aiConfig, null, { requestClass: "prefetch-fast" });
+  await fetch(items, "zh-CN", "en", [], [], aiConfig, null, { requestClass: "prefetch" });
 
   assert.equal(prompts.length, 6);
   assert.equal(prompts[0].requestClass, "urgent");
@@ -236,7 +236,7 @@ test("detailed semantic diagnostics retain the raw JSONL response", async () => 
   };
   vm.createContext(context);
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
-  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const fetch = vm.runInContext("aiSegmentBatchFetch", context);
   const result = await fetch([{
     id: "0", cueId: "cue-0", text: "source", startMs: 0, endMs: 500,
     pauseAfterMs: 0, softAfter: false, hardAfter: false
@@ -280,7 +280,7 @@ test("a cancelled partial JSONL stream remains a cancellation, not a partial res
   };
   vm.createContext(context);
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
-  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const fetch = vm.runInContext("aiSegmentBatchFetch", context);
   const items = [{
     id: "0", cueId: "0", text: "source", startMs: 0, endMs: 500,
     pauseAfterMs: 0, softAfter: false, hardAfter: true
@@ -322,7 +322,7 @@ test("a transport failure after malformed JSONL keeps the JSONL diagnostic code"
   };
   vm.createContext(context);
   vm.runInContext(translationSource, context, { filename: "background/translation.js" });
-  const fetch = vm.runInContext("deepseekSegmentBatchFetch", context);
+  const fetch = vm.runInContext("aiSegmentBatchFetch", context);
   const items = [
     { id: "0", cueId: "0", text: "first", startMs: 0, endMs: 500, hardAfter: false },
     { id: "1", cueId: "1", text: "second", startMs: 500, endMs: 1000, hardAfter: false },

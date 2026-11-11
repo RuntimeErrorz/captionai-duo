@@ -22,7 +22,8 @@ function configFiniteNumber(value, fallback, min, max) {
 }
 
 function normalizeBackupSettings(value) {
-  const raw = configPlainObject(value);
+  const raw = { ...configPlainObject(value) };
+  Object.assign(raw, YTDS_SHARED.legacySettingsMigration(raw).set);
   const settings = {};
   for (const [key, fallback] of Object.entries(YTDS_SHARED.DEFAULTS)) {
     if (typeof fallback === "boolean") settings[key] = typeof raw[key] === "boolean" ? raw[key] : fallback;
@@ -37,14 +38,14 @@ function normalizeBackupSettings(value) {
   settings.aiModel = configBoundedString(settings.aiModel.trim(), 160) ||
     YTDS_SHARED.AI_DEFAULT_MODEL;
   settings.aiExtraBodyRevision = Math.max(0, Math.round(settings.aiExtraBodyRevision));
-  settings.deepseekContextPast = YTDS_SHARED.normalizeAiContextCount(
-    settings.deepseekContextPast, YTDS_SHARED.DEFAULTS.deepseekContextPast
+  settings.aiContextPast = YTDS_SHARED.normalizeAiContextCount(
+    settings.aiContextPast, YTDS_SHARED.DEFAULTS.aiContextPast
   );
-  settings.deepseekContextFuture = YTDS_SHARED.normalizeAiContextCount(
-    settings.deepseekContextFuture, YTDS_SHARED.DEFAULTS.deepseekContextFuture
+  settings.aiContextFuture = YTDS_SHARED.normalizeAiContextCount(
+    settings.aiContextFuture, YTDS_SHARED.DEFAULTS.aiContextFuture
   );
-  settings.deepseekPrefetchBatches =
-    YTDS_SHARED.normalizeDeepseekPrefetchBatches(settings.deepseekPrefetchBatches);
+  settings.aiPrefetchBatches =
+    YTDS_SHARED.normalizeAiPrefetchBatches(settings.aiPrefetchBatches);
   settings.aiRequestItems =
     YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, YTDS_SHARED.DEFAULTS.aiRequestItems);
 
@@ -107,11 +108,11 @@ function normalizeBackupProfileStore(value, fallbackSettings = state) {
       apiKey: configBoundedString(source.apiKey, 8192),
       extraBody: configBoundedString(source.extraBody, 4096),
       contextPast: source.contextPast == null
-        ? fallbackSettings.deepseekContextPast : source.contextPast,
+        ? fallbackSettings.aiContextPast : source.contextPast,
       contextFuture: source.contextFuture == null
-        ? fallbackSettings.deepseekContextFuture : source.contextFuture,
+        ? fallbackSettings.aiContextFuture : source.contextFuture,
       prefetchBatches: source.prefetchBatches == null
-        ? fallbackSettings.deepseekPrefetchBatches : source.prefetchBatches,
+        ? fallbackSettings.aiPrefetchBatches : source.prefetchBatches,
       requestItems: source.requestItems == null
         ? fallbackSettings.aiRequestItems : source.requestItems
     }, index);
@@ -146,9 +147,9 @@ function normalizeConfigBackup(value) {
   settings.targetLang = activeProfile.targetLang;
   settings.aiBaseUrl = activeProfile.baseUrl;
   settings.aiModel = activeProfile.model;
-  settings.deepseekContextPast = activeProfile.contextPast;
-  settings.deepseekContextFuture = activeProfile.contextFuture;
-  settings.deepseekPrefetchBatches = activeProfile.prefetchBatches;
+  settings.aiContextPast = activeProfile.contextPast;
+  settings.aiContextFuture = activeProfile.contextFuture;
+  settings.aiPrefetchBatches = activeProfile.prefetchBatches;
   settings.aiRequestItems = activeProfile.requestItems;
   const credentialScope = YTDS_SHARED.aiCredentialScope(activeProfile.baseUrl);
   const requestScope = YTDS_SHARED.aiRequestProfileScope(

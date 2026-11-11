@@ -265,7 +265,8 @@ textarea[aria-invalid="true"] { border-color: var(--danger); }
   gap: 6px;
 }
 .api-key-row button,
-.debug-actions button {
+.debug-actions button,
+.grant-btn {
   padding: .45em .75em;
   color: var(--muted);
   background: var(--surface-raised);
@@ -276,7 +277,8 @@ textarea[aria-invalid="true"] { border-color: var(--danger); }
   transition: color .14s ease, border-color .14s ease, background-color .14s ease;
 }
 .api-key-row button:hover,
-.debug-actions button:hover {
+.debug-actions button:hover,
+.grant-btn:hover {
   color: var(--signal-strong);
   border-color: rgba(8, 127, 117, .42);
   background: var(--surface-active);
@@ -323,6 +325,8 @@ input:disabled {
 .engine-msg { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
 .engine-msg.warn { color: var(--amber); }
 .engine-msg.ok { color: var(--signal-strong); }
+.grant-btn { justify-self: start; }
+.grant-btn[hidden] { display: none; }
 .settings-help {
   padding-top: 7px;
   border-top: 1px solid var(--line);
@@ -629,6 +633,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .export-msg { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
 .export-msg.ok { color: var(--signal-strong); }
 .export-msg.err { color: var(--danger); }
+.config-msg { grid-column: 1 / -1; }
 
 .visually-hidden {
   position: fixed !important;

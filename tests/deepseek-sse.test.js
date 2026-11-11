@@ -5,9 +5,9 @@ const { loadShared } = require("./helpers");
 const shared = loadShared();
 
 test("DeepSeek SSE parser keeps an event split across network chunks", () => {
-  const first = shared.deepSeekSseEvents('data: {"choices":[{"delta":{"content":"你', false);
+  const first = shared.aiSseEvents('data: {"choices":[{"delta":{"content":"你', false);
   assert.equal(first.events.length, 0);
-  const second = shared.deepSeekSseEvents(first.rest + '好"}}]}\n\ndata: [DONE]\n\n', false);
+  const second = shared.aiSseEvents(first.rest + '好"}}]}\n\ndata: [DONE]\n\n', false);
   assert.equal(second.events.length, 2);
   assert.equal(JSON.parse(second.events[0]).choices[0].delta.content, "你好");
   assert.equal(second.events[1], "[DONE]");
@@ -15,7 +15,7 @@ test("DeepSeek SSE parser keeps an event split across network chunks", () => {
 });
 
 test("DeepSeek SSE parser accepts CRLF and ignores comments", () => {
-  const parsed = shared.deepSeekSseEvents(
+  const parsed = shared.aiSseEvents(
     ': keep-alive\r\ndata: {"choices":[{"delta":{"content":"ok"}}]}\r\n\r\ndata: [DONE]\r\n\r\n',
     false
   );
@@ -25,7 +25,7 @@ test("DeepSeek SSE parser accepts CRLF and ignores comments", () => {
 });
 
 test("DeepSeek SSE parser flushes a final event without a blank line", () => {
-  const parsed = shared.deepSeekSseEvents("data: [DONE]", true);
+  const parsed = shared.aiSseEvents("data: [DONE]", true);
   assert.deepEqual(Array.from(parsed.events), ["[DONE]"]);
   assert.equal(parsed.rest, "");
 });

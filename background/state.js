@@ -8,17 +8,17 @@
 // AI requests use bounded, fully diagnosed HTTP retries; content.js
 // separately retries a rejected semantic page.
 
-const DEEPSEEK_BATCH_INFLIGHT = new Map();
+const AI_BATCH_INFLIGHT = new Map();
 
-const DEEPSEEK_TIMEOUT_FAST_MS = 30000;
-const DEEPSEEK_TIMEOUT_THINKING_MS = 90000;
+const AI_TIMEOUT_FAST_MS = 30000;
+const AI_TIMEOUT_THINKING_MS = 90000;
 // Waiting for response headers is a different failure mode from consuming a
 // healthy SSE body. Retry a dead route promptly while still allowing the
 // complete response body to use the normal model deadline.
-const DEEPSEEK_CONNECT_TIMEOUT_URGENT_MS = 8000;
-const DEEPSEEK_CONNECT_TIMEOUT_PREFETCH_MS = 12000;
-const DEEPSEEK_STREAM_COMPLETION_GRACE_MS = 750;
-const DEEPSEEK_MAX_ATTEMPTS = 3;
+const AI_CONNECT_TIMEOUT_URGENT_MS = 8000;
+const AI_CONNECT_TIMEOUT_PREFETCH_MS = 12000;
+const AI_STREAM_COMPLETION_GRACE_MS = 750;
+const AI_MAX_ATTEMPTS = 3;
 const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 12;
 const COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB = 4;
 const GEMINI_MAX_ACTIVE_REQUESTS_PER_TAB = 1;
@@ -58,8 +58,8 @@ let debugKnownSecrets = [];
 let debugReady = false;
 let debugFlushTimer = null;
 let debugSequence = 0;
-const deepseekActiveByTab = new Map();
-const deepseekControllers = new Map();
+const aiActiveByTab = new Map();
+const aiControllers = new Map();
 const aiResponseCache = new Map();
 let aiResponseCacheChars = 0;
 const emptyAiTokenUsage = () => ({
@@ -499,15 +499,15 @@ function cleanBatchItems(value) {
   return out;
 }
 
-function acquireDeepSeekSlot(sender, urgent, endpointKind) {
+function acquireAiSlot(sender, urgent, endpointKind) {
   const key = sender && sender.tab && Number.isInteger(sender.tab.id)
     ? `tab:${sender.tab.id}` : "extension";
-  const state = deepseekActiveByTab.get(key) || { active: 0 };
+  const state = aiActiveByTab.get(key) || { active: 0 };
   const maxActive = endpointKind === "deepseek"
     ? DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB
     : endpointKind === "gemini" ? GEMINI_MAX_ACTIVE_REQUESTS_PER_TAB
       : COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB;
-  const status = YTDS_SHARED.deepSeekConcurrencyStatus(
+  const status = YTDS_SHARED.aiConcurrencyStatus(
     state.active, maxActive, !!urgent
   );
   if (!status.allowed) {
@@ -518,10 +518,10 @@ function acquireDeepSeekSlot(sender, urgent, endpointKind) {
     throw err;
   }
   state.active++;
-  deepseekActiveByTab.set(key, state);
+  aiActiveByTab.set(key, state);
   return () => {
     state.active = Math.max(0, state.active - 1);
-    if (!state.active) deepseekActiveByTab.delete(key);
+    if (!state.active) aiActiveByTab.delete(key);
   };
 }
 
@@ -546,5 +546,36 @@ function retryDelayMs(res, attempt) {
 }
 
 // Keep the deadline alive through the complete SSE body. Network chunks are
-// arbitrary byte slices, so YTDS_SHARED.deepSeekSseEvents buffers until a full
+// arbitrary byte slices, so YTDS_SHARED.aiSseEvents buffers until a full
 // blank-line-delimited event is available before any JSON is parsed.
+
+// One-time rename of provider-specific sync keys; idempotent on every start.
+async function migrateLegacySettings() {
+  const syncStore = chrome.storage && chrome.storage.sync;
+  if (!syncStore) return;
+  try {
+    const legacy = YTDS_SHARED.LEGACY_SETTING_KEYS;
+    const stored = await syncStore.get([...Object.keys(legacy), ...Object.values(legacy)]);
+    const migration = YTDS_SHARED.legacySettingsMigration(stored);
+    if (!migration.remove.length) return;
+    if (Object.keys(migration.set).length) await syncStore.set(migration.set);
+    await syncStore.remove(migration.remove);
+  } catch (_e) { /* retried on the next worker start */ }
+}
+
+const legacySettingsMigrated = migrateLegacySettings();
+
+// A newly granted API host is new request material: bump the shared revision
+// so open video tabs retry, even if the popup closed during the prompt.
+if (chrome.permissions && chrome.permissions.onAdded &&
+    typeof chrome.permissions.onAdded.addListener === "function") {
+  chrome.permissions.onAdded.addListener(async (granted) => {
+    if (!granted || !Array.isArray(granted.origins) || !granted.origins.length) return;
+    try {
+      const stored = await chrome.storage.sync.get({ aiExtraBodyRevision: 0 });
+      await chrome.storage.sync.set({
+        aiExtraBodyRevision: Math.max(0, Number(stored.aiExtraBodyRevision) || 0) + 1
+      });
+    } catch (_e) { /* the next manual change retries */ }
+  });
+}

@@ -13,6 +13,7 @@ const shared = loadShared();
 const semanticSource = [
   "content/semantic-policy.js",
   "content/semantic-requests.js",
+  "content/semantic-results.js",
   "content/semantic.js",
   "content/cue-indicator.js"
 ].map((file) => fs.readFileSync(path.join(root, file), "utf8")).join("\n");
@@ -100,34 +101,34 @@ function loadHarness(options = {}) {
       cueToGroups: [[0]],
       sentGroups: groups,
       semanticCommitRegions: [{ start: 0, end: groupCount - 1 }],
-      deepseekCommitRegions: [{ start: 0, end: groupCount - 1 }],
+      semanticCommitRegions: [{ start: 0, end: groupCount - 1 }],
       semanticGroupToCommitRegion: new Array(groupCount).fill(0),
-      deepseekGroupToCommitRegion: new Array(groupCount).fill(0),
+      semanticGroupToCommitRegion: new Array(groupCount).fill(0),
       semanticCommitStateByRegion: new Map([[0, state]]),
-      deepseekCommitStateByRegion: new Map([[0, state]]),
+      semanticCommitStateByRegion: new Map([[0, state]]),
       semanticGroupToBatch: groups.map((_g, id) => Math.floor(id / batchSize)),
-      deepseekGroupToBatch: groups.map((_g, id) => Math.floor(id / batchSize)),
+      semanticGroupToBatch: groups.map((_g, id) => Math.floor(id / batchSize)),
       semanticBatchWindows: batchWindows,
-      deepseekBatchWindows: batchWindows,
+      semanticBatchWindows: batchWindows,
       semanticRequestMeta: new Map(),
-      deepseekRequestMeta: new Map(),
+      semanticRequestMeta: new Map(),
       transInflight: new Set(),
       semanticRetryCounts: new Map(),
-      deepseekRetryCounts: new Map(),
+      semanticRetryCounts: new Map(),
       semanticExhaustedRegions: new Map(),
-      deepseekExhaustedRegions: new Map(),
+      semanticExhaustedRegions: new Map(),
       transCache: new Map(),
       semanticUnitCache: new Map(),
-      deepseekUnitCache: new Map(),
+      semanticUnitCache: new Map(),
       semanticSourceCache: new Map(),
-      deepseekSourceCache: new Map(),
+      semanticSourceCache: new Map(),
       semanticAlignedChunksCache: new Map(),
-      deepseekAlignedChunksCache: new Map(),
+      semanticAlignedChunksCache: new Map(),
       semanticDisplayCache: new Map(),
-      deepseekDisplayCache: new Map(),
-      deepseekSpeculativeBackoffReason: "",
-      deepseekSpeculativeBackoffUntil: 0,
-      deepseekSpeculativeResumeTimer: null,
+      semanticDisplayCache: new Map(),
+      semanticSpeculativeBackoffReason: "",
+      semanticSpeculativeBackoffUntil: 0,
+      semanticSpeculativeResumeTimer: null,
       activeGroupIdx: 0,
       activeCueIdx: 0
     },
@@ -138,10 +139,10 @@ function loadHarness(options = {}) {
       aiModel: options.aiModel || "test-model"
     },
     SEMANTIC_CORE_ITEMS: 16,
-    DEEPSEEK_CORE_ITEMS: 16,
-    DEEPSEEK_INITIAL_REQUEST_ITEMS: 48,
-    DEEPSEEK_REQUEST_ITEMS: 80,
-    DEEPSEEK_URGENT_REQUEST_ITEMS: 96,
+    AI_CORE_ITEMS: 16,
+    AI_INITIAL_REQUEST_ITEMS: 48,
+    AI_REQUEST_ITEMS: 80,
+    AI_URGENT_REQUEST_ITEMS: 96,
     DEEPSEEK_ACCELERATED_URGENT_REQUEST_ITEMS: 64,
     DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
     COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
@@ -149,19 +150,19 @@ function loadHarness(options = {}) {
     GEMINI_REQUEST_ITEMS: 320,
     GEMINI_MAX_REQUEST_ITEMS: 320,
     GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
-    DEEPSEEK_NORMAL_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_REQUEST_ITEMS: 320,
-    DEEPSEEK_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
-    DEEPSEEK_MAX_CURRENT_CHARS: 18000,
-    DEEPSEEK_COMMIT_GUARD_ITEMS: 16,
-    DEEPSEEK_MIN_COMMIT_RUNWAY_ITEMS: 32,
-    DEEPSEEK_URGENT_TARGET_TAIL_ITEMS: 48,
-    DEEPSEEK_CONTEXT_GROUPS: 20,
-    DEEPSEEK_COLD_RETRY_DELAYS_MS: [400, 1200, 2500],
+    AI_NORMAL_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_REQUEST_ITEMS: 320,
+    AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
+    AI_MAX_CURRENT_CHARS: 18000,
+    AI_COMMIT_GUARD_ITEMS: 16,
+    AI_MIN_COMMIT_RUNWAY_ITEMS: 32,
+    AI_URGENT_TARGET_TAIL_ITEMS: 48,
+    AI_CONTEXT_GROUPS: 20,
+    AI_COLD_RETRY_DELAYS_MS: [400, 1200, 2500],
     emitDebug: () => {},
     emitCaptionStateTransition: () => {},
-    repaintActiveDeepseekTranslation: () => {},
-    cacheDeepseekDisplayNeighborhood: () => {},
+    repaintActiveAiTranslation: () => {},
+    cacheAiDisplayNeighborhood: () => {},
     semanticDisplayWidth: () => 1000,
     mergeCueTexts: (items) => items.map((item) => item.text).join(" "),
     getVideo: () => ({ playbackRate: options.playbackRate || 1 }),
@@ -225,7 +226,7 @@ test("JSONL stream observer recovers from overlapping repeated unit without fail
 
 test("adaptive batch window reduces size when response has deferredIds", () => {
   const harness = loadHarness({ windowItems: 160 });
-  const handleResult = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handleResult = vm.runInContext("handleAiBatchResult", harness.context);
 
   const request = {
     regionIndex: 0,
@@ -248,7 +249,7 @@ test("adaptive batch window reduces size when response has deferredIds", () => {
   handleResult(request, responseWithDeferrals, null);
 
   assert.ok(harness.state.cursor > 0);
-  assert.equal(harness.state.windowItems, Math.min(harness.context.DEEPSEEK_URGENT_REQUEST_ITEMS, 96));
+  assert.equal(harness.state.windowItems, Math.min(harness.context.AI_URGENT_REQUEST_ITEMS, 96));
 });
 
 test("Gemini prioritizes urgent commit over speculative prefetch when urgent lane is pending", async () => {
@@ -261,7 +262,7 @@ test("Gemini prioritizes urgent commit over speculative prefetch when urgent lan
   harness.state.prefetchQueue.push(100);
   harness.state.prefetchQueued.add(100);
 
-  const handleResult = vm.runInContext("handleDeepseekBatchResult", harness.context);
+  const handleResult = vm.runInContext("handleAiBatchResult", harness.context);
 
   const request = {
     regionIndex: 0,
@@ -295,21 +296,21 @@ test("Gemini prioritizes urgent commit over speculative prefetch when urgent lan
 
 test("speculative resume timer does not re-poll during active request in local-concurrency backoff", () => {
   const harness = loadHarness();
-  harness.context.captionSession.deepseekRequestMeta.set("dsb:0", { requestId: "commit:0:1", urgent: true });
-  harness.context.captionSession.deepseekSpeculativeBackoffReason = "local-concurrency";
-  harness.context.captionSession.deepseekSpeculativeBackoffUntil = Date.now() + 100;
-  harness.context.captionSession.deepseekSpeculativeResumeTimer = null;
+  harness.context.captionSession.semanticRequestMeta.set("dsb:0", { requestId: "commit:0:1", urgent: true });
+  harness.context.captionSession.semanticSpeculativeBackoffReason = "local-concurrency";
+  harness.context.captionSession.semanticSpeculativeBackoffUntil = Date.now() + 100;
+  harness.context.captionSession.semanticSpeculativeResumeTimer = null;
 
-  const resume = vm.runInContext("scheduleDeepseekSpeculativeResume", harness.context);
+  const resume = vm.runInContext("scheduleAiSpeculativeResume", harness.context);
   resume();
 
   const timerCb = harness.getTimerCallback();
   assert.ok(typeof timerCb === "function");
-  harness.context.captionSession.deepseekSpeculativeBackoffUntil = Date.now() - 1;
+  harness.context.captionSession.semanticSpeculativeBackoffUntil = Date.now() - 1;
 
   timerCb();
 
   // No messages should have been sent because an active request is still in flight
   assert.equal(harness.messages.length, 0);
-  assert.equal(harness.context.captionSession.deepseekSpeculativeBackoffReason, "local-concurrency");
+  assert.equal(harness.context.captionSession.semanticSpeculativeBackoffReason, "local-concurrency");
 });

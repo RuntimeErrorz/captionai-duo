@@ -1,56 +1,9 @@
-// YouTube URL, cue timing and semantic window planning helpers.
+// Cue timing and semantic window planning helpers.
 (() => {
   "use strict";
   if (globalThis.YTDS_SHARED) return;
   const internal = globalThis["__captionAiDuoSharedModulesV1__"];
   if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
-
-  function videoIdFromUrl(href) {
-    try {
-      const u = new URL(href);
-      const fromQuery = u.searchParams.get("v") || "";
-      if (/^[A-Za-z0-9_-]{6,32}$/.test(fromQuery)) return fromQuery;
-      const m = u.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{6,32})(?:\/|$)/);
-      return m ? m[1] : "";
-    } catch (_e) {
-      return "";
-    }
-  }
-
-  function isYoutubePageUrl(href) {
-    try {
-      const u = new URL(href);
-      return u.protocol === "https:" &&
-        (u.hostname === "www.youtube.com" || u.hostname === "youtube.com");
-    } catch (_e) {
-      return false;
-    }
-  }
-
-  // Chrome may retain the document's original sender.url across a YouTube SPA
-  // navigation while sender.tab.url already points at the current video.  A
-  // restored/home document can also have no video id in either URL.  Accept a
-  // well-formed id when at least one candidate is a trusted YouTube page.  The
-  // first candidate with an id is authoritative (background passes tab.url
-  // first); a restored/home URL without an id is safe to fall through.
-  function videoIdMatchesPageUrls(videoId, hrefs) {
-    if (!/^[A-Za-z0-9_-]{6,32}$/.test(String(videoId || ""))) return false;
-    const youtubeUrls = Array.isArray(hrefs) ? hrefs.filter(isYoutubePageUrl) : [];
-    if (!youtubeUrls.length) return false;
-    const currentUrlId = youtubeUrls.map(videoIdFromUrl).find(Boolean);
-    return !currentUrlId || currentUrlId === videoId;
-  }
-
-  function isAllowedTimedtextUrl(value) {
-    try {
-      const u = new URL(value, "https://www.youtube.com/");
-      return u.protocol === "https:" &&
-        (u.hostname === "www.youtube.com" || u.hostname === "youtube.com") &&
-        u.pathname === "/api/timedtext";
-    } catch (_e) {
-      return false;
-    }
-  }
 
   function cuePauseMs(cue, nextCue) {
     const start = Number(cue && cue.start);
@@ -506,7 +459,7 @@
     if (!Number.isInteger(group) || group < 0) return "";
     const batch = Array.isArray(groupToBatch) ? Number(groupToBatch[group]) : NaN;
     return Number.isInteger(batch) && batch >= 0
-      ? `deepseek-batch:${batch}` : `deepseek-group:${group}`;
+      ? `ai-batch:${batch}` : `ai-group:${group}`;
   }
 
   // Return the starts of the next distinct semantic request windows. Looking
@@ -529,7 +482,7 @@
     return starts;
   }
 
-  function deepSeekConcurrencyStatus(activeValue, maxActiveValue, urgentValue) {
+  function aiConcurrencyStatus(activeValue, maxActiveValue, urgentValue) {
     const active = Math.max(0, Math.floor(Number(activeValue) || 0));
     const maxActive = Math.max(1, Math.floor(Number(maxActiveValue) || 1));
     // The local cap protects speculative prefetch only. The subtitle currently
@@ -541,5 +494,5 @@
       : { allowed: false, reason: "local-concurrency", retryAfterMs: 1500 };
   }
 
-  Object.assign(internal, { videoIdFromUrl, isYoutubePageUrl, videoIdMatchesPageUrls, isAllowedTimedtextUrl, cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, deepSeekConcurrencyStatus });
+  Object.assign(internal, { cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, aiConcurrencyStatus });
 })();

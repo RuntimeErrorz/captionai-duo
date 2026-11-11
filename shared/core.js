@@ -2,10 +2,8 @@
 (() => {
   "use strict";
   if (globalThis.YTDS_SHARED) return;
-  const internal = Object.create(null);
-  Object.defineProperty(globalThis, "__captionAiDuoSharedModulesV1__", {
-    value: internal, configurable: true, enumerable: false, writable: false
-  });
+  const internal = globalThis["__captionAiDuoSharedModulesV1__"];
+  if (!internal) throw new Error("CaptionAI shared modules loaded out of order");
 
   const TARGET_LANGS = Object.freeze([
     "zh-CN", "en", "ja", "ko", "es", "fr", "de",
@@ -28,15 +26,35 @@
     "modalities", "audio"
   ]);
 
+  // Sync keys renamed when the provider-neutral naming landed. Read once,
+  // copied to the new key if that is still unset, then removed.
+  const LEGACY_SETTING_KEYS = Object.freeze({
+    deepseekContextPast: "aiContextPast",
+    deepseekContextFuture: "aiContextFuture",
+    deepseekPrefetchBatches: "aiPrefetchBatches"
+  });
+
+  function legacySettingsMigration(storedValue) {
+    const stored = storedValue && typeof storedValue === "object" ? storedValue : {};
+    const set = {};
+    const remove = [];
+    for (const [legacyKey, key] of Object.entries(LEGACY_SETTING_KEYS)) {
+      if (!Object.prototype.hasOwnProperty.call(stored, legacyKey)) continue;
+      remove.push(legacyKey);
+      if (!Object.prototype.hasOwnProperty.call(stored, key)) set[key] = stored[legacyKey];
+    }
+    return { set, remove };
+  }
+
   const DEFAULTS = Object.freeze({
     enabled: true,
     targetLang: "zh-CN",
     aiBaseUrl: AI_DEFAULT_BASE_URL,
     aiModel: AI_DEFAULT_MODEL,
     aiExtraBodyRevision: 0,
-    deepseekContextPast: 1,
-    deepseekContextFuture: 1,
-    deepseekPrefetchBatches: 1,
+    aiContextPast: 1,
+    aiContextFuture: 1,
+    aiPrefetchBatches: 1,
     aiRequestItems: 96,
     debugEnabled: false,
     order: "trans-top",
@@ -135,6 +153,19 @@
       let pathname = url.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "");
       if (pathname === "/") pathname = "";
       return `${url.origin}${pathname}`;
+    } catch (_e) {
+      return "";
+    }
+  }
+
+  // Host permission covering one API base. Match patterns ignore ports, so
+  // a local server on any port is covered by its scheme and hostname.
+  function aiHostPermissionPattern(value) {
+    const base = normalizeAiBaseUrl(value);
+    if (!base) return "";
+    try {
+      const url = new URL(base);
+      return `${url.protocol}//${url.hostname}/*`;
     } catch (_e) {
       return "";
     }
@@ -272,6 +303,7 @@
     if (!code && root.timeout) code = "AI_TIMEOUT";
     if (!code && root.cancelled) code = "AI_CANCELLED";
     if (!code && root.needsKey) code = "AI_KEY_MISSING";
+    if (!code && root.needsPermission) code = "AI_HOST_PERMISSION_MISSING";
     if (!code && root.rateLimited) code = "AI_RATE_LIMITED";
     if (!code && root.netfail) code = "AI_NETWORK_ERROR";
     if (!code && root.segmentInvalid) code = "AI_SEMANTIC_INVALID";
@@ -451,11 +483,11 @@
     return false;
   }
 
-  function normalizeDeepseekPrefetchBatches(value) {
+  function normalizeAiPrefetchBatches(value) {
     const count = Number(value);
     return Number.isFinite(count)
       ? Math.max(0, Math.min(10, Math.round(count)))
-      : DEFAULTS.deepseekPrefetchBatches;
+      : DEFAULTS.aiPrefetchBatches;
   }
 
   function normalizeAiRequestItems(value, fallbackValue) {
@@ -557,6 +589,9 @@
   }
 
   Object.assign(internal, {
+    aiHostPermissionPattern,
+    LEGACY_SETTING_KEYS,
+    legacySettingsMigration,
     TARGET_LANGS, AI_DEFAULT_BASE_URL, AI_DEFAULT_MODEL, DEFAULTS, FONT_STACKS,
     normalizeTargetLang,
     isSameLanguage, normalizeAiBaseUrl, aiEndpointKind, isGeminiModel, aiProviderKind,
@@ -564,7 +599,7 @@
     parseAiExtraBody, aiCompletionText, aiErrorDescriptor, aiErrorMessage,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
     aiExtraBodyUsesThinking,
-    aiChatCompletionBody, normalizeDeepseekPrefetchBatches, normalizeAiRequestItems, normalizeAiContextCount,
+    aiChatCompletionBody, normalizeAiPrefetchBatches, normalizeAiRequestItems, normalizeAiContextCount,
     preparePromptContexts
   });
 })();
