@@ -279,12 +279,12 @@ async function aiSegmentBatchFetch(
   // DeepSeek's fast model spends enough output budget on its aligned JSONL
   // prefix that a 2048-token cap can stop after only a small safe prefix (the
   // rest is then requested again, which is fatal at accelerated playback).
-  // Gemini Flash Lite is request-limited, so its wider current window also
-  // needs the full output budget to avoid a continuation spending another
-  // request. Generic compatible urgent calls stay smaller for first-byte
-  // latency; the stream observer still accepts a partial prefix safely.
+  // A request-limited provider (low RPM) uses wide windows and cannot afford
+  // a continuation request, so it also gets the full output budget. Other
+  // urgent calls stay smaller for first-byte latency; the stream observer
+  // still accepts a partial prefix safely.
   const maxOutputTokens = config && (config.endpointKind === "deepseek" ||
-      config.endpointKind === "gemini")
+      YTDS_SHARED.aiRequestLimited(config.rateLimitRpm))
     ? 4096 : urgentPrompt ? 2048 : 4096;
   if (trace && trace.debug) appendDebug("background", "prompt-context-budget", {
     requestId: trace.requestId || "",

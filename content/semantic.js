@@ -755,6 +755,7 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   sendRuntimeMessage({
     type: "translateBatch",
     endpointKind: aiEndpointKind(),
+    requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
     debug: !!settings.debugEnabled,
     requestId,
     videoId: captionSession.cueVideoId,

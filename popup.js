@@ -578,6 +578,7 @@ function bindUI() {
   $("aiContextFuture").value = String(state.aiContextFuture);
   $("aiPrefetchBatches").value = String(state.aiPrefetchBatches);
   $("aiRequestItems").value = String(state.aiRequestItems);
+  $("aiRateLimitRpm").value = String(state.aiRateLimitRpm);
   $("rowGap").value = state.rowGap;
   $("rowGapV").textContent = state.rowGap + "px";
   paintSegs();
@@ -713,6 +714,8 @@ chrome.storage.sync.get(null, (got) => {
     YTDS_SHARED.normalizeAiPrefetchBatches(state.aiPrefetchBatches);
   state.aiRequestItems =
     YTDS_SHARED.normalizeAiRequestItems(state.aiRequestItems, DEFAULTS.aiRequestItems);
+  state.aiRateLimitRpm =
+    YTDS_SHARED.normalizeAiRateLimitRpm(state.aiRateLimitRpm, DEFAULTS.aiRateLimitRpm);
   chrome.storage.local.get({
     aiApiKeys: {}, aiExtraBodyProfiles: {},
     [AI_CONFIG_PROFILE_STORE_KEY]: null

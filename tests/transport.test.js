@@ -197,6 +197,8 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
       aiModel: options.aiModel || "test-model",
       ...(options.prefetchBatches == null
         ? {} : { aiPrefetchBatches: options.prefetchBatches }),
+      ...(options.aiRateLimitRpm == null
+        ? {} : { aiRateLimitRpm: options.aiRateLimitRpm }),
       ...(options.aiRequestItems == null
         ? {} : { aiRequestItems: options.aiRequestItems })
     },
@@ -209,9 +211,8 @@ function loadSemanticCommitHarness(translations, retryAttempt, options = {}) {
     DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
     COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
     COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80,
-    GEMINI_REQUEST_ITEMS: 320,
-    GEMINI_MAX_REQUEST_ITEMS: 320,
-    GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
+    AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
+    AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS: 1,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
@@ -283,7 +284,8 @@ function loadPlaybackPrefetchHarness(options = {}) {
     aiBaseUrl: options.aiBaseUrl,
     aiModel: options.aiModel,
     prefetchBatches: options.prefetchBatches,
-    aiRequestItems: options.aiRequestItems
+    aiRequestItems: options.aiRequestItems,
+    aiRateLimitRpm: options.aiRateLimitRpm
   });
   harness.context.settings.enabled = true;
   for (const [name, value] of Object.entries({
@@ -434,7 +436,7 @@ test("Gemini usage metadata is retained from a usage-only SSE event", async () =
   assert.equal(result.usage.totalTokenCount, 38);
 });
 
-test("Gemini request slots leave a 4.2 second global start interval", async () => {
+test("a 15 RPM profile leaves a 4.2 second global start interval", async () => {
   const timers = [];
   const cleared = new Set();
   const context = loadHttpContext(async () => {
@@ -452,7 +454,8 @@ test("Gemini request slots leave a 4.2 second global start interval", async () =
   const config = {
     endpointKind: "gemini",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    model: "gemini-3.1-flash-lite-preview"
+    model: "gemini-3.1-flash-lite-preview",
+    rateLimitRpm: 15
   };
   assert.equal(await waitForSlot(config, null), 0);
   const second = waitForSlot(config, null);
@@ -464,7 +467,7 @@ test("Gemini request slots leave a 4.2 second global start interval", async () =
   assert.equal(await second, 4200);
 });
 
-test("custom provider rate policy enforces configured request interval", async () => {
+test("any provider is paced by its configured requests per minute", async () => {
   const timers = [];
   const cleared = new Set();
   const context = loadHttpContext(async () => {
@@ -483,47 +486,35 @@ test("custom provider rate policy enforces configured request interval", async (
     endpointKind: "compatible",
     baseUrl: "https://api.groq.com/openai/v1",
     model: "llama-3.3-70b-versatile",
-    rateLimitIntervalMs: 2000
+    rateLimitRpm: 30
   };
   assert.equal(await waitForSlot(config, null), 0);
   const second = waitForSlot(config, null);
   await new Promise((resolve) => setImmediate(resolve));
   const rateTimer = timers.find((timer) => !cleared.has(timer.id));
   assert.ok(rateTimer);
-  assert.equal(rateTimer.delay, 2000);
+  assert.equal(rateTimer.delay, 2100, "60000 / 30 with a 5% margin");
   rateTimer.callback();
-  assert.equal(await second, 2000);
+  assert.equal(await second, 2100);
 });
 
-test("custom provider rate policy supports rate_limit_rpm in extraBody", async () => {
-  const timers = [];
-  const cleared = new Set();
-  const context = loadHttpContext(async () => {
-    throw new Error("network should not be reached");
-  }, {
-    Date: { now: () => 0 },
-    setTimeout: (callback, delay) => {
-      const id = timers.length + 1;
-      timers.push({ id, callback, delay });
-      return id;
-    },
-    clearTimeout: (timerId) => { cleared.add(timerId); }
-  });
-  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
-  const config = {
-    endpointKind: "gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    model: "gemini-2.5-flash",
-    extraBody: { rate_limit_rpm: 20 }
-  };
-  assert.equal(await waitForSlot(config, null), 0);
-  const second = waitForSlot(config, null);
-  await new Promise((resolve) => setImmediate(resolve));
-  const rateTimer = timers.find((timer) => !cleared.has(timer.id));
-  assert.ok(rateTimer);
-  assert.equal(rateTimer.delay, 3000);
-  rateTimer.callback();
-  assert.equal(await second, 3000);
+test("former in-band rate keys in extra parameters are neither pacing nor sent to the provider", async () => {
+  const shared = loadShared();
+  const body = shared.aiChatCompletionBody({
+    baseUrl: "https://gateway.example/v1", model: "m",
+    extraBody: { rate_limit_rpm: 20, rpm: 20, rate_limit_interval_ms: 3000, top_p: 0.9 }
+  }, [{ role: "user", content: "x" }], 256, 0.1);
+  assert.equal(body.top_p, 0.9);
+  for (const key of ["rate_limit_rpm", "rpm", "rate_limit_interval_ms"]) {
+    assert.equal(key in body, false, key);
+  }
+  // They migrate once into the profile's RPM setting instead.
+  assert.equal(shared.legacyAiRateLimitRpm("https://gateway.example/v1", "m", { rate_limit_rpm: 20 }), 20);
+  assert.equal(shared.legacyAiRateLimitRpm("https://gateway.example/v1", "m", { rate_limit_interval_ms: 3000 }), 20);
+  assert.equal(shared.legacyAiRateLimitRpm(
+    "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.5-flash-lite-preview", {}
+  ), 15);
+  assert.equal(shared.legacyAiRateLimitRpm("https://api.deepseek.com", "deepseek-v4-flash", {}), 0);
 });
 
 test("urgent request preempts speculative prefetch rate delay and claims the slot", async () => {
@@ -545,7 +536,8 @@ test("urgent request preempts speculative prefetch rate delay and claims the slo
   const config = {
     endpointKind: "gemini",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    model: "gemini-3.1-flash-lite-preview"
+    model: "gemini-3.1-flash-lite-preview",
+    rateLimitRpm: 15
   };
 
   // First request starts immediately at T = 0
@@ -897,14 +889,14 @@ test("Gemini playback lag preserves full startup grace and accounts for cached t
       cueEpoch: 1
     },
     settings: {
-      aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
       aiModel: "gemini-2.5-flash"
     },
     AI_HIGH_SPEED_PROGRESS_GRACE_MS: 2500,
     AI_PLAYBACK_PROGRESS_GRACE_MS: 4000,
     AI_HIGH_SPEED_STARTUP_GRACE_MS: 3500,
     AI_PLAYBACK_STARTUP_GRACE_MS: 6000,
-    GEMINI_PLAYBACK_STARTUP_GRACE_MS: 14000
+    AI_REQUEST_LIMITED_STARTUP_GRACE_MS: 14000
   };
   vm.createContext(context);
   vm.runInContext(semanticSource, context, { filename: "content/semantic.js" });
@@ -1420,7 +1412,7 @@ test("accelerated streamed progress hands off from a safe prefix before the long
 test("Gemini ignores stream handoff even during accelerated playback", async () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(true), 0, {
     windowItems: 320, targetThrough: 255, urgentTarget: 40, playbackRate: 3,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
     aiModel: "gemini-3.1-flash-lite-preview"
   });
   const request = {
@@ -1726,7 +1718,7 @@ test("accelerated prefetch skips the live writer and uses the fast transport pat
 test("Gemini Flash Lite uses the configured request window at ordinary playback", () => {
   const harness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
     aiModel: "gemini-3.1-flash-lite-preview"
   });
   vm.runInContext("pumpAiCommitRegion(0, true)", harness.context);
@@ -1739,7 +1731,7 @@ test("Gemini Flash Lite uses the configured request window at ordinary playback"
   const customHarness = loadSemanticCommitHarness(giantSemanticResponse(false), 0, {
     windowItems: 320, targetThrough: 0, urgentTarget: 0, playbackRate: 1,
     aiRequestItems: 160,
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
     aiModel: "gemini-3.1-flash-lite-preview"
   });
   vm.runInContext("pumpAiCommitRegion(0, true)", customHarness.context);
@@ -1776,7 +1768,7 @@ async function driveLookaheadLane(harness, maxSteps = 40) {
 for (const [label, providerOptions] of [
   ["DeepSeek", {}],
   ["Gemini", {
-    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", aiRateLimitRpm: 15,
     aiModel: "gemini-3.5-flash-lite-preview", aiRequestItems: 320
   }],
   ["compatible", { aiBaseUrl: "https://gateway.example/v1", aiModel: "other-model" }]

@@ -1,35 +1,44 @@
 // AI HTTP streaming, retry and cancellation transport.
 "use strict";
 
-// Provider request quotas (e.g. Gemini free tier 15 RPM) must be shared across
-// tabs, not managed by a single YouTube tab. Space starts globally and leave a
-// small margin; larger content windows reduce the resulting latency.
-const GEMINI_MIN_REQUEST_INTERVAL_MS = 4200;
+// Provider request quotas (the profile's requests-per-minute limit) must be
+// shared across tabs, not managed by a single YouTube tab. Space starts
+// globally; larger content windows reduce the resulting latency.
 const AI_REQUEST_RATE_STATE = new Map();
-const GEMINI_REQUEST_RATE_STATE = AI_REQUEST_RATE_STATE;
 
 function aiProviderRequestIntervalMs(config) {
-  const customRpm = Number(
-    (config && config.rateLimitRpm) ??
-    (config && config.extraBody && (config.extraBody.rate_limit_rpm || config.extraBody.rpm))
-  );
-  if (Number.isFinite(customRpm) && customRpm > 0) {
-    return Math.max(0, Math.ceil(60000 / customRpm));
-  }
-  const custom = Number(
-    (config && config.rateLimitIntervalMs) ??
-    (config && config.extraBody && config.extraBody.rate_limit_interval_ms)
-  );
-  if (Number.isFinite(custom) && custom > 0) {
-    return Math.max(0, Math.ceil(custom));
-  }
-  const providerKind = config && config.endpointKind === "gemini"
-    ? "gemini"
-    : typeof YTDS_SHARED.aiProviderKind === "function"
-      ? YTDS_SHARED.aiProviderKind(config && config.baseUrl, config && config.model)
-      : "";
-  if (providerKind === "gemini") return GEMINI_MIN_REQUEST_INTERVAL_MS;
-  return 0;
+  return YTDS_SHARED.aiMinRequestIntervalMs(config && config.rateLimitRpm);
+}
+
+// Connect deadlines follow the provider's measured time to first byte: a
+// thinking model can legitimately take 8 s before its headers, and killing
+// it there costs a retry (and on a low-RPM plan, another quota slot).
+const AI_FIRST_BYTE_HISTORY = new Map();
+const AI_FIRST_BYTE_HISTORY_SIZE = 8;
+const AI_MAX_CONNECT_TIMEOUT_MS = 30000;
+const AI_REQUEST_LIMITED_CONNECT_TIMEOUT_MS = 20000;
+
+function aiFirstByteHistoryKey(config) {
+  return `${config && config.endpoint || ""}\n${config && config.model || ""}`;
+}
+
+function recordAiFirstByte(config, firstByteMs) {
+  const value = Number(firstByteMs);
+  if (!Number.isFinite(value) || value <= 0) return;
+  const key = aiFirstByteHistoryKey(config);
+  const history = AI_FIRST_BYTE_HISTORY.get(key) || [];
+  history.push(value);
+  if (history.length > AI_FIRST_BYTE_HISTORY_SIZE) history.shift();
+  AI_FIRST_BYTE_HISTORY.set(key, history);
+}
+
+function aiConnectTimeoutMs(config, urgent) {
+  const base = YTDS_SHARED.aiRequestLimited(config && config.rateLimitRpm)
+    ? AI_REQUEST_LIMITED_CONNECT_TIMEOUT_MS
+    : urgent ? AI_CONNECT_TIMEOUT_URGENT_MS : AI_CONNECT_TIMEOUT_PREFETCH_MS;
+  const history = AI_FIRST_BYTE_HISTORY.get(aiFirstByteHistoryKey(config)) || [];
+  const observed = history.length ? Math.ceil(Math.max(...history) * 1.5) : 0;
+  return Math.min(AI_MAX_CONNECT_TIMEOUT_MS, Math.max(base, observed));
 }
 
 function aiRequestCancelledError() {
@@ -510,6 +519,7 @@ async function getAiConfig() {
     model,
     extraBody: parsedExtra.ok ? parsedExtra.value : {},
     extraBodyCanonical: parsedExtra.ok ? parsedExtra.canonical : "{}",
+    rateLimitRpm: YTDS_SHARED.normalizeAiRateLimitRpm(stored.aiRateLimitRpm, 0),
     contextPast: YTDS_SHARED.normalizeAiContextCount(stored.aiContextPast, 1),
     contextFuture: YTDS_SHARED.normalizeAiContextCount(stored.aiContextFuture, 1)
   };
@@ -606,6 +616,7 @@ async function fetchAiCompletionAttempt(config, requestOptions, attemptInfo, tra
     externalSignal,
     (response, firstByteMs) => {
       attemptInfo.firstByteMs = firstByteMs;
+      recordAiFirstByte(config, firstByteMs);
       attemptInfo.status = response.status;
       if (trace.debug) appendDebug("background", "ai-http-first-byte", {
         ...aiAttemptTraceFields(trace, attemptInfo),
@@ -686,8 +697,7 @@ async function aiRawCompletion(
   const timeoutMs = YTDS_SHARED.aiExtraBodyUsesThinking(config.extraBody)
     ? AI_TIMEOUT_THINKING_MS : AI_TIMEOUT_FAST_MS;
   const requestClass = String(trace.requestClass || "");
-  const connectTimeoutMs = requestClass.startsWith("urgent")
-    ? AI_CONNECT_TIMEOUT_URGENT_MS : AI_CONNECT_TIMEOUT_PREFETCH_MS;
+  const connectTimeoutMs = aiConnectTimeoutMs(config, requestClass.startsWith("urgent"));
   for (let attempt = 0; attempt < AI_MAX_ATTEMPTS; attempt++) {
     const attemptNumber = attempt + 1;
     const networkTraceId = aiNetworkAttemptTraceId(trace.requestId, attemptNumber);

@@ -206,10 +206,9 @@ function handleAiBatchAccepted(ctx, resp) {
     repaintActiveAiTranslation();
     return;
   }
-  const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
-    : typeof aiIsGemini === "function" ? aiIsGemini() : false;
+  const requestLimited = typeof aiRequestLimited === "function" && aiRequestLimited();
   const urgentPending = aiUrgentCommitPending(state);
-  if (!isGemini || !urgentPending) pumpAiSpeculativeRequests(regionIndex, state);
+  if (!requestLimited || !urgentPending) pumpAiSpeculativeRequests(regionIndex, state);
   repaintActiveAiTranslation();
   if (aiCommitPending(state)) queueAiCommitPump(ctx);
   else continueAiLookahead(state.cursor);

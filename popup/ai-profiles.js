@@ -32,15 +32,27 @@ function aiConfigProfileFallbackName(profile, index) {
 function normalizeAiConfigProfile(value, index) {
   const raw = value && typeof value === "object" ? value : {};
   const parsedExtra = YTDS_SHARED.parseAiExtraBody(raw.extraBody || "");
+  const extraValue = parsedExtra.ok ? parsedExtra.value : {};
+  // Profiles from before the RPM setting: adopt their former in-band rate
+  // keys (or the Gemini free-tier default) once, and drop those keys from
+  // the parameters actually sent to the provider.
+  const legacyRateKeys = YTDS_SHARED.AI_LEGACY_RATE_LIMIT_KEYS.filter((key) =>
+    Object.prototype.hasOwnProperty.call(extraValue, key));
+  const cleanedExtra = legacyRateKeys.length
+    ? YTDS_SHARED.parseAiExtraBody(JSON.stringify(Object.fromEntries(
+        Object.entries(extraValue).filter(([key]) => !legacyRateKeys.includes(key)))))
+    : parsedExtra;
+  const profileBaseUrl = YTDS_SHARED.normalizeAiBaseUrl(raw.baseUrl) ||
+    YTDS_SHARED.AI_DEFAULT_BASE_URL;
+  const profileModel = String(raw.model || YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160);
   const profile = {
     id: String(raw.id || "").trim() || newAiConfigProfileId(),
     name: String(raw.name || "").trim().slice(0, 60),
     targetLang: YTDS_SHARED.normalizeTargetLang(raw.targetLang || state.targetLang),
-    baseUrl: YTDS_SHARED.normalizeAiBaseUrl(raw.baseUrl) ||
-      YTDS_SHARED.AI_DEFAULT_BASE_URL,
-    model: String(raw.model || YTDS_SHARED.AI_DEFAULT_MODEL).trim().slice(0, 160),
+    baseUrl: profileBaseUrl,
+    model: profileModel,
     apiKey: String(raw.apiKey || "").trim(),
-    extraBody: parsedExtra.ok ? parsedExtra.canonical : "{}",
+    extraBody: cleanedExtra.ok ? cleanedExtra.canonical : "{}",
     contextPast: YTDS_SHARED.normalizeAiContextCount(
       raw.contextPast, state.aiContextPast
     ),
@@ -52,6 +64,12 @@ function normalizeAiConfigProfile(value, index) {
     ),
     requestItems: YTDS_SHARED.normalizeAiRequestItems(
       raw.requestItems == null ? state.aiRequestItems : raw.requestItems
+    ),
+    rateLimitRpm: YTDS_SHARED.normalizeAiRateLimitRpm(
+      raw.rateLimitRpm == null
+        ? YTDS_SHARED.legacyAiRateLimitRpm(profileBaseUrl, profileModel, extraValue)
+        : raw.rateLimitRpm,
+      0
     )
   };
   if (!profile.name) profile.name = aiConfigProfileFallbackName(profile, index);
@@ -368,7 +386,8 @@ async function materializeAiConfigProfile(profile, forceRevision) {
     state.aiContextPast !== profile.contextPast ||
     state.aiContextFuture !== profile.contextFuture ||
     state.aiPrefetchBatches !== profile.prefetchBatches ||
-    state.aiRequestItems !== profile.requestItems;
+    state.aiRequestItems !== profile.requestItems ||
+    state.aiRateLimitRpm !== profile.rateLimitRpm;
   const materialChanged = previousKey !== profile.apiKey || !previousExtra.ok ||
     previousExtra.canonical !== profile.extraBody;
   state.targetLang = profile.targetLang;
@@ -378,6 +397,7 @@ async function materializeAiConfigProfile(profile, forceRevision) {
   state.aiContextFuture = profile.contextFuture;
   state.aiPrefetchBatches = profile.prefetchBatches;
   state.aiRequestItems = profile.requestItems;
+  state.aiRateLimitRpm = profile.rateLimitRpm;
   if (changed || materialChanged || forceRevision) {
     state.aiExtraBodyRevision = Math.max(0, Number(state.aiExtraBodyRevision) || 0) + 1;
     await chrome.storage.sync.set({
@@ -388,6 +408,7 @@ async function materializeAiConfigProfile(profile, forceRevision) {
       aiContextFuture: state.aiContextFuture,
       aiPrefetchBatches: state.aiPrefetchBatches,
       aiRequestItems: state.aiRequestItems,
+      aiRateLimitRpm: state.aiRateLimitRpm,
       aiExtraBodyRevision: state.aiExtraBodyRevision
     });
   }
@@ -417,7 +438,8 @@ async function initializeAiConfigProfiles(localValue) {
       contextPast: state.aiContextPast,
       contextFuture: state.aiContextFuture,
       prefetchBatches: state.aiPrefetchBatches,
-      requestItems: state.aiRequestItems
+      requestItems: state.aiRequestItems,
+      rateLimitRpm: state.aiRateLimitRpm
     }, 0));
   }
   const wanted = String(rawStore && rawStore.activeId || "");

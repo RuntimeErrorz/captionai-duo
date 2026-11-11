@@ -46,6 +46,11 @@
     return { set, remove };
   }
 
+  const AI_MAX_RATE_LIMIT_RPM = 600;
+  const AI_REQUEST_LIMITED_MAX_RPM = 30;
+  const AI_GEMINI_FREE_TIER_RPM = 15;
+  const AI_LEGACY_RATE_LIMIT_KEYS = Object.freeze(["rate_limit_rpm", "rpm", "rate_limit_interval_ms"]);
+
   const DEFAULTS = Object.freeze({
     enabled: true,
     targetLang: "zh-CN",
@@ -56,6 +61,7 @@
     aiContextFuture: 1,
     aiPrefetchBatches: 1,
     aiRequestItems: 96,
+    aiRateLimitRpm: 0,
     debugEnabled: false,
     order: "trans-top",
     rowGap: 4,
@@ -455,7 +461,10 @@
       stream: true
     };
     if (parsedExtra.ok) {
-      for (const [key, value] of Object.entries(parsedExtra.value)) body[key] = value;
+      for (const [key, value] of Object.entries(parsedExtra.value)) {
+        // Former in-band scheduler settings are not provider parameters.
+        if (!AI_LEGACY_RATE_LIMIT_KEYS.includes(key)) body[key] = value;
+      }
     }
     // Reassert the protected transport/contract values after the merge even
     // though the parser rejects them. This keeps direct programmatic callers
@@ -497,6 +506,41 @@
     return Number.isFinite(items)
       ? Math.max(32, Math.min(320, Math.round(items)))
       : Math.max(32, Math.min(320, Math.round(fallback)));
+  }
+
+  // Requests per minute the provider allows; 0 means no client-side limit.
+  function normalizeAiRateLimitRpm(value, fallbackValue) {
+    const rpm = Number(value);
+    const fallback = Number(fallbackValue);
+    const chosen = Number.isFinite(rpm) ? rpm : Number.isFinite(fallback) ? fallback : 0;
+    return Math.max(0, Math.min(AI_MAX_RATE_LIMIT_RPM, Math.round(chosen)));
+  }
+
+  // A provider limited to a few requests per minute is request-bound, not
+  // token-bound: schedule few wide requests, one at a time, with one lane.
+  function aiRequestLimited(rpmValue) {
+    const rpm = normalizeAiRateLimitRpm(rpmValue, 0);
+    return rpm > 0 && rpm <= AI_REQUEST_LIMITED_MAX_RPM;
+  }
+
+  // Minimum spacing between request starts, with a 5% safety margin.
+  function aiMinRequestIntervalMs(rpmValue) {
+    const rpm = normalizeAiRateLimitRpm(rpmValue, 0);
+    return rpm > 0 ? Math.ceil((60000 / rpm) * 1.05) : 0;
+  }
+
+  // One-time migration source for profiles saved before the RPM setting:
+  // an RPM typed into extra request parameters, else the Gemini free-tier
+  // limit the scheduler used to assume for Gemini endpoints.
+  function legacyAiRateLimitRpm(baseUrl, model, extraBodyValue) {
+    const extra = extraBodyValue && typeof extraBodyValue === "object" ? extraBodyValue : {};
+    const legacyRpm = Number(extra.rate_limit_rpm || extra.rpm);
+    if (Number.isFinite(legacyRpm) && legacyRpm > 0) return normalizeAiRateLimitRpm(legacyRpm, 0);
+    const legacyInterval = Number(extra.rate_limit_interval_ms);
+    if (Number.isFinite(legacyInterval) && legacyInterval > 0) {
+      return normalizeAiRateLimitRpm(Math.floor(60000 / legacyInterval), 0);
+    }
+    return aiProviderKind(baseUrl, model) === "gemini" ? AI_GEMINI_FREE_TIER_RPM : 0;
   }
 
   function normalizeAiContextCount(value, fallbackValue) {
@@ -589,6 +633,12 @@
   }
 
   Object.assign(internal, {
+    AI_REQUEST_LIMITED_MAX_RPM,
+    AI_LEGACY_RATE_LIMIT_KEYS,
+    normalizeAiRateLimitRpm,
+    aiRequestLimited,
+    aiMinRequestIntervalMs,
+    legacyAiRateLimitRpm,
     aiHostPermissionPattern,
     LEGACY_SETTING_KEYS,
     legacySettingsMigration,

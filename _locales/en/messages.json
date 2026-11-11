@@ -41,6 +41,8 @@
   "aiContextPast": { "message": "Previous context lines" },
   "aiContextFuture": { "message": "Future context lines" },
   "aiPrefetchBatches": { "message": "Prefetch batches" },
+  "aiRateLimitRpm": { "message": "Requests per minute" },
+  "aiRateLimitRpmHint": { "message": "Your provider's request limit; 0 means unlimited. At 30 or below, translation uses fewer, wider requests (e.g. Gemini free tier: 15)." },
   "aiRequestItems": { "message": "Request batch size" },
   "aiPermissionMissing": { "message": "Allow the extension to reach this API address to start translating." },
   "aiGrantPermission": { "message": "Allow access" },

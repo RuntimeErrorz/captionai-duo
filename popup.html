@@ -136,6 +136,11 @@
             <label for="aiRequestItems" data-i18n="aiRequestItems">单次请求条数</label>
             <input id="aiRequestItems" type="number" min="32" max="320" step="16" inputmode="numeric" />
           </div>
+          <div class="field">
+            <label for="aiRateLimitRpm" data-i18n="aiRateLimitRpm">每分钟请求上限</label>
+            <input id="aiRateLimitRpm" type="number" min="0" max="600" step="1" inputmode="numeric"
+                   data-i18n-title="aiRateLimitRpmHint" title="0 表示不限制" />
+          </div>
         </div>
 
         <div class="field">

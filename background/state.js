@@ -21,7 +21,7 @@ const AI_STREAM_COMPLETION_GRACE_MS = 750;
 const AI_MAX_ATTEMPTS = 3;
 const DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB = 12;
 const COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB = 4;
-const GEMINI_MAX_ACTIVE_REQUESTS_PER_TAB = 1;
+const REQUEST_LIMITED_MAX_ACTIVE_REQUESTS_PER_TAB = 1;
 const MAX_TRANSLATE_CHARS = 4000;
 // Accelerated playback needs a longer semantic runway than ordinary playback.
 // Keep the normal planner cap at 160, while accepting the larger urgent window
@@ -499,13 +499,12 @@ function cleanBatchItems(value) {
   return out;
 }
 
-function acquireAiSlot(sender, urgent, endpointKind) {
+function acquireAiSlot(sender, urgent, endpointKind, requestLimited) {
   const key = sender && sender.tab && Number.isInteger(sender.tab.id)
     ? `tab:${sender.tab.id}` : "extension";
   const state = aiActiveByTab.get(key) || { active: 0 };
-  const maxActive = endpointKind === "deepseek"
-    ? DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB
-    : endpointKind === "gemini" ? GEMINI_MAX_ACTIVE_REQUESTS_PER_TAB
+  const maxActive = requestLimited ? REQUEST_LIMITED_MAX_ACTIVE_REQUESTS_PER_TAB
+    : endpointKind === "deepseek" ? DEEPSEEK_MAX_ACTIVE_REQUESTS_PER_TAB
       : COMPATIBLE_MAX_ACTIVE_REQUESTS_PER_TAB;
   const status = YTDS_SHARED.aiConcurrencyStatus(
     state.active, maxActive, !!urgent
@@ -563,7 +562,31 @@ async function migrateLegacySettings() {
   } catch (_e) { /* retried on the next worker start */ }
 }
 
-const legacySettingsMigrated = migrateLegacySettings();
+// Profiles saved before the requests-per-minute setting keep the pacing the
+// scheduler used to infer: an RPM typed into extra request parameters, or the
+// Gemini free-tier limit for Gemini endpoints. Runs once; idempotent.
+async function migrateAiRateLimitRpm() {
+  const syncStore = chrome.storage && chrome.storage.sync;
+  const localStore = chrome.storage && chrome.storage.local;
+  if (!syncStore || !localStore) return;
+  try {
+    const stored = await syncStore.get(["aiRateLimitRpm", "aiBaseUrl", "aiModel"]);
+    if (Object.prototype.hasOwnProperty.call(stored, "aiRateLimitRpm")) return;
+    const baseUrl = YTDS_SHARED.normalizeAiBaseUrl(stored.aiBaseUrl) || YTDS_SHARED.AI_DEFAULT_BASE_URL;
+    const model = String(stored.aiModel || YTDS_SHARED.AI_DEFAULT_MODEL).trim();
+    const local = await localStore.get({ aiExtraBodyProfiles: {} });
+    const extras = local.aiExtraBodyProfiles && typeof local.aiExtraBodyProfiles === "object"
+      ? local.aiExtraBodyProfiles : {};
+    const parsed = YTDS_SHARED.parseAiExtraBody(
+      extras[YTDS_SHARED.aiRequestProfileScope(baseUrl, model)] || ""
+    );
+    await syncStore.set({
+      aiRateLimitRpm: YTDS_SHARED.legacyAiRateLimitRpm(baseUrl, model, parsed.ok ? parsed.value : {})
+    });
+  } catch (_e) { /* retried on the next worker start */ }
+}
+
+const legacySettingsMigrated = migrateLegacySettings().then(migrateAiRateLimitRpm);
 
 // A newly granted API host is new request material: bump the shared revision
 // so open video tabs retry, even if the popup closed during the prompt.

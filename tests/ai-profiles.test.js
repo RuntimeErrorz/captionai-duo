@@ -100,7 +100,7 @@ test("switching a profile materializes secrets locally and emits one unified rev
   assert.equal(syncWrites.length, 1);
   assert.deepEqual(Object.keys(syncWrites[0]).sort(), [
     "aiBaseUrl", "aiContextFuture", "aiContextPast", "aiExtraBodyRevision", "aiModel",
-    "aiPrefetchBatches", "aiRequestItems", "targetLang"
+    "aiPrefetchBatches", "aiRateLimitRpm", "aiRequestItems", "targetLang"
   ]);
   assert.equal(syncWrites[0].aiExtraBodyRevision, 5);
   assert.equal(syncWrites[0].targetLang, "ko");

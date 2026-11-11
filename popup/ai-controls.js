@@ -8,7 +8,8 @@ const AI_TUNING_FIELDS = Object.freeze([
   ["aiContextPast", (value) => YTDS_SHARED.normalizeAiContextCount(value, state.aiContextPast), "contextPast"],
   ["aiContextFuture", (value) => YTDS_SHARED.normalizeAiContextCount(value, state.aiContextFuture), "contextFuture"],
   ["aiPrefetchBatches", (value) => YTDS_SHARED.normalizeAiPrefetchBatches(value), "prefetchBatches"],
-  ["aiRequestItems", (value) => YTDS_SHARED.normalizeAiRequestItems(value, state.aiRequestItems), "requestItems"]
+  ["aiRequestItems", (value) => YTDS_SHARED.normalizeAiRequestItems(value, state.aiRequestItems), "requestItems"],
+  ["aiRateLimitRpm", (value) => YTDS_SHARED.normalizeAiRateLimitRpm(value, state.aiRateLimitRpm), "rateLimitRpm"]
 ]);
 
 function aiHostPermissionOrigins(baseUrl) {

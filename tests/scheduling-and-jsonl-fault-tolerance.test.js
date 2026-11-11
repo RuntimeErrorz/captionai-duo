@@ -137,6 +137,7 @@ function loadHarness(options = {}) {
       targetLang: "zh-CN",
       debugEnabled: true,
       aiBaseUrl: options.aiBaseUrl || "https://api.deepseek.com",
+      aiRateLimitRpm: options.aiRateLimitRpm || 0,
       aiModel: options.aiModel || "test-model"
     },
     SEMANTIC_CORE_ITEMS: 16,
@@ -148,9 +149,8 @@ function loadHarness(options = {}) {
     DEEPSEEK_HIGH_SPEED_URGENT_REQUEST_ITEMS: 48,
     COMPATIBLE_ACCELERATED_URGENT_REQUEST_ITEMS: 80,
     COMPATIBLE_HIGH_SPEED_URGENT_REQUEST_ITEMS: 80,
-    GEMINI_REQUEST_ITEMS: 320,
-    GEMINI_MAX_REQUEST_ITEMS: 320,
-    GEMINI_MAX_SPECULATIVE_REQUESTS: 1,
+    AI_REQUEST_LIMITED_MAX_REQUEST_ITEMS: 320,
+    AI_REQUEST_LIMITED_MAX_SPECULATIVE_REQUESTS: 1,
     AI_NORMAL_MAX_REQUEST_ITEMS: 160,
     AI_MAX_REQUEST_ITEMS: 320,
     AI_HIGH_SPEED_MAX_REQUEST_ITEMS: 160,
@@ -253,9 +253,10 @@ test("adaptive batch window reduces size when response has deferredIds", () => {
   assert.equal(harness.state.windowItems, Math.min(harness.context.AI_URGENT_REQUEST_ITEMS, 96));
 });
 
-test("Gemini prioritizes urgent commit over speculative prefetch when urgent lane is pending", async () => {
+test("a request-limited profile prioritizes urgent commit over speculative prefetch", async () => {
   const harness = loadHarness({
     aiBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    aiRateLimitRpm: 15,
     aiModel: "gemini-3.5-flash-lite-preview",
     targetThrough: 200,
     urgentTarget: 200

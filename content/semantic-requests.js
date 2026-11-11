@@ -3,7 +3,8 @@
 
 const AI_STALE_PREFETCH_GRACE_MS = 2500;
 const AI_PLAYBACK_STARTUP_GRACE_MS = 6000;
-const GEMINI_PLAYBACK_STARTUP_GRACE_MS = 14000;
+// A request-limited provider may need ~8 s before its first byte.
+const AI_REQUEST_LIMITED_STARTUP_GRACE_MS = 14000;
 const AI_PLAYBACK_PROGRESS_GRACE_MS = 4000;
 const AI_HIGH_SPEED_STARTUP_GRACE_MS = 3500;
 const AI_HIGH_SPEED_PROGRESS_GRACE_MS = 2500;
@@ -45,9 +46,8 @@ function aiRequestIsPlaybackLagging(request, state, targetGroup) {
   }
   const rate = Number(getVideo() && getVideo().playbackRate);
   const highSpeed = rate >= 2.5;
-  const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
-    : typeof aiIsGemini === "function" ? aiIsGemini() : false;
-  const lagThreshold = isGemini ? 48 : (highSpeed ? 24 : (rate >= 1.75 ? 48 : 0));
+  const requestLimited = typeof aiRequestLimited === "function" && aiRequestLimited();
+  const lagThreshold = requestLimited ? 48 : (highSpeed ? 24 : (rate >= 1.75 ? 48 : 0));
   const target = Number(targetGroup);
   const cursor = Number(state.cursor);
   const requestStart = Number(request.requestStart);
@@ -58,10 +58,10 @@ function aiRequestIsPlaybackLagging(request, state, targetGroup) {
     Number.isInteger(progressCursor) && progressCursor > requestStart &&
     Number.isFinite(lastProgressAt) && lastProgressAt > startedAt;
   const referenceAt = hasStreamProgress ? lastProgressAt : startedAt;
-  const startupGraceMs = isGemini
-    ? GEMINI_PLAYBACK_STARTUP_GRACE_MS
+  const startupGraceMs = requestLimited
+    ? AI_REQUEST_LIMITED_STARTUP_GRACE_MS
     : (highSpeed ? AI_HIGH_SPEED_STARTUP_GRACE_MS : AI_PLAYBACK_STARTUP_GRACE_MS);
-  const progressGraceMs = isGemini
+  const progressGraceMs = requestLimited
     ? AI_PLAYBACK_PROGRESS_GRACE_MS
     : (highSpeed ? AI_HIGH_SPEED_PROGRESS_GRACE_MS : AI_PLAYBACK_PROGRESS_GRACE_MS);
   const graceMs = hasStreamProgress ? progressGraceMs : startupGraceMs;
@@ -109,8 +109,7 @@ function aiStreamHandoffReady(request, state, maxRequestItems, normalMaxRequestI
   const rate = Number(video && video.playbackRate);
   const accelerated = Number.isFinite(rate) && rate >= 1.75;
   if (!request || !state || !request.urgent ||
-      (typeof isGeminiProvider === "function" && isGeminiProvider()) ||
-      (typeof aiIsGemini === "function" && aiIsGemini()) ||
+      (typeof aiRequestLimited === "function" && aiRequestLimited()) ||
       (!accelerated && Number(maxRequestItems) <= Number(normalMaxRequestItems))) return false;
   const requestStart = Number(request.requestStart);
   const requestEnd = Number(request.requestEnd);
@@ -418,9 +417,8 @@ function pumpAiSpeculativeRequests(regionIndex, stateValue) {
         state.prefetchResponses.has(start)) continue;
     start = aiSpeculativeStartAfterActive(regionIndex, start);
     if (start <= state.cursor || start > state.limitEnd) continue;
-    const isGemini = typeof isGeminiProvider === "function" ? isGeminiProvider()
-      : typeof aiIsGemini === "function" ? aiIsGemini() : false;
-    const itemCount = isGemini ? aiSteadyRequestItems() : Math.min(
+    const requestLimited = typeof aiRequestLimited === "function" && aiRequestLimited();
+    const itemCount = requestLimited ? aiSteadyRequestItems() : Math.min(
       aiMaxRequestItems(),
       Number.isFinite(Number(getVideo() && getVideo().playbackRate)) &&
           Number(getVideo() && getVideo().playbackRate) >= 1.75
@@ -574,6 +572,7 @@ function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
   const batch = captionSession.semanticBatchWindows[batchIndex];
   sendRuntimeMessage({
     type: "translateBatch", endpointKind: aiEndpointKind(),
+    requestLimited: typeof aiRequestLimited === "function" && aiRequestLimited(),
     debug: !!settings.debugEnabled, requestId,
     videoId: captionSession.cueVideoId,
     videoTimeMs: Math.round(((getVideo() && getVideo().currentTime) || 0) * 1000),

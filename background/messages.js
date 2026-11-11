@@ -103,6 +103,7 @@ function parseTranslateBatch(msg, sender) {
     debug: !!msg.debug,
     endpointKind: msg.endpointKind === "deepseek" || msg.endpointKind === "gemini"
       ? msg.endpointKind : "compatible",
+    requestLimited: msg.requestLimited === true,
     focusGeneration: Math.max(0, Math.floor(Number(msg.focusGeneration) || 0))
   };
 }
@@ -234,7 +235,7 @@ function handleTranslateBatch(msg, sender, sendResponse) {
     return false;
   }
   let release;
-  try { release = acquireAiSlot(sender, batch.urgent, batch.endpointKind); }
+  try { release = acquireAiSlot(sender, batch.urgent, batch.endpointKind, batch.requestLimited); }
   catch (err) {
     sendResponse(slotUnavailableResponse(err, batch));
     return false;

@@ -48,6 +48,9 @@ function normalizeBackupSettings(value) {
     YTDS_SHARED.normalizeAiPrefetchBatches(settings.aiPrefetchBatches);
   settings.aiRequestItems =
     YTDS_SHARED.normalizeAiRequestItems(settings.aiRequestItems, YTDS_SHARED.DEFAULTS.aiRequestItems);
+  settings.aiRateLimitRpm = YTDS_SHARED.normalizeAiRateLimitRpm(
+    settings.aiRateLimitRpm, YTDS_SHARED.DEFAULTS.aiRateLimitRpm
+  );
 
   const enumValues = {
     order: new Set(["trans-top", "orig-top"]),
@@ -114,7 +117,8 @@ function normalizeBackupProfileStore(value, fallbackSettings = state) {
       prefetchBatches: source.prefetchBatches == null
         ? fallbackSettings.aiPrefetchBatches : source.prefetchBatches,
       requestItems: source.requestItems == null
-        ? fallbackSettings.aiRequestItems : source.requestItems
+        ? fallbackSettings.aiRequestItems : source.requestItems,
+      rateLimitRpm: source.rateLimitRpm
     }, index);
     if (usedIds.has(profile.id)) profile.id = newAiConfigProfileId();
     usedIds.add(profile.id);
@@ -151,6 +155,7 @@ function normalizeConfigBackup(value) {
   settings.aiContextFuture = activeProfile.contextFuture;
   settings.aiPrefetchBatches = activeProfile.prefetchBatches;
   settings.aiRequestItems = activeProfile.requestItems;
+  settings.aiRateLimitRpm = activeProfile.rateLimitRpm;
   const credentialScope = YTDS_SHARED.aiCredentialScope(activeProfile.baseUrl);
   const requestScope = YTDS_SHARED.aiRequestProfileScope(
     activeProfile.baseUrl, activeProfile.model
