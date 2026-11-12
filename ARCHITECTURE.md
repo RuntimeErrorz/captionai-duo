@@ -119,8 +119,9 @@ in `manifest.json` in order, and the service worker loads its modules through
 
 ## Permissions
 
-Only `https://api.deepseek.com/*` is a required host permission. Every other
-API origin comes from `optional_host_permissions` and is requested for exactly
+`https://*/*` is declared in `host_permissions` so any HTTPS API domain can be
+accessed without extra permission prompts. Local API origins (`localhost` and
+`127.0.0.1`) come from `optional_host_permissions` and can be requested for exactly
 that origin from the popup. The worker refuses to send a request without the
 grant (`AI_HOST_PERMISSION_MISSING`) and bumps `aiExtraBodyRevision` on
 `permissions.onAdded`, so open video tabs retry after a grant.

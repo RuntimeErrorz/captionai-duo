@@ -304,12 +304,12 @@ test("aligned display pages keep each source sentence with its translation", () 
 
 test("manifest metadata, permissions and icons", () => {
   assert.equal(manifest.minimum_chrome_version, "111");
-  assert.equal(manifest.version, "1.5.0");
+  assert.equal(manifest.version, "1.6.0");
   assert.equal(manifest.action.default_title, "__MSG_extName__");
   assert.deepEqual(manifest.permissions, ["storage", "webRequest"]);
-  assert.deepEqual(manifest.host_permissions, ["https://api.deepseek.com/*"]);
+  assert.deepEqual(manifest.host_permissions, ["https://*/*"]);
   assert.deepEqual(manifest.optional_host_permissions, [
-    "https://*/*", "http://localhost/*", "http://127.0.0.1/*"
+    "http://localhost/*", "http://127.0.0.1/*"
   ]);
   for (const size of [16, 48, 128]) {
     assert.ok(fs.existsSync(path.join(root, "icons", `icon${size}.png`)), `icon${size}.png`);

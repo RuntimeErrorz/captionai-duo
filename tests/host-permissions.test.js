@@ -20,13 +20,20 @@ function patternCovers(declared, requested) {
   return !!(have && want && have[1] === want[1] && (have[2] === "*" || have[2] === want[2]));
 }
 
-test("API host permissions are requested per origin instead of granted at install", () => {
-  assert.deepEqual(manifest.host_permissions, ["https://api.deepseek.com/*"]);
-  assert.ok(manifest.optional_host_permissions.includes("https://*/*"));
+test("API host permissions grant all HTTPS domains at install", () => {
+  assert.deepEqual(manifest.host_permissions, ["https://*/*"]);
+  assert.deepEqual(manifest.optional_host_permissions, [
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ]);
   assert.equal(
     shared.aiHostPermissionPattern(shared.AI_DEFAULT_BASE_URL),
     "https://api.deepseek.com/*",
     "the default provider must work without a permission prompt"
+  );
+  assert.ok(
+    patternCovers(manifest.host_permissions[0], shared.aiHostPermissionPattern(shared.AI_DEFAULT_BASE_URL)),
+    "host_permissions must cover the default provider"
   );
 });
 
