@@ -53,6 +53,12 @@ function buildTruth(random, wordCount, paceValue) {
     regionOf[id] = region;
     if (words[id].hardAfter) region++;
   }
+  // Words carry a sentence's shape, as real captions do: a capital opens a
+  // unit and a period closes it ("W12 w13 w14."), so the parser's
+  // sentence-shape rules see what they see on YouTube.
+  // A one-word cue keeps no period: the runtime splits "Yes." in a cue of its
+  // own into two rows ("Yes", "."), which would shift row ids off word ids.
+  const wordText = (id, alone) => `${unitStart[id] === id ? "W" : "w"}${id}${unitEnd[id] === id && !alone ? "." : ""}`;
   // YouTube ASR cues: 2-9 timed words, never across a hard pause.
   const cues = [];
   for (let id = 0; id < wordCount;) {
@@ -66,8 +72,8 @@ function buildTruth(random, wordCount, paceValue) {
     const end = members[members.length - 1].end;
     cues.push({
       start, dur: end - start,
-      text: members.map((word) => `w${word.id}`).join(" "),
-      parts: members.map((word) => ({ text: `w${word.id}`, offsetMs: word.start - start }))
+      text: members.map((word) => wordText(word.id, members.length === 1)).join(" "),
+      parts: members.map((word) => ({ text: wordText(word.id, members.length === 1), offsetMs: word.start - start }))
     });
   }
   // The alignment chunks the model emits for a whole unit (see provider.js).

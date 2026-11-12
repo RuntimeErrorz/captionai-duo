@@ -132,6 +132,11 @@ function paintExportSeg() {
     b.classList.toggle("on", on);
     b.setAttribute("aria-pressed", String(on));
   });
+  const button = $("exportBtn");
+  if (button && !button.disabled) {
+    button.textContent = exportVariant === "timed"
+      ? t("exportJson3", "下载逐词时间字幕（JSON3）") : t("exportSrt", "下载 SRT 字幕");
+  }
 }
 
 // Active tab id only — the tab id needs no "tabs" permission. We avoid reading

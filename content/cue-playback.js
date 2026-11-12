@@ -359,9 +359,7 @@ function renderTranslationForCue(idx, cue, displayedSource, immediatePending) {
       setTranslation(display && display.translation || gCached, origText);
       return;
     }
-    const regionIndex = captionSession.semanticGroupToCommitRegion[captionSession.activeGroupIdx];
-    const displayError = captionSession.semanticExhaustedRegions.get(regionIndex) ||
-      captionSession.semanticVisibleErrors && captionSession.semanticVisibleErrors.get(regionIndex);
+    const displayError = aiDisplayErrorFor(captionSession.activeGroupIdx);
     if (displayError) {
       clearPendingTimer();
       setTranslation(aiTranslationErrorText(displayError), origText, "error");

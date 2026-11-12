@@ -477,7 +477,7 @@ function scheduleAiBatchRetry(
   const errorInfo = YTDS_SHARED.aiErrorDescriptor(retryOptions && retryOptions.error || retryOptions || { message: reason });
   const errorMessage = YTDS_SHARED.aiErrorMessage(retryOptions && retryOptions.error != null ? retryOptions.error : retryOptions, reason);
   const maxAttempts = rateLimited ? AI_RATE_RETRY_LIMIT
-    : /^(?:HTTP_\d+|AI_CONFIG_MISSING|AI_KEY_MISSING|AI_HOST_PERMISSION_MISSING)$/.test(errorInfo.code) ? 0 : AI_COLD_RETRY_DELAYS_MS.length;
+    : /^(?:HTTP_\d+|AI_CONFIG_MISSING|AI_KEY_MISSING|AI_HOST_PERMISSION_MISSING|AI_OUTPUT_EXHAUSTED|AI_PROVIDER_FILTERED)$/.test(errorInfo.code) ? 0 : AI_COLD_RETRY_DELAYS_MS.length;
   // The worker's local concurrency cap only means "wait for a free slot";
   // nothing failed, so it must never exhaust the region's retry budget.
   const localWait = rateLimited && String(

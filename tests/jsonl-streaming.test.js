@@ -1092,3 +1092,18 @@ test("an end-only chunk that overruns a sentence boundary is trimmed back", () =
   assert.equal(second.ok, true);
   assert.deepEqual(Array.from(second.ids), ["1", "2"]);
 });
+
+// A target language other than Chinese ends sentences with a Latin period;
+// an abbreviation or initials at a chunk end is not a sentence end.
+test("a Latin-script full stop in the translation splits a line into sentences", () => {
+  const items = Array.from({ length: 6 }, (_v, id) => ({ id: String(id), text: `palabra${id}`, startMs: id * 400, endMs: id * 400 + 380, hardAfter: false }));
+  const units = (chunks) => {
+    const state = shared.createAiJsonlTranslationState(items, "en");
+    const result = shared.pushAiJsonlTranslationRecord(state, { type: "unit", chunks });
+    assert.equal(result.ok, true);
+    return new Set(Array.from(result.translations, (item) => item.unitId)).size;
+  };
+  assert.equal(units([rangeChunk(0, 2, "We start here."), rangeChunk(3, 5, "Then we go on")]), 2);
+  assert.equal(units([rangeChunk(0, 2, "They moved to the U.S."), rangeChunk(3, 5, "in the spring")]), 1);
+  assert.equal(units([rangeChunk(0, 2, "我们从这里开始。"), rangeChunk(3, 5, "然后继续")]), 2);
+});

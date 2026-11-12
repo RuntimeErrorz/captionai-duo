@@ -14,7 +14,8 @@
     aiJsonlChunkMayBeEmpty,
     aiJsonlChunkTranslation,
     containsLegacyAlignmentIds,
-    endsWithChineseFullStop,
+    endsWithSentenceStop,
+    aiUnitOversized,
     hasOwn,
     joinTranslatedParts,
     jsonObjectFromText,
@@ -54,7 +55,7 @@
         const ids = chunk.ids.map(String);
         const translation = normalizeTranslatedText(chunk.translation);
         const sentenceBoundaryAfter = chunk.sentenceBoundaryAfter === true ||
-          endsWithChineseFullStop(chunk.translation);
+          endsWithSentenceStop(chunk.translation);
         const chunkUnitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
         // A chunk is not a sentence: remember where its sentence starts so the
         // commit plan never opens a committed block in the middle of it.
@@ -205,8 +206,7 @@
       const durationMs = Number(lastItem.endMs) - Number(firstItem.startMs);
       const sourceChars = items.slice(cursor, cursor + ids.length)
         .reduce((sum, item) => sum + String(item && item.text || "").length, 0);
-      if (ids.length > 1 &&
-          ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
+      if (ids.length > 1 && aiUnitOversized(durationMs, sourceChars)) {
         return reject(`oversized segment ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
       }
 

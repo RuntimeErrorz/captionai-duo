@@ -202,7 +202,15 @@ function aiTranslationErrorText(value) {
   const details = YTDS_SHARED.aiErrorDescriptor(value);
   const code = [details.code, details.providerCode].filter(Boolean).join(" / ");
   const base = String(t("translationError", "Translation failed [$1]")).replace(/\$1/g, code);
-  const message = YTDS_SHARED.aiErrorMessage(value, "");
+  // A reasoning model that used its whole output limit gets an actionable
+  // hint instead of the provider-level message.
+  const message = details.code === "AI_OUTPUT_EXHAUSTED"
+    ? String(t("translationErrorOutputExhausted",
+      "the model used its whole output limit thinking; turn thinking off in the extra request parameters"))
+    : details.code === "AI_PROVIDER_FILTERED"
+      ? String(t("translationErrorProviderFiltered",
+        "the provider's content filter blocked this passage; another model may translate it"))
+      : YTDS_SHARED.aiErrorMessage(value, "");
   return message && message !== code ? `${base} — ${message}` : base;
 }
 
@@ -225,8 +233,30 @@ function aiUpdateDisplayError(regionIndex, request, runtimeError, response) {
   errors.set(regionIndex, {
     errorCode: details.code,
     providerCode: details.providerCode,
-    errorMessage: YTDS_SHARED.aiErrorMessage(value, "")
+    errorMessage: YTDS_SHARED.aiErrorMessage(value, ""),
+    // The lines the failed request was for: its error is shown only there.
+    start: Number(request && request.requestStart),
+    end: Number(request && request.requestEnd)
   });
+}
+
+// The error to show for a visible group: its region gave up for good, or the
+// failed request covered this very group. A request's error is never shown at
+// a group it was not translating (a real log showed a prefetch failure at
+// line 66 painted over a seek target at line 1596).
+function aiDisplayErrorFor(groupIndex) {
+  const group = Number(groupIndex);
+  const regionIndex = captionSession.semanticGroupToCommitRegion &&
+    captionSession.semanticGroupToCommitRegion[group];
+  const exhausted = captionSession.semanticExhaustedRegions &&
+    captionSession.semanticExhaustedRegions.get(regionIndex);
+  if (exhausted) return exhausted;
+  const visible = captionSession.semanticVisibleErrors &&
+    captionSession.semanticVisibleErrors.get(regionIndex);
+  if (!visible) return null;
+  const covers = !Number.isFinite(visible.start) || !Number.isFinite(visible.end) ||
+    (group >= visible.start && group <= visible.end);
+  return covers ? visible : null;
 }
 
 function cacheAiDisplayNeighborhood(changedMembers, logPages) {
@@ -252,9 +282,7 @@ function repaintActiveAiTranslation() {
     ? captionSession.transCache.get(groupKey(captionSession.activeGroupIdx)) : "";
   if (!activeTranslation || captionSession.activeCueIdx < 0 || !captionSession.cueList) {
     if (captionSession.activeGroupIdx >= 0 && captionSession.activeCueIdx >= 0 && captionSession.cueList) {
-      const regionIndex = captionSession.semanticGroupToCommitRegion[captionSession.activeGroupIdx];
-      const displayError = captionSession.semanticExhaustedRegions.get(regionIndex) ||
-        captionSession.semanticVisibleErrors && captionSession.semanticVisibleErrors.get(regionIndex);
+      const displayError = aiDisplayErrorFor(captionSession.activeGroupIdx);
       if (displayError) {
         clearPendingTimer();
         const source = sourceForDisplayedCue(captionSession.activeCueIdx, captionSession.cueList[captionSession.activeCueIdx]);

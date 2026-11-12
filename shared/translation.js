@@ -11,8 +11,20 @@
     return String(value || "").replace(/>>/g, "").replace(/。/g, " ").replace(/\s+/g, " ").trim();
   }
 
-  function endsWithChineseFullStop(value) {
-    return /。(?:\s|>>)*$/.test(String(value || ""));
+  // A translation that ends a sentence with a full stop: the CJK "。", or a
+  // Latin-script period after a lowercase word ("... today."). An initial or
+  // abbreviation ("U.S.", "Dr.") is not taken for a sentence end.
+  function endsWithSentenceStop(value) {
+    return /(?:。|(?<=\p{Ll}{2})\.)["'”’」』）)\]]*(?:\s|>>)*$/u.test(String(value || ""));
+  }
+
+  // Safety ceiling for one semantic unit. YouTube rolling captions overlap and
+  // can make a natural unit look longer than its speech, so it is generous.
+  const AI_UNIT_MAX_DURATION_MS = 45000;
+  const AI_UNIT_MAX_SOURCE_CHARS = 900;
+  function aiUnitOversized(durationMs, sourceChars) {
+    return !Number.isFinite(durationMs) || durationMs > AI_UNIT_MAX_DURATION_MS ||
+      sourceChars > AI_UNIT_MAX_SOURCE_CHARS;
   }
 
   function isSpeakerSwitchMarker(value) {
@@ -196,11 +208,7 @@
       const durationMs = Number(lastItem.endMs) - Number(firstItem.startMs);
       const sourceChars = items.slice(cursor, cursor + ids.length)
         .reduce((sum, item) => sum + String(item && item.text || "").length, 0);
-      // YouTube rolling captions commonly overlap and can make a natural unit
-      // appear longer than its actual spoken content. Keep a generous safety
-      // ceiling while still rejecting genuinely oversized model output.
-      if (ids.length > 1 &&
-          ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
+      if (ids.length > 1 && aiUnitOversized(durationMs, sourceChars)) {
         return reject(`oversized segment ${ids[0]}-${ids[ids.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
       }
       const unitId = `semantic-${ids[0]}-${ids[ids.length - 1]}`;
@@ -297,7 +305,7 @@
   }
 
   function aiJsonlChunkHasSentenceBoundary(chunkValue) {
-    return Array.isArray(chunkValue) && endsWithChineseFullStop(chunkValue[2]);
+    return Array.isArray(chunkValue) && endsWithSentenceStop(chunkValue[2]);
   }
 
   // A chunk that ends one item past a source sentence end took the next
@@ -549,8 +557,7 @@
     // Multiple ordered chunks provide recovery boundaries; keep the ceiling
     // for a monolithic over-merged unit.
     const translatedChunkCount = allChunks.filter((chunk) => chunk && chunk.translation).length;
-    if (allIds.length > 1 && translatedChunkCount <= 1 &&
-        ((!Number.isFinite(durationMs) || durationMs > 45000) || sourceChars > 900)) {
+    if (allIds.length > 1 && translatedChunkCount <= 1 && aiUnitOversized(durationMs, sourceChars)) {
       return reject(`oversized JSONL unit ${allIds[0]}-${allIds[allIds.length - 1]}: ${durationMs}ms, ${sourceChars} chars`);
     }
     // Some models put several complete sentences on one JSONL line. The
@@ -607,7 +614,7 @@
       const end = Array.isArray(chunk) ? compactJsonlCoordinate(chunk[1]) : null;
       if (end == null || end >= state.items.length) break;
       const translation = aiJsonlChunkTranslation(chunk);
-      if (endsWithChineseFullStop(chunk[2]) || chunkClosesSentence(state.items[end], translation)) {
+      if (endsWithSentenceStop(chunk[2]) || chunkClosesSentence(state.items[end], translation)) {
         closed = index + 1;
       }
     }
@@ -780,7 +787,7 @@
         return {
           text: normalizeTranslatedText(raw),
           sentenceBoundaryAfter: !!(value && typeof value === "object" &&
-            value.sentenceBoundaryAfter === true) || endsWithChineseFullStop(raw),
+            value.sentenceBoundaryAfter === true) || endsWithSentenceStop(raw),
           speakerSwitchBefore: !!speakerSwitches[index]
         };
       })
@@ -816,7 +823,8 @@
     aiJsonlChunkMayBeEmpty,
     aiJsonlChunkTranslation,
     containsLegacyAlignmentIds,
-    endsWithChineseFullStop,
+    endsWithSentenceStop,
+    aiUnitOversized,
     hasOwn,
     joinTranslatedParts,
     jsonObjectFromText,

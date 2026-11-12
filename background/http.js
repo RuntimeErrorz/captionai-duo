@@ -843,8 +843,19 @@ async function aiRawCompletion(
 
   const raw = responseText;
   if (!raw) {
-    const err = new Error("AI service returned an empty translation");
-    err.errorCode = "AI_RESPONSE_EMPTY";
+    // An empty answer that ended on the output limit spent the whole budget
+    // before writing anything (a reasoning model thinking). Retrying sends
+    // the same request into the same limit, so it is terminal and says why.
+    // A provider's content filter (safety, recitation of the source text)
+    // that blocked the whole answer blocks the same request again.
+    const finishReason = String(completedAttempt && completedAttempt.finishReason || "").toLowerCase();
+    const exhausted = finishReason === "length";
+    const filtered = /^(?:content_filter|safety|recitation|blocklist|prohibited_content|spii)$/.test(finishReason);
+    const err = new Error(exhausted
+      ? "The model used its whole output limit before writing a translation (finish_reason: length)"
+      : filtered ? `The provider's content filter blocked this passage (finish_reason: ${finishReason})`
+        : "AI service returned an empty translation");
+    err.errorCode = exhausted ? "AI_OUTPUT_EXHAUSTED" : filtered ? "AI_PROVIDER_FILTERED" : "AI_RESPONSE_EMPTY";
     err.httpDiagnostics = { attempts };
     throw err;
   }

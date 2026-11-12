@@ -31,9 +31,9 @@ function parseCurrentRows(body) {
   if (start < 0 || end < 0) throw new Error("fake provider: prompt has no CURRENT_CUES block");
   const rows = JSON.parse(user.slice(start + "CURRENT_CUES:\n".length, end));
   return rows.map((row) => {
-    const match = /^w(\d+)$/.exec(String(row[1]));
+    const match = /^[wW](\d+)\.?$/.exec(String(row[1]));
     if (!match) throw new Error(`fake provider: unexpected row text ${row[1]}`);
-    return { local: Number(row[0]), id: Number(match[1]) };
+    return { local: Number(row[0]), id: Number(match[1]), text: String(row[1]) };
   });
 }
 
@@ -76,10 +76,27 @@ class FakeProvider {
       } else {
         chunks.push([localOf(start), localOf(unitEnd), `T${start}-${unitEnd}`]);
       }
-      lines.push(JSON.stringify(chunks));
+      lines.push(chunks);
       id = unitEnd + 1;
     }
-    return lines;
+    // Real models end 15-17% of chunks one word late, on the next sentence's
+    // opening word, and then start the next line after it (real Gemini and
+    // DeepSeek replays). Tags stay the truth, so a commit that keeps the
+    // overrun fails the alignment invariant.
+    const overrun = Number.isFinite(this.profile.overrun) ? this.profile.overrun : 0.15;
+    for (let i = 0; i + 1 < lines.length; i++) {
+      const last = lines[i][lines[i].length - 1];
+      const next = lines[i + 1][0];
+      const nextUnitEnd = this.truth.unitOf(next[0] + firstId)[1];
+      const crossesHard = this.truth.words[last[1] + firstId].hardAfter;
+      // Only after a word that visibly closes its sentence, as in the wild.
+      const closes = rows[last[1]] && rows[last[1]].text.endsWith(".");
+      if (crossesHard || !closes || nextUnitEnd - (next[0] + firstId) < 1 || next[1] <= next[0] ||
+          !this.random.chance(overrun)) continue;
+      last[1] += 1;
+      next[0] += 1;
+    }
+    return lines.map((chunks) => JSON.stringify(chunks));
   }
 
   async fetch(url, init) {
@@ -113,6 +130,9 @@ class FakeProvider {
     if (profile.overload && r.chance(profile.overload)) {
       return this.errorResponse(503, "UNAVAILABLE", {}, signal).finally(endPhase);
     }
+    // Real models skip a few positions mid-response in about one request in
+    // ten (real replays); "skip" reproduces it alongside the other faults.
+    const skip = r.chance(Number.isFinite(profile.skips) ? profile.skips : 0.1);
     const fault = r.chance(profile.faults) ? r.pick(["hang", "truncate", "malformed", "duplicate",
       "no-marker", "stall", "garbage"]) : "";
     const ttfb = r.int(profile.ttfb[0], profile.ttfb[1]) + Math.round((profile.ttfbPerItemMs || 0) * rows.length);
@@ -124,6 +144,14 @@ class FakeProvider {
     }
 
     let lines = this.linesFor(rows);
+    if (skip && lines.length > 1) {
+      const index = r.int(1, lines.length - 1);
+      const chunks = JSON.parse(lines[index]);
+      if (chunks[0][1] > chunks[0][0]) {
+        chunks[0][0] += 1;
+        lines[index] = JSON.stringify(chunks);
+      }
+    }
     if (fault === "truncate") lines = lines.slice(0, r.int(0, lines.length));
     if (fault === "malformed" && lines.length) lines.splice(r.int(0, lines.length - 1), 0, "[[0,");
     if (fault === "duplicate" && lines.length) lines.splice(r.int(0, lines.length - 1), 0, lines[0]);
