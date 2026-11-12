@@ -50,27 +50,49 @@ function revokeAiRequestKeys(predicate) {
   }
 }
 
-const AI_STALE_PREFETCH_GRACE_MS = 2500;
-// A writer is "lagging" only after a provider-scale wait: a slow or rate-
-// limited provider may need ~8 s before its first byte, and replacing it then
-// costs another request. One threshold for every provider and speed.
-// Simulated: 8 s and 20 s were both worse than 14 s, and slow (thinking)
-// providers did not change between 14 s and 28 s, so the grace is not
-// adapted to measured first bytes. The lag threshold as seconds of speech
-// (10-30 s) also made no measurable difference.
-const AI_PLAYBACK_STARTUP_GRACE_MS = 14000;
-const AI_PLAYBACK_PROGRESS_GRACE_MS = 4000;
-const AI_PLAYBACK_LAG_ITEMS = 48;
+// Provider latency as this page measures it (request start -> first committed
+// progress, committed items per second), kept across videos for one
+// endpoint and model. Every "is this writer stuck / too slow" decision below
+// is a predicted-time comparison in YTDS_SHARED.schedule*; there are no
+// per-provider, per-speed or per-item thresholds.
+function aiLatencyStats() {
+  const key = `${settings.aiBaseUrl || ""}|${settings.aiModel || ""}`;
+  if (!captionSession.semanticLatency || captionSession.semanticLatency.key !== key) {
+    captionSession.semanticLatency = YTDS_SHARED.scheduleLatencyCreate(key);
+  }
+  return captionSession.semanticLatency;
+}
+function aiLatencyEstimate() {
+  return YTDS_SHARED.scheduleLatencyEstimate(aiLatencyStats());
+}
+// The one place a writer's committed progress is recorded. Only progress
+// streamed from the provider measures its latency: a response cache hit or
+// an adopted finished prefetch arrives at once and says nothing about it.
+function noteAiRequestProgress(request, nextCursor, streamed) {
+  const now = Date.now();
+  if (streamed) {
+    const stats = aiLatencyStats();
+    if (!(Number(request.firstProgressAt) > 0)) {
+      request.firstProgressAt = now;
+      request.firstProgressCursor = Number(request.progressCursor);
+      YTDS_SHARED.scheduleLatencyNote(stats, { firstMs: now - Number(request.startedAt) });
+    } else {
+      YTDS_SHARED.scheduleLatencyNote(stats, { id: request.requestId,
+        items: nextCursor - Number(request.firstProgressCursor), ms: now - Number(request.firstProgressAt) });
+    }
+  }
+  request.lastProgressAt = now;
+  request.progressCursor = nextCursor;
+}
 
 function aiRequestHasProgress(request) {
   if (!request) return false;
   const requestStart = Number(request.requestStart);
   const progressCursor = Number(request.progressCursor);
-  const lastProgressAt = Number(request.lastProgressAt);
   if (!Number.isInteger(requestStart) || !Number.isInteger(progressCursor) ||
-      progressCursor <= requestStart || !Number.isFinite(lastProgressAt) ||
-      lastProgressAt <= 0) return false;
-  return Date.now() - lastProgressAt < AI_STALE_PREFETCH_GRACE_MS;
+      progressCursor <= requestStart) return false;
+  return YTDS_SHARED.scheduleProgressFresh({ now: Date.now(), lastProgressAt: request.lastProgressAt,
+    estimate: aiLatencyEstimate() });
 }
 function aiRequestHasBufferedProgress(request) {
   if (!request || !request.prefetch || !Array.isArray(request.progressTranslations)) return false;
@@ -81,33 +103,28 @@ function aiRequestHasBufferedProgress(request) {
 function aiRequestIsStaleForTarget(request, targetGroup) {
   if (!request || request.urgent || aiRequestHasProgress(request) ||
       (request.prefetch && aiRequestHasBufferedProgress(request))) return false;
+  // Playback has passed its whole range: it keeps its slot only while its
+  // first progress is still expected (the provider's usual wait).
   const target = Number(targetGroup);
   const requestEnd = Number(request.requestEnd);
-  const startedAt = Number(request.startedAt);
   return Number.isInteger(target) && Number.isInteger(requestEnd) && target > requestEnd &&
-    Number.isFinite(startedAt) && Date.now() - startedAt >= AI_STALE_PREFETCH_GRACE_MS;
+    YTDS_SHARED.scheduleFirstOverdue({ now: Date.now(), startedAt: request.startedAt,
+      estimate: aiLatencyEstimate(), expectedOnly: true });
 }
+// The visible writer is replaced only when it is stuck (see shared/schedule.js).
 function aiRequestIsPlaybackLagging(request, state, targetGroup) {
   if (!request || !request.urgent || !state || typeof getVideo !== "function") return false;
   if (typeof captionSession === "object" && captionSession && captionSession.transCache &&
       typeof groupKey === "function" && captionSession.transCache.has(groupKey(targetGroup))) {
     return false;
   }
-  const lagThreshold = AI_PLAYBACK_LAG_ITEMS;
   const target = Number(targetGroup);
-  const cursor = Number(state.cursor);
-  const requestStart = Number(request.requestStart);
-  const progressCursor = Number(request.progressCursor);
-  const startedAt = Number(request.startedAt);
-  const lastProgressAt = Number(request.lastProgressAt);
-  const hasStreamProgress = Number.isInteger(requestStart) &&
-    Number.isInteger(progressCursor) && progressCursor > requestStart &&
-    Number.isFinite(lastProgressAt) && lastProgressAt > startedAt;
-  const referenceAt = hasStreamProgress ? lastProgressAt : startedAt;
-  const graceMs = hasStreamProgress ? AI_PLAYBACK_PROGRESS_GRACE_MS : AI_PLAYBACK_STARTUP_GRACE_MS;
-  return Number.isInteger(target) && Number.isInteger(cursor) &&
-    target - cursor >= lagThreshold && Number.isFinite(referenceAt) &&
-    Date.now() - referenceAt >= graceMs;
+  if (!Number.isInteger(target) || !Number.isInteger(Number(state.cursor)) || target <= Number(state.cursor)) return false;
+  return YTDS_SHARED.scheduleWriterStuck({
+    now: Date.now(), requestStart: Number(request.requestStart),
+    progressCursor: Number(request.progressCursor), startedAt: request.startedAt,
+    lastProgressAt: request.lastProgressAt, estimate: aiLatencyEstimate()
+  });
 }
 function aiSeekBacktrackItems() {
   const base = Math.max(0, Math.floor(Number(AI_SEEK_BACKTRACK_ITEMS) || 0));
@@ -216,7 +233,7 @@ function cancelAiRegionRequests(regionIndex, preserveFromValue) {
     });
     releaseAiRequestOwner(key);
   }
-  const state = typeof aiCommitState === "function" ? aiCommitState(wanted) : null;
+  const state = typeof semanticCommitState === "function" ? semanticCommitState(wanted) : null;
   if (state) { aiPrefetchState(state);
     if (preserveFrom < 0) {
       state.prefetchQueue.length = 0; state.prefetchQueued.clear(); state.prefetchResponses.clear();
@@ -281,8 +298,8 @@ function cancelAiStaleSpeculativeRequests(regionIndex, targetGroup) {
     if (!request || !request.prefetch || request.regionIndex !== wanted) continue;
     cancel(key, request);
   }
-  const state = typeof aiCommitState === "function"
-    ? aiCommitState(wanted) : null;
+  const state = typeof semanticCommitState === "function"
+    ? semanticCommitState(wanted) : null;
   if (state) {
     aiPrefetchState(state);
     for (const [start, stored] of Array.from(state.prefetchResponses.entries())) {
@@ -291,67 +308,7 @@ function cancelAiStaleSpeculativeRequests(regionIndex, targetGroup) {
         state.prefetchResponses.delete(start);
       }
     }
-    pumpAiSpeculativeRequests(wanted, state);
   }
-}
-function aiActiveSpeculativeRequestCount() {
-  return Array.from(captionSession.semanticRequestMeta.values())
-    .filter((request) => request && request.prefetch).length;
-}
-function clearAiSpeculativeBackoff(reasonFilter) {
-  if (reasonFilter && captionSession.semanticSpeculativeBackoffReason !== reasonFilter) return;
-  captionSession.semanticSpeculativeBackoffUntil = 0;
-  captionSession.semanticSpeculativeBackoffReason = "";
-  if (captionSession.semanticSpeculativeResumeTimer) {
-    clearTimeout(captionSession.semanticSpeculativeResumeTimer);
-    captionSession.semanticSpeculativeResumeTimer = null;
-  }
-}
-function scheduleAiSpeculativeResume() {
-  const until = Number(captionSession.semanticSpeculativeBackoffUntil);
-  if (!Number.isFinite(until) || until <= Date.now() ||
-      captionSession.semanticSpeculativeResumeTimer) return;
-  const delay = Math.max(1, Math.min(60000, until - Date.now()));
-  captionSession.semanticSpeculativeResumeTimer = setTimeout(() => {
-    captionSession.semanticSpeculativeResumeTimer = null;
-    if (Date.now() < Number(captionSession.semanticSpeculativeBackoffUntil)) {
-      scheduleAiSpeculativeResume();
-      return;
-    }
-    if (captionSession.semanticSpeculativeBackoffReason === "local-concurrency" &&
-        captionSession.semanticRequestMeta.size > 0) return;
-    clearAiSpeculativeBackoff();
-    for (const [regionIndex, state] of captionSession.semanticCommitStateByRegion.entries()) {
-      pumpAiSpeculativeRequests(regionIndex, state);
-    }
-  }, delay);
-}
-function aiSpeculativeBackoffActive() {
-  const until = Number(captionSession.semanticSpeculativeBackoffUntil);
-  if (!Number.isFinite(until) || until <= Date.now()) {
-    clearAiSpeculativeBackoff();
-    return false;
-  }
-  scheduleAiSpeculativeResume();
-  return true;
-}
-function noteAiSpeculativeRateLimit(response, runtimeError) {
-  const responseLimited = !!(response && response.rateLimited);
-  const errorLimited = !!(runtimeError && runtimeError.rateLimited);
-  if (!responseLimited && !errorLimited) return false;
-  const reason = String(response && response.limitReason ||
-    runtimeError && runtimeError.limitReason || "");
-  captionSession.semanticSpeculativeBackoffReason = reason;
-  const retryAfter = Number(response && response.retryAfterMs) ||
-    Number(runtimeError && runtimeError.retryAfterMs) || 1500;
-  const delay = Math.max(500, Math.min(10000, retryAfter));
-  const until = Date.now() + delay;
-  captionSession.semanticSpeculativeBackoffUntil = Math.max(
-    Number(captionSession.semanticSpeculativeBackoffUntil) || 0, until
-  );
-  scheduleAiSpeculativeResume();
-  emitDebug("semantic-speculative-backoff", { delayMs: delay, reason });
-  return true;
 }
 // Ranges a region already has a writer for: live requests and finished
 // speculative responses waiting for the cursor. Both are paid for, so a new
@@ -361,61 +318,13 @@ function aiCoveredRequestRanges(regionIndex) {
   for (const request of captionSession.semanticRequestMeta.values()) {
     if (request && request.regionIndex === regionIndex) ranges.push(request);
   }
-  const state = typeof aiCommitState === "function" ? aiCommitState(regionIndex) : null;
+  const state = typeof semanticCommitState === "function" ? semanticCommitState(regionIndex) : null;
   if (state && state.prefetchResponses) {
     for (const stored of state.prefetchResponses.values()) {
       if (stored && stored.request) ranges.push(stored.request);
     }
   }
   return ranges;
-}
-function aiSpeculativeRangeOverlaps(regionIndex, start, end) {
-  return aiCoveredRequestRanges(regionIndex).some((request) =>
-    request.requestStart <= end && request.requestEnd >= start
-  );
-}
-function aiSpeculativeStartAfterActive(regionIndex, startValue) {
-  let start = Math.floor(Number(startValue));
-  if (!Number.isInteger(start)) return start;
-  const ranges = aiCoveredRequestRanges(regionIndex);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const request of ranges) {
-      if (request.requestStart > start || request.requestEnd < start) continue;
-      const next = Number(request.requestEnd) + 1;
-      if (next > start) { start = next; changed = true; }
-    }
-  }
-  return start;
-}
-function queueAiSpeculativeRequest(regionIndex, startValue) {
-  const start = Math.floor(Number(startValue));
-  const state = typeof aiCommitState === "function"
-    ? aiCommitState(regionIndex) : null;
-  if (!state || !Number.isInteger(start) || start <= state.cursor || start > state.limitEnd) return;
-  aiPrefetchState(state);
-  if (state.prefetchQueued.has(start) || state.prefetchResponses.has(start) || Array.from(captionSession.semanticRequestMeta.values()).some((request) => request && request.regionIndex === regionIndex && Number(request.requestStart) === start)) return;
-  state.prefetchQueued.add(start);
-  state.prefetchQueue.push(start);
-  pumpAiSpeculativeRequests(regionIndex, state);
-}
-function pumpAiSpeculativeRequests(regionIndex, stateValue) {
-  const state = aiPrefetchState(stateValue);
-  if (!state || aiSpeculativeBackoffActive()) return;
-  while (state.prefetchQueue.length &&
-      aiActiveSpeculativeRequestCount() < aiMaxSpeculativeRequests()) {
-    let start = state.prefetchQueue.shift();
-    state.prefetchQueued.delete(start);
-    if (!Number.isInteger(start) || start <= state.cursor || start > state.limitEnd ||
-        state.prefetchResponses.has(start)) continue;
-    start = aiSpeculativeStartAfterActive(regionIndex, start);
-    if (start <= state.cursor || start > state.limitEnd) continue;
-    const itemCount = aiSteadyRequestItems();
-    const end = Math.min(state.limitEnd, start + Math.max(1, itemCount) - 1);
-    if (aiSpeculativeRangeOverlaps(regionIndex, start, end)) continue;
-    if (!launchAiSpeculativeRequest(regionIndex, state, start, end)) continue;
-  }
 }
 function takeAiPrefetchedResponse(stateValue) {
   const state = aiPrefetchState(stateValue);
@@ -481,86 +390,8 @@ function storeAiPrefetchCandidate(stateValue, request, response) {
   state.prefetchResponses.set(candidate.start, candidate);
   return candidate;
 }
-function aiNextFuturePrefetchStart(regionIndex, stateValue, cursorValue) {
-  const state = aiPrefetchState(stateValue);
-  const cursor = Math.floor(Number(cursorValue));
-  if (!state || !Number.isInteger(cursor)) return -1;
-  let next = Number.POSITIVE_INFINITY;
-  for (const start of state.prefetchResponses.keys()) {
-    const value = Math.floor(Number(start));
-    if (Number.isInteger(value) && value > cursor) next = Math.min(next, value);
-  }
-  for (const request of captionSession.semanticRequestMeta.values()) {
-    const value = Math.floor(Number(request && request.requestStart));
-    if (request && request.prefetch && request.regionIndex === regionIndex &&
-        Number.isInteger(value) && value > cursor) next = Math.min(next, value);
-  }
-  return Number.isFinite(next) ? next : -1;
-}
-function semanticBridgeRequestItems(requestStartValue, futureStartValue, maxValue, limitEndValue) {
-  const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
-    ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
-  const minRunwayItems = typeof SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS !== "undefined"
-    ? SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS : AI_MIN_COMMIT_RUNWAY_ITEMS;
-  return YTDS_SHARED.semanticBridgeRequestItems(
-    requestStartValue, futureStartValue, maxValue, limitEndValue, guardItems, minRunwayItems
-  );
-}
-const aiBridgeRequestItems = semanticBridgeRequestItems;
 
 
-function launchAiSpeculativeRequest(regionIndex, state, startValue, endValue) {
-  const start = Math.floor(Number(startValue));
-  let requestEnd = Math.min(state.limitEnd, Math.floor(Number(endValue)));
-  if (!Number.isInteger(start) || !Number.isInteger(requestEnd) || requestEnd < start) return false;
-  const inflightKey = `dsp:${regionIndex}:${start}`;
-  if (captionSession.semanticRequestMeta.has(inflightKey)) return false;
-  const items = [];
-  let currentChars = 0;
-  for (let id = start; id <= requestEnd; id++) {
-    const entry = aiBatchEntry(id, false);
-    const nextChars = String(entry.text || "").length;
-    if (items.length && currentChars + nextChars > AI_MAX_CURRENT_CHARS) break;
-    items.push(entry);
-    currentChars += nextChars;
-  }
-  if (!items.length) return false;
-  requestEnd = start + items.length - 1;
-  const requestId = beginAiRequest(inflightKey, "prefetch", start, requestEnd, false);
-  if (!requestId) return false;
-  const requestSessionToken = captureCaptionSession();
-  const request = captionSession.semanticRequestMeta.get(inflightKey);
-  const { contextBefore, contextAfter } = aiContextsForRange(start, requestEnd);
-  const requestMeta = {
-    prefetch: true, regionIndex, requestStart: start, requestEnd,
-    commitFloor: state.commitFloor, limitEnd: state.limitEnd,
-    effectiveGuardItems: YTDS_SHARED.semanticEffectiveGuardItems(items.length, AI_COMMIT_GUARD_ITEMS),
-    reqVid: captionSession.cueVideoId, reqEpoch: captionSession.cueEpoch,
-    sessionToken: requestSessionToken, focusGeneration: captionSession.semanticFocusGeneration,
-    fastPath: true, itemCount: items.length, targetAwareItems: items.length,
-    maxRequestItems: aiMaxRequestItems()
-  };
-  if (request && request.requestId === requestId) Object.assign(request, requestMeta);
-  const batchIndex = captionSession.semanticGroupToBatch[start];
-  const batch = captionSession.semanticBatchWindows[batchIndex];
-  sendRuntimeMessage({
-    type: "translateBatch", maxConcurrency: aiMaxConcurrency(),
-    commitGuardLocal: typeof aiCommitGuardLocal === "function"
-      ? aiCommitGuardLocal(start, requestEnd, state.limitEnd, requestMeta.effectiveGuardItems) : -1,
-    debug: !!settings.debugEnabled, requestId,
-    videoId: captionSession.cueVideoId,
-    videoTimeMs: Math.round(((getVideo() && getVideo().currentTime) || 0) * 1000),
-    targetLang: settings.targetLang, sourceLang: captionSession.cueSourceLang,
-    coreStart: start, coreEnd: Math.min(requestEnd, batch ? batch.end : requestEnd),
-    requestStart: start, requestEnd, bypassCache: false, urgent: false,
-    focusGeneration: captionSession.semanticFocusGeneration, fastPath: true, items,
-    contextBefore, contextAfter
-  }, (resp, runtimeError) => {
-    const finished = finishAiRequest(inflightKey, requestId);
-    if (finished) handleAiBatchResult(finished, resp, runtimeError);
-  });
-  return true;
-}
 // Live commit requests whose range contains `group`, keyed by inflight key.
 // Live commit writers the scheduler would send again right after a seek to
 // `group`: the writer whose range covers the target, and every lookahead lane

@@ -389,7 +389,7 @@ async function runSeed(seed, options = {}) {
   world = new World({
     seed,
     sync: settings,
-    local: { aiApiKeys: { [shared.aiCredentialScope(settings.aiBaseUrl)]: secret } },
+    local: { aiApiKeys: { [shared.aiCredentialScope(settings.aiBaseUrl)]: secret }, ...(options.local || {}) },
     fetch: (url, init) => provider.fetch(url, init),
     onEvent: (event) => {
       if (options.record) options.record.push(`${event.t} ${event.kind} ${JSON.stringify(event.message || event.request || "").slice(0, 160)}`);
@@ -436,6 +436,7 @@ async function runSeed(seed, options = {}) {
       ctx.syncPlayerToggle = () => {};
       ctx.semanticDisplayWidth = () => 1100;
       ctx.emitDebug = ((original) => (event, data) => {
+        if (options.onDebug) options.onDebug(event, data, world.clock.now);
         debugTail.push({ t: world.clock.now, event, data: JSON.stringify(data || {}).slice(0, 300) });
         if (debugTail.length > 200) debugTail.shift();
         return original(event, data);
@@ -534,7 +535,11 @@ async function runSeed(seed, options = {}) {
     if (!(error instanceof Violation)) throw error;
     return { ok: false, seed, profile, invariant: error.invariant, detail: error.detail,
       at: world.clock.now, trace: trace.slice(-12), paints: checker.paints.slice(-8),
-      debug: debugTail.slice(-40) };
+      debug: debugTail.slice(-40),
+      // A real-provider replay still reports what it committed up to the
+      // violation, so the run can be inspected and judged.
+      ...(options.collect ? { metrics: checker.metrics, providerRequests: provider.requests,
+        provider429: provider.rejected429, ...(await collectRun(context, world)) } : {}) };
   }
 }
 

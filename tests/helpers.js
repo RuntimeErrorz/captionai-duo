@@ -9,6 +9,7 @@ const SHARED_FILES = Object.freeze([
   "shared/core.js",
   "shared/diagnostics.js",
   "shared/cues.js",
+  "shared/schedule.js",
   "shared/jsonl.js",
   "shared/translation.js",
   "shared/alignment.js",

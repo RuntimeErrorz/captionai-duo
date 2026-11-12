@@ -300,21 +300,27 @@
     return Array.isArray(chunkValue) && endsWithChineseFullStop(chunkValue[2]);
   }
 
+  // A chunk that ends one item past a source sentence end took the next
+  // sentence's opening word. Real Gemini replays: 15-17% of chunks do this,
+  // and leaving it uncorrected dropped the judged segmentation score from
+  // 4.98 to 4.18. The test is the shape of the source, not a word list: the
+  // previous item closes a sentence and the item itself opens a capitalized
+  // word that does not close one. An abbreviation-shaped token (a capital
+  // and at most two more letters before the period, like a title, or an
+  // initials chain) is not a sentence end; a short lowercase word ("is.",
+  // "it.") is.
+  const SENTENCE_CLOSE = /[.!?…。！？]["'”’」』》】)）\]]*$/u;
   function aiJsonlIsSentenceBoundaryOverrun(itemsValue, endValue) {
     const items = Array.isArray(itemsValue) ? itemsValue : [];
     const end = compactJsonlCoordinate(endValue);
     if (end == null || end <= 0 || end >= items.length) return false;
-    const prev = items[end - 1];
-    const curr = items[end];
-    const prevText = String(prev && prev.text || "").trim();
-    const currText = String(curr && curr.text || "").trim();
+    const prevText = String(items[end - 1] && items[end - 1].text || "").trim();
+    const currText = String(items[end] && items[end].text || "").trim();
     if (!prevText || !currText || /\.{2,}|…/.test(prevText)) return false;
-    if (!/[.!?…。！？]["'”’」』》】)）\]]*$/u.test(prevText)) return false;
-    if (/^(?:dr|mr|mrs|ms|prof|sr|jr|vs|etc|e\.g|i\.e)\.?$/i.test(prevText) ||
-        /(?:\p{L}\.){2,}/u.test(prevText)) return false;
-    if (/\s/u.test(currText) || !/^\p{Lu}/u.test(currText)) return false;
-    if (/[.!?…。！？]["'”’」』》】)）\]]*$/u.test(currText)) return false;
-    return true;
+    if (!SENTENCE_CLOSE.test(prevText)) return false;
+    if (/^\p{Lu}\p{Ll}{0,2}\.$/u.test(prevText) || /(?:\p{L}\.){2,}/u.test(prevText)) return false;
+    if (/\s/u.test(currText) || !/^["'“‘(]?\p{Lu}/u.test(currText)) return false;
+    return !SENTENCE_CLOSE.test(currText);
   }
 
   function aiJsonlAdjustUnitChunks(stateValue, chunksValue) {
@@ -348,27 +354,27 @@
       if (chunk[0] === null) chunk[0] = impliedStart;
       impliedStart = end + 1;
     }
-    let trimmedCount = 0;
-    if (state.pendingTrimmedCount > 0 &&
+    // The previous unit's overrun word was trimmed: the next unit, which
+    // the model started after that word, starts at it instead.
+    if (state.pendingTrimmedCount > 0 && Array.isArray(chunks[0]) &&
         compactJsonlCoordinate(chunks[0][0]) === chunkBaseOffset + state.pendingTrimmedCount) {
       chunks[0][0] = chunkBaseOffset;
     }
+    let trimmedCount = 0;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       if (!Array.isArray(chunk) || chunk.length < 2) continue;
       const start = compactJsonlCoordinate(chunk[0]);
       const end = compactJsonlCoordinate(chunk[1]);
-      if (start != null && end != null && end > start &&
-          aiJsonlIsSentenceBoundaryOverrun(state.items, end)) {
-        chunk[1] = end - 1;
-        if (i + 1 < chunks.length) {
-          if (Array.isArray(chunks[i + 1]) &&
-              compactJsonlCoordinate(chunks[i + 1][0]) === end + 1) {
-            chunks[i + 1][0] = end;
-          }
-        } else {
-          trimmedCount = 1;
+      if (start == null || end == null || end <= start ||
+          !aiJsonlIsSentenceBoundaryOverrun(state.items, end)) continue;
+      chunk[1] = end - 1;
+      if (i + 1 < chunks.length) {
+        if (Array.isArray(chunks[i + 1]) && compactJsonlCoordinate(chunks[i + 1][0]) === end + 1) {
+          chunks[i + 1][0] = end;
         }
+      } else {
+        trimmedCount = 1;
       }
     }
     return { chunks, trimmedCount };
@@ -411,11 +417,19 @@
     return aiJsonlRangeIds(stateValue, chunk[0], chunk[1], offset);
   }
 
-  // Clause punctuation opening a translation belongs to the clause before it.
+  // A translation that opens with clause punctuation right after a source
+  // sentence ended continues text that belongs to that sentence: the model's
+  // positions drifted. After a source clause ("To me," -> "对我来说" /
+  // "，这有点烦人。") the comma only moved across the chunk edge, which is
+  // harmless (real Gemini replay), so it is not a misalignment.
   const CONTINUATION_START = /^\s*[，,、；;：:]/u;
-  function aiJsonlChunkContinuesPrevious(chunkValue) {
-    return Array.isArray(chunkValue) && typeof chunkValue[2] === "string" &&
-      CONTINUATION_START.test(chunkValue[2]);
+  const SOURCE_SENTENCE_CLOSE = /[.?!…。！？](?:["'”’」』)\]]*)$/u;
+  function aiJsonlChunkContinuesPrevious(chunkValue, itemsValue, offsetValue) {
+    if (!Array.isArray(chunkValue) || typeof chunkValue[2] !== "string" ||
+        !CONTINUATION_START.test(chunkValue[2])) return false;
+    const items = Array.isArray(itemsValue) ? itemsValue : [];
+    const previous = items[Math.floor(Number(offsetValue)) - 1];
+    return SOURCE_SENTENCE_CLOSE.test(String(previous && previous.text || "").trim());
   }
 
   function aiJsonlChunkStartOffset(chunkValue) {
@@ -476,7 +490,7 @@
           chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
         }
       }
-      if (!chunkResult.error && chunkOffset > 0 && aiJsonlChunkContinuesPrevious(effectiveChunk)) {
+      if (!chunkResult.error && chunkOffset > 0 && aiJsonlChunkContinuesPrevious(effectiveChunk, state.items, chunkOffset)) {
         return reject(`JSONL chunk at offset ${chunkOffset} continues the previous chunk`);
       }
       const chunkIds = chunkResult.ids;
@@ -559,8 +573,8 @@
     }
     state.translations.push(...translations);
     state.cursor = chunkBaseOffset + ids.length;
-    state.pendingTrimmedCount = trimmedCount;
     state.pendingMarkerChunks = [];
+    state.pendingTrimmedCount = trimmedCount;
     return {
       ok: true, type: "unit", unitId: translations[0].unitId, ids: allIds, translations,
       unitCount: new Set(translations.map((item) => item.unitId)).size
@@ -651,7 +665,7 @@
       // it, shows the model lost count: the previous chunk's translation does
       // not match its range either, so the safe prefix ends before it.
       const start = aiJsonlChunkStartOffset(chunk);
-      if ((start >= 0 && start < offset) || (offset > 0 && aiJsonlChunkContinuesPrevious(chunk))) {
+      if ((start >= 0 && start < offset) || (offset > 0 && aiJsonlChunkContinuesPrevious(chunk, state.items, offset))) {
         while (chunks.length && !chunks[chunks.length - 1][2]) chunks.pop();
         chunks.pop();
         stopped = true;
@@ -717,7 +731,7 @@
     const firstStart = aiJsonlChunkStartOffset(firstChunk);
     // A record that starts inside the last unit, or continues its text, makes
     // that unit suspect; it is still provisional, so take it back.
-    const continues = firstStart === state.cursor && aiJsonlChunkContinuesPrevious(firstChunk);
+    const continues = firstStart === state.cursor && aiJsonlChunkContinuesPrevious(firstChunk, state.items, state.cursor);
     const overlapStart = continues ? state.cursor - 1 : firstStart;
     if (overlapStart < 0 || overlapStart >= state.cursor) return null;
 

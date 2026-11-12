@@ -23,7 +23,7 @@ test("one session reset revokes every old callback and clears semantic owners", 
     videoIdFromLocation: () => "video",
     extensionContextAlive: () => true,
     sendRuntimeMessage: (message) => messages.push(message),
-    resetAiCommitTimeline: () => calls.push("reset-timeline"),
+    resetSemanticCommitTimeline: () => calls.push("reset-timeline"),
     clearAiSeekSettle: () => calls.push("clear-seek"),
     clearPendingTimer: () => calls.push("clear-pending")
   };

@@ -48,8 +48,13 @@ in `manifest.json` in order, and the service worker loads its modules through
   direct assignment in `content/`, and the simulator checks
   `commitStateViolations` for every lane at every step.
 - **RPM is a window budget.** At most RPM requests start in any 63 s window
-  (60 s plus 5%), with 250 ms between starts; speculative requests stop at
-  RPM minus a fifth, which stays reserved for visible ones.
+  (60 s plus 5%), with 250 ms between starts. Visible requests go first in
+  the queue; a separate reserve for them was measured (8-60 RPM) and changed
+  nothing, so there is none.
+- **Prefetch runs only from lane cursors.** Lookahead advances each region's
+  commit lane from its cursor; there are no mid-sentence speculative windows
+  and no bridge windows sized to reach them (simulated: removing both cut
+  requests 1-2% and stall 0.4-2.4%).
 - **Blocks start at sentences.** A recovered alignment chunk carries its
   sentence start, so a committed block never opens mid-sentence.
 
@@ -59,6 +64,24 @@ in `manifest.json` in order, and the service worker loads its modules through
   previous chunk) and accepts closed sentences while their line is still
   streaming. End-only prompting was benchmarked and showed no significant
   difference, so the prompt stays provider-independent.
+- **Stuck is measured, not timed.** `YTDS_SHARED.schedule*` (shared/schedule.js)
+  decides when a writer is stuck from the provider's measured latency per
+  endpoint and model: first streamed progress and committed items per
+  second, sampled only from streamed progress (a cache hit or adopted
+  prefetch arrives at once). A writer is replaced only when stuck; distance
+  behind playback alone never restarts it, since a restart pays a fresh
+  first byte. The background's whole-request deadline follows the same rule
+  over complete responses.
+- **Pauses are relative to the video.** `semanticPauseThresholds` raises the
+  900 ms / 4000 ms soft and hard floors for a video whose routine pauses are
+  long, so a slow speaker's ordinary pauses never become hard boundaries.
+- **A one-word sentence overrun is trimmed by shape.** Models often end a
+  chunk on the next sentence's opening word (15-17% of chunks in real Gemini
+  replays; uncorrected, the judged segmentation fell from 4.98 to 4.18). The
+  parser moves that word to the next unit when the item before it closes a
+  sentence and it opens a capitalized word, unless the closing token is
+  abbreviation-shaped (a capital plus at most two letters, or initials). No
+  word list is used.
 - **Chunks tile exactly; a lost count is never healed.** A chunk that starts
   inside the previous one, or whose translation opens with clause
   punctuation (`，`, `、`, `;`, ...), shows the model's positions drifted from

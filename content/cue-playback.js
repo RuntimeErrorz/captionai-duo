@@ -409,22 +409,9 @@ function prefetchAiBatches(gIdx, includeCurrent, currentUrgent = false) {
   if (!captionSession.sentGroups || !captionSession.semanticBatchWindows.length) return;
   if (!Number.isInteger(gIdx) || gIdx < 0 || gIdx >= captionSession.sentGroups.length) return;
   if (includeCurrent) aiRequestBatch(gIdx, true, !!currentUrgent);
-  // Commit lanes run ahead from their cursors; fixed batch-start windows
-  // remain only as the fallback when lookahead is disabled.
-  if (typeof aiLookaheadItems === "function" && aiLookaheadItems() > 0) {
-    advanceAiLookahead(gIdx);
-    return;
-  }
-  const groupToRegion = captionSession.semanticGroupToCommitRegion;
-  const currentRegion = groupToRegion ? groupToRegion[gIdx] : undefined;
-  const starts = YTDS_SHARED.semanticPrefetchBatchStarts(
-    gIdx, captionSession.semanticGroupToBatch, captionSession.semanticBatchWindows,
-    aiPrefetchBatchCount()
-  );
-  for (const start of starts) {
-    if (groupToRegion && currentRegion !== undefined && groupToRegion[start] !== currentRegion) continue;
-    aiRequestBatch(start);
-  }
+  // Commit lanes run ahead from their cursors (lookahead is never below
+  // round(rate + 1) batches).
+  advanceAiLookahead(gIdx);
 }
 
 function prefetchAiAtTime(timeMs) {

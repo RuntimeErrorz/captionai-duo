@@ -16,7 +16,6 @@ function resetSemanticCommitTimeline() {
   if (stateByRegion) stateByRegion.clear();
   else captionSession.semanticCommitStateByRegion = new Map();
 }
-const resetAiCommitTimeline = resetSemanticCommitTimeline;
 
 function buildSemanticCommitRegions() {
   resetSemanticCommitTimeline();
@@ -34,7 +33,6 @@ function buildSemanticCommitRegions() {
     start = end + 1;
   }
 }
-const buildAiCommitRegions = buildSemanticCommitRegions;
 // Preserve the player's cue timeline while exposing addressable lexical
 // references. DeepSeek alone chooses semantic groups; local scopes only
 // control preloading distance and pending-indicator stability.
@@ -55,9 +53,10 @@ function buildHybridCueGroups(list) {
   captionSession.cueToGroup = captionSession.cueToGroups.map((groups) => groups.length ? groups[0] : -1);
   captionSession.semanticBatchWindows = YTDS_SHARED.referenceBatchWindows(
     list, atoms, 0, 0, true,
-    { coreItems: AI_CORE_ITEMS, requestItems: AI_CORE_ITEMS }
+    { coreItems: SEMANTIC_CORE_ITEMS, requestItems: SEMANTIC_CORE_ITEMS }
   );
   captionSession.semanticGroupToBatch = new Array(captionSession.sentGroups.length);
+  const pauses = new Array(captionSession.sentGroups.length);
   for (let batchIndex = 0; batchIndex < captionSession.semanticBatchWindows.length; batchIndex++) {
     const batch = captionSession.semanticBatchWindows[batchIndex];
     for (let i = batch.start; i <= batch.end; i++) {
@@ -73,21 +72,26 @@ function buildHybridCueGroups(list) {
       // exception: the final timed atom has no following word onset, but a
       // hard-sized hole is still an unambiguous semantic/display boundary.
       const hardRawCuePauseMs = Number.isFinite(rawCuePauseMs) &&
-        rawCuePauseMs >= AI_HARD_PAUSE_MS ? rawCuePauseMs : 0;
-      const pauseAfterMs = atom.timed === true
+        rawCuePauseMs >= SEMANTIC_HARD_PAUSE_MS ? rawCuePauseMs : 0;
+      pauses[i] = atom.timed === true
         ? Math.max(timingPauseMs, hardRawCuePauseMs)
         : crossesCue ? rawCuePauseMs : 0;
-      const pauseKind = YTDS_SHARED.semanticPauseKind(
-        pauseAfterMs, AI_SOFT_PAUSE_MS, AI_HARD_PAUSE_MS
-      );
-      captionSession.sentGroups[i].pauseAfterMs = Number.isFinite(pauseAfterMs)
-        ? Math.round(pauseAfterMs) : AI_HARD_PAUSE_MS;
-      captionSession.sentGroups[i].softAfter = pauseKind !== "none";
-      captionSession.sentGroups[i].hardAfter = i >= captionSession.sentGroups.length - 1 ||
-        pauseKind === "hard";
     }
   }
-  buildAiCommitRegions();
+  // Soft and hard pauses are judged against this video's own rhythm.
+  const { softMs, hardMs } = YTDS_SHARED.semanticPauseThresholds(
+    pauses.filter(Number.isFinite), SEMANTIC_SOFT_PAUSE_MS, SEMANTIC_HARD_PAUSE_MS
+  );
+  for (let i = 0; i < captionSession.sentGroups.length; i++) {
+    const pauseAfterMs = pauses[i];
+    const pauseKind = YTDS_SHARED.semanticPauseKind(pauseAfterMs, softMs, hardMs);
+    captionSession.sentGroups[i].pauseAfterMs = Number.isFinite(pauseAfterMs)
+      ? Math.round(pauseAfterMs) : hardMs;
+    captionSession.sentGroups[i].softAfter = pauseKind !== "none";
+    captionSession.sentGroups[i].hardAfter = i >= captionSession.sentGroups.length - 1 ||
+      pauseKind === "hard";
+  }
+  buildSemanticCommitRegions();
 }
 function aiBatchEntry(gIdx, withTranslation) {
   const group = captionSession.sentGroups[gIdx];
@@ -171,7 +175,7 @@ function semanticCommitState(regionIndex) {
   let state = stateByRegion ? stateByRegion.get(regionIndex) : null;
   if (!state && stateByRegion) {
     state = {
-      ...YTDS_SHARED.commitStateCreate(region, aiInitialRequestItems()),
+      ...YTDS_SHARED.commitStateCreate(region, aiConfiguredRequestItems()),
       prefetchQueue: [],
       prefetchQueued: new Set(),
       prefetchResponses: new Map()
@@ -181,12 +185,11 @@ function semanticCommitState(regionIndex) {
   }
   return state;
 }
-const aiCommitState = semanticCommitState;
 
 function aiPrefetchAtCursor(regionIndex, cursorValue) {
   const cursor = Math.floor(Number(cursorValue));
   if (!Number.isInteger(cursor)) return false;
-  const state = aiCommitState(regionIndex);
+  const state = semanticCommitState(regionIndex);
   if (!state) return false;
   const candidates = Array.from(captionSession.semanticRequestMeta.values())
     .filter((request) => request && request.prefetch && request.regionIndex === regionIndex &&
@@ -360,7 +363,7 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
     (requestStart > region.start && captionSession.transCache.has(groupKey(requestStart - 1)));
   YTDS_SHARED.commitStateReseed(state, requestStart,
     provenLeftBoundary ? requestStart : Math.min(effectiveTarget, requestStart + AI_SEEK_LEFT_GUARD_ITEMS),
-    Math.max(effectiveTarget, limitEnd), aiInitialRequestItems());
+    Math.max(effectiveTarget, limitEnd), aiConfiguredRequestItems());
   emitDebug("semantic-commit-reseeded", {
     regionIndex,
     targetGroup: effectiveTarget,
@@ -371,7 +374,6 @@ function reseedSemanticCommitState(regionIndex, targetGroup) {
   });
   return state;
 }
-const reseedAiCommitState = reseedSemanticCommitState;
 function canContinueAiInflight(regionIndex, state, targetGroup) {
   const request = captionSession.semanticRequestMeta.get(`dsb:${regionIndex}`);
   // Ownership is the session token (rotated on every focus change), so a
@@ -481,7 +483,6 @@ function commitSemanticResponsePrefix(
   });
   return plan.carryStart;
 }
-const commitAiResponsePrefix = commitSemanticResponsePrefix;
 function handleAiTranslationProgress(msg) {
   const found = aiRequestById(msg && msg.requestId);
   if (!found) {
@@ -539,7 +540,7 @@ function handleAiTranslationProgress(msg) {
   request.progressRecoveryTranslations = Array.from(recoveryById.values())
     .sort((a, b) => Number(a.id) - Number(b.id));
 
-  const state = aiCommitState(request.regionIndex);
+  const state = semanticCommitState(request.regionIndex);
   if (!state || state.cursor < request.requestStart || state.cursor > request.requestEnd) return false;
   // Whole units that reach the cursor, with any members before it, so the
   // commit plan sees where each unit really starts.
@@ -549,19 +550,19 @@ function handleAiTranslationProgress(msg) {
   const pending = request.progressTranslations.filter((item) =>
     Number(item && item.id) >= state.cursor || (item && item.unitId && reaching.has(String(item.unitId))));
   const previousCursor = state.cursor;
-  let nextCursor = commitAiResponsePrefix(
+  let nextCursor = commitSemanticResponsePrefix(
     request.regionIndex, previousCursor, Math.min(request.requestEnd, request.limitEnd),
     state.commitFloor, request.limitEnd, pending, request.effectiveGuardItems,
-    AI_MIN_COMMIT_RUNWAY_ITEMS
+    SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS
   );
   if ((!Number.isInteger(nextCursor) || nextCursor <= previousCursor) && request.urgent) {
     const recoveredTranslations = YTDS_SHARED.semanticUnitsFromAlignedChunks(
       aiAlignedRecoveryInput(request.progressRecoveryTranslations, previousCursor)
     );
-    const recoveredCursor = commitAiResponsePrefix(
+    const recoveredCursor = commitSemanticResponsePrefix(
       request.regionIndex, previousCursor, Math.min(request.requestEnd, request.limitEnd),
       state.commitFloor, request.limitEnd, recoveredTranslations, request.effectiveGuardItems,
-      AI_MIN_COMMIT_RUNWAY_ITEMS
+      SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS
     );
     if (Number.isInteger(recoveredCursor) && recoveredCursor > previousCursor) {
       nextCursor = recoveredCursor;
@@ -579,9 +580,8 @@ function handleAiTranslationProgress(msg) {
   // Refresh lag grace only after the immutable commit cursor advanced. A
   // provisional/left-guard fragment must not make a stalled playback request
   // look healthy indefinitely.
-  request.lastProgressAt = Date.now();
-  request.progressCursor = nextCursor;
-  YTDS_SHARED.commitStateAdvance(state, nextCursor, aiSteadyRequestItems());
+  noteAiRequestProgress(request, nextCursor, true);
+  YTDS_SHARED.commitStateAdvance(state, nextCursor, aiConfiguredRequestItems());
   reconcileAiPrefetchCandidates(state, nextCursor);
   captionSession.semanticExhaustedRegions.delete(request.regionIndex);
   request.progressTranslations = request.progressTranslations.filter(
@@ -619,7 +619,7 @@ function aiPrefetchWindowItems(targetTailItems) {
   const tailItems = Math.max(0, Math.floor(Number(targetTailItems) || 0));
   return Math.min(
     aiMaxRequestItems(),
-    tailItems + AI_COMMIT_GUARD_ITEMS + 64
+    tailItems + SEMANTIC_COMMIT_GUARD_ITEMS + 64
   );
 }
 function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
@@ -642,14 +642,12 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   const limitEnd = state.limitEnd;
   const targetTailItems = aiUrgentTargetTailItems();
   const maxRequestItems = aiMaxRequestItems();
-  const guardItems = typeof SEMANTIC_COMMIT_GUARD_ITEMS !== "undefined"
-    ? SEMANTIC_COMMIT_GUARD_ITEMS : AI_COMMIT_GUARD_ITEMS;
+  const guardItems = SEMANTIC_COMMIT_GUARD_ITEMS;
   const plan = YTDS_SHARED.semanticCommitWindowPlan({
     state, urgent, requestStart, limitEnd,
-    futureStart: aiNextFuturePrefetchStart(regionIndex, state, requestStart),
-    guardItems, minRunwayItems: AI_MIN_COMMIT_RUNWAY_ITEMS, maxRequestItems, targetTailItems,
-    urgentWindowItems: aiAcceleratedUrgentRequestItems(),
-    urgentRequestItems: aiUrgentRequestItems(),
+    guardItems, minRunwayItems: SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS, maxRequestItems, targetTailItems,
+    urgentWindowItems: aiConfiguredRequestItems(),
+    urgentRequestItems: aiConfiguredRequestItems(),
     acceleratedPrefetchItems: aiPrefetchWindowItems(targetTailItems)
   });
   const requestUrgent = plan.requestUrgent;
@@ -660,15 +658,10 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   const requestPlan = { targetThrough: plan.targetThrough };
   const targetAwareItems = plan.targetAwareItems;
   let requestEnd = plan.requestEnd;
-  if (plan.bridgeItems > 0) {
-    emitDebug("semantic-prefetch-bridge", {
-      regionIndex, requestStart, futureStart: plan.futureStart, requestEnd, bridgeItems: plan.bridgeItems
-    });
-  }
   // A window that reaches its region end carries on into the following
   // regions nobody has started yet, for every provider.
   const spanRegions = requestEnd === limitEnd && typeof aiPlanRegionSpan === "function"
-    ? aiPlanRegionSpan(regionIndex, requestStart, Math.max(targetAwareItems, aiSteadyRequestItems()))
+    ? aiPlanRegionSpan(regionIndex, requestStart, Math.max(targetAwareItems, aiConfiguredRequestItems()))
     : [];
   if (spanRegions.length) requestEnd = spanRegions[spanRegions.length - 1].end;
   const items = [];
@@ -682,7 +675,7 @@ function pumpAiCommitRegion(regionIndex, urgent, requestOptions) {
   }
   requestEnd = requestStart + items.length - 1;
   const effectiveGuardItems = YTDS_SHARED.semanticEffectiveGuardItems(
-    items.length, AI_COMMIT_GUARD_ITEMS
+    items.length, SEMANTIC_COMMIT_GUARD_ITEMS
   );
   const { contextBefore, contextAfter } = aiContextsForRange(requestStart, requestEnd);
   const requestId = beginAiRequest(
@@ -766,19 +759,30 @@ function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, reques
   if (urgent && captionSession.transCache.has(groupKey(gIdx)) &&
       !(requestOptions && requestOptions.bypassCache)) return;
   if (urgent) {
-    cancelAiRequestsBeforeRegion(regionIndex);
+    // Regions playback has left are obsolete; the region it is in is not,
+    // even when urgent work (a resumed retry) targets a later region.
+    // Simulated seed 95096: a later region's retry cancelled the visible
+    // region's writer, which was re-sent 24 ms later. Playback position, not
+    // the active cue: between cues there is none.
+    const video = typeof getVideo === "function" ? getVideo() : null;
+    const playbackGroup = video && typeof aiGroupAtTime === "function"
+      ? aiGroupAtTime(Number(video.currentTime) * 1000) : -1;
+    const playbackRegion = Number.isInteger(playbackGroup) && playbackGroup >= 0 && groupToRegion
+      ? groupToRegion[playbackGroup] : regionIndex;
+    cancelAiRequestsBeforeRegion(Number.isInteger(playbackRegion)
+      ? Math.min(regionIndex, playbackRegion) : regionIndex);
     cancelAiStaleSpeculativeRequests(regionIndex, gIdx);
   }
   const currentMissing = !captionSession.transCache.has(groupKey(gIdx));
   const targetTailItems = aiUrgentTargetTailItems();
   const urgentRequestItems = Math.max(
-    aiUrgentRequestItems(),
-    targetTailItems + AI_COMMIT_GUARD_ITEMS
+    aiConfiguredRequestItems(),
+    targetTailItems + SEMANTIC_COMMIT_GUARD_ITEMS
   );
   const maxRequestItems = aiMaxRequestItems();
   const randomAccessDistance = (urgent
     ? Math.min(maxRequestItems, urgentRequestItems) : maxRequestItems) -
-    AI_COMMIT_GUARD_ITEMS;
+    SEMANTIC_COMMIT_GUARD_ITEMS;
   const shouldReseed = YTDS_SHARED.shouldReseedSemanticCommitState(
     currentMissing, gIdx, state, randomAccessDistance, urgent, captionSession.activeGroupIdx >= 0
   );
@@ -787,7 +791,7 @@ function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, reques
   const playbackLagging = urgent && aiRequestIsPlaybackLagging(liveRequest, state, gIdx);
   if ((shouldReseed || stalePrefetch || playbackLagging) &&
       !canContinueAiInflight(regionIndex, state, gIdx)) {
-    state = reseedAiCommitState(regionIndex, gIdx);
+    state = reseedSemanticCommitState(regionIndex, gIdx);
     if (stalePrefetch) emitDebug("semantic-stale-prefetch-reseed", {
       regionIndex, targetGroup: gIdx, requestEnd: liveRequest.requestEnd,
       ageMs: Math.max(0, Date.now() - Number(liveRequest.startedAt))
@@ -810,10 +814,8 @@ function aiRequestBatch(gIdx, _includePredecessor = true, urgent = false, reques
   const targetThrough = Math.min(state.limitEnd, batch ? batch.end : gIdx);
   YTDS_SHARED.commitStateRaiseDemand(state, targetThrough, urgent ? gIdx : null);
   if (urgent && Number.isInteger(batchIndex)) captionSession.semanticFocusedBatchIndex = batchIndex;
-  if (!urgent && gIdx > state.cursor) {
-    queueAiSpeculativeRequest(regionIndex, gIdx);
-    return;
-  }
+  // Ahead of the cursor, the commit lane's lookahead owns the range.
+  if (!urgent && gIdx > state.cursor) return;
   if (!urgent && (captionSession.activeGroupIdx >= 0
       ? groupToRegion && groupToRegion[captionSession.activeGroupIdx] !== regionIndex
       : regionIndex !== 0)) {

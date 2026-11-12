@@ -9,7 +9,7 @@ let state = { ...DEFAULTS };
 
 let activeLine = "trans";        // which line the tab editor is bound to
 let activeWorkspace = "translation"; // translation | display | tools
-let exportVariant = "bi";        // SRT export content: "bi" | "orig" | "trans" (local, not stored)
+let exportVariant = "bi";        // export content: "bi" | "orig" | "trans" | "timed" (local, not stored)
 let captionTrackRefreshSerial = 0;
 let captionTrackRefreshTimer = null;
 let captionTrackRefreshActive = false;

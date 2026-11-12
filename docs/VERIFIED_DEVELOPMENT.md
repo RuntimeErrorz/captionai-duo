@@ -94,6 +94,13 @@ change, or steady) and by what the visible group waited for (no request,
 retry wait, queued in the worker, first byte, generating). Decide what to
 optimize from this table, not from a total.
 
+`--set NAME=VALUE[,NAME=VALUE]` replaces numeric runtime constants
+(`const NAME = 123;`) for a parameter sweep; a name that matches no constant
+is an error. The fake provider always segments correctly, so a sweep measures
+latency and cost (stall, requests, tokens) but not segmentation quality:
+guard and runway sizes, context counts and display timing need real-model
+replays.
+
 ## Translation quality
 
 `scripts/quality-eval.js` scores what the extension actually committed. The
@@ -105,8 +112,13 @@ wall time. Automated Chrome is not used here: YouTube's player stops with an
 error after about a minute in it. Both steps read `CAPTIONAI_E2E_API_KEY` from
 your own shell:
 
+Export the captions with "Word timing" in the popup's export panel: the
+json3 file keeps each word's onset, which an SRT loses (rolling ASR cues
+touch each other there), so pauses and soft/hard boundaries replay as on
+YouTube.
+
 ```sh
-node --use-env-proxy scripts/sim-replay.js --provider gemini --cues-file "captions [VIDEO].orig.srt" --rate 1
+node --use-env-proxy scripts/sim-replay.js --provider gemini --cues-file "captions [VIDEO].orig.json3" --rate 1
 node --use-env-proxy scripts/quality-eval.js --result e2e-results/replay-....json
 ```
 

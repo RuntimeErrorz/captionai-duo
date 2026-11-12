@@ -31,13 +31,12 @@ function createCaptionSessionState(initialVideoId) {
     semanticRetryCounts: new Map(),
     semanticExhaustedRegions: new Map(),
     semanticVisibleErrors: new Map(),
-    semanticSpeculativeBackoffUntil: 0,
-    semanticSpeculativeBackoffReason: "",
-    semanticSpeculativeResumeTimer: null,
     semanticFocusGeneration: 0,
     semanticFocusedBatchIndex: -1,
     semanticSeekSettleTimer: null,
     semanticSeekSettling: false,
+    // Measured provider latency (aiLatencyStats); outlives video resets.
+    semanticLatency: null,
     semanticPendingSeekTimeMs: 0,
     sentGroups: null,
     cueToGroup: null,
@@ -162,14 +161,7 @@ function resetCaptionSessionState(reason, options) {
   captionSession.semanticRetryCounts.clear();
   captionSession.semanticExhaustedRegions.clear();
   captionSession.semanticVisibleErrors.clear();
-  if (captionSession.semanticSpeculativeResumeTimer) {
-    clearTimeout(captionSession.semanticSpeculativeResumeTimer);
-    captionSession.semanticSpeculativeResumeTimer = null;
-  }
-  captionSession.semanticSpeculativeBackoffUntil = 0;
-  captionSession.semanticSpeculativeBackoffReason = "";
   if (typeof resetSemanticCommitTimeline === "function") resetSemanticCommitTimeline();
-  else if (typeof resetAiCommitTimeline === "function") resetAiCommitTimeline();
   clearAiSeekSettle();
   clearPendingTimer();
   captionSession.semanticFocusedBatchIndex = -1;

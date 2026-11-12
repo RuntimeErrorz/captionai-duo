@@ -31,24 +31,18 @@ function handleAiBatchCancelled(ctx) {
   emitCaptionStateTransition("semantic-response", "cancelled", {
     requestId: ctx.requestId, requestStart, requestEnd: ctx.requestEnd
   });
-  const hasActiveCommit = Array.from(captionSession.semanticRequestMeta.values()).some((r) => r && !r.prefetch);
-  if (request.prefetch && !hasActiveCommit) pumpAiSpeculativeRequests(regionIndex, state);
-  else { clearPendingTimer(); repaintActiveAiTranslation(); }
+  if (!request.prefetch) { clearPendingTimer(); repaintActiveAiTranslation(); }
   if (aiUrgentCommitPending(state) && (!request.prefetch || state.cursor === requestStart)) {
     queueMicrotask(() => pumpAiCommitRegion(regionIndex,
       request.prefetch ? true : aiKeepUrgentLane(ctx.urgent, state)));
   }
 }
 
-// A failed speculative request never retries itself: it re-queues behind a
-// rate limit, and if the commit cursor already waits on it, the commit lane
-// fetches the same range directly.
-function handleAiPrefetchFailure(ctx, resp, runtimeError) {
-  const { regionIndex, state, requestStart } = ctx;
-  if (noteAiSpeculativeRateLimit(resp, runtimeError)) {
-    queueAiSpeculativeRequest(regionIndex, requestStart);
-  }
-  pumpAiSpeculativeRequests(regionIndex, state);
+// A failed prefetch never retries itself: if the commit cursor already waits
+// on its range, the commit lane fetches that range directly; otherwise the
+// lane reaches it in order.
+function handleAiPrefetchFailure(ctx) {
+  const { state, requestStart } = ctx;
   if (state.cursor === requestStart) aiRequestBatch(requestStart, true, true, { bypassCache: true });
 }
 
@@ -110,18 +104,18 @@ function handleAiBatchRejected(ctx, resp, runtimeError) {
 // chunk recovery when the semantic units alone cannot advance the cursor.
 function commitAcceptedAiResponse(ctx, resp, finalStart, finalTranslations, canRecoverAlignedChunks) {
   const { request, state, regionIndex, requestStart, requestEnd } = ctx;
-  let nextCursor = commitAiResponsePrefix(
+  let nextCursor = commitSemanticResponsePrefix(
     regionIndex, finalStart, requestEnd, state.commitFloor, request.limitEnd,
-    finalTranslations, request.effectiveGuardItems, AI_MIN_COMMIT_RUNWAY_ITEMS
+    finalTranslations, request.effectiveGuardItems, SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS
   );
   if (!Number.isInteger(nextCursor)) return null;
   if (nextCursor === finalStart && canRecoverAlignedChunks) {
     const recoveredTranslations = YTDS_SHARED.semanticUnitsFromAlignedChunks(
       aiAlignedRecoveryInput(resp.translations, finalStart)
     );
-    const recoveredCursor = commitAiResponsePrefix(
+    const recoveredCursor = commitSemanticResponsePrefix(
       regionIndex, finalStart, requestEnd, state.commitFloor, request.limitEnd,
-      recoveredTranslations, request.effectiveGuardItems, AI_MIN_COMMIT_RUNWAY_ITEMS
+      recoveredTranslations, request.effectiveGuardItems, SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS
     );
     if (Number.isInteger(recoveredCursor) && recoveredCursor > finalStart) {
       nextCursor = recoveredCursor;
@@ -135,11 +129,10 @@ function commitAcceptedAiResponse(ctx, resp, finalStart, finalTranslations, canR
 
 function advanceAiCommitCursor(ctx, resp, nextCursor) {
   const { request, state } = ctx;
-  request.lastProgressAt = Date.now();
-  request.progressCursor = nextCursor;
+  noteAiRequestProgress(request, nextCursor);
   const hadDeferrals = Array.isArray(resp && resp.deferredIds) && resp.deferredIds.length > 0;
   YTDS_SHARED.commitStateAdvance(state, nextCursor,
-    hadDeferrals ? Math.min(aiUrgentRequestItems(), 96) : aiSteadyRequestItems());
+    hadDeferrals ? Math.min(aiConfiguredRequestItems(), 96) : aiConfiguredRequestItems());
   if (typeof aiSkipCommittedBlock === "function") aiSkipCommittedBlock(ctx.regionIndex, state);
   reconcileAiPrefetchCandidates(state, state.cursor);
   if (request.promotedFromPrefetch) storeAiPrefetchCandidate(state, request, resp);
@@ -202,8 +195,6 @@ function handleAiBatchAccepted(ctx, resp) {
     repaintActiveAiTranslation();
     return;
   }
-  // The visible commit lane goes first; speculative lanes resume after it.
-  if (!aiUrgentCommitPending(state)) pumpAiSpeculativeRequests(regionIndex, state);
   repaintActiveAiTranslation();
   if (aiCommitPending(state)) queueAiCommitPump(ctx);
   else continueAiLookahead(state.cursor);
@@ -213,7 +204,7 @@ function handleAiBatchResult(request, resp, runtimeError) {
   if (!request || !Number.isInteger(request.regionIndex)) return;
   const regionIndex = request.regionIndex;
   const requestId = String(request.requestId || "");
-  const state = aiCommitState(regionIndex);
+  const state = semanticCommitState(regionIndex);
   if (!state || !isCaptionSessionCurrent(request.sessionToken)) return;
   const ctx = {
     request,
@@ -237,9 +228,6 @@ function handleAiBatchResult(request, resp, runtimeError) {
   const originalRuntimeError = runtimeError;
   const bufferedResponse = aiResponseWithBufferedProgress(request, resp, state);
   if (bufferedResponse && bufferedResponse !== resp) { resp = bufferedResponse; runtimeError = null; }
-  const isLocalConcurrency = (resp && resp.limitReason === "local-concurrency") ||
-    (runtimeError && runtimeError.limitReason === "local-concurrency");
-  if (!isLocalConcurrency) clearAiSpeculativeBackoff("local-concurrency");
   if (typeof aiUpdateDisplayError === "function") {
     aiUpdateDisplayError(regionIndex, request, originalRuntimeError, resp);
   }
@@ -253,7 +241,6 @@ function handleAiBatchResult(request, resp, runtimeError) {
   if (typeof distributeAiSpanResponse === "function") distributeAiSpanResponse(request, resp);
   if (request.prefetch) {
     const stored = storeAiPrefetchCandidate(state, request, resp);
-    pumpAiSpeculativeRequests(regionIndex, state);
     if (stored && state.cursor === stored.start) {
       queueMicrotask(() => pumpAiCommitRegion(regionIndex, true));
     }

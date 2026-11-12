@@ -143,7 +143,7 @@ function loadHarness(options = {}) {
     ...contentConstants(),
     // Scenario override: 16-item batch scopes keep the fixtures small.
     SEMANTIC_CORE_ITEMS: 16,
-    AI_CORE_ITEMS: 16,
+    SEMANTIC_CORE_ITEMS: 16,
     emitDebug: () => {},
     emitCaptionStateTransition: () => {},
     repaintActiveAiTranslation: () => {},
@@ -234,7 +234,7 @@ test("adaptive batch window reduces size when response has deferredIds", () => {
   handleResult(request, responseWithDeferrals, null);
 
   assert.ok(harness.state.cursor > 0);
-  assert.equal(harness.state.windowItems, vm.runInContext("Math.min(aiUrgentRequestItems(), 96)", harness.context));
+  assert.equal(harness.state.windowItems, vm.runInContext("Math.min(aiConfiguredRequestItems(), 96)", harness.context));
 });
 
 test("a request-limited profile prioritizes urgent commit over speculative prefetch", async () => {
@@ -280,23 +280,3 @@ test("a request-limited profile prioritizes urgent commit over speculative prefe
   assert.equal(harness.messages.some((msg) => msg.requestStart === 100), false);
 });
 
-test("speculative resume timer does not re-poll during active request in local-concurrency backoff", () => {
-  const harness = loadHarness();
-  harness.context.captionSession.semanticRequestMeta.set("dsb:0", { requestId: "commit:0:1", urgent: true });
-  harness.context.captionSession.semanticSpeculativeBackoffReason = "local-concurrency";
-  harness.context.captionSession.semanticSpeculativeBackoffUntil = Date.now() + 100;
-  harness.context.captionSession.semanticSpeculativeResumeTimer = null;
-
-  const resume = vm.runInContext("scheduleAiSpeculativeResume", harness.context);
-  resume();
-
-  const timerCb = harness.getTimerCallback();
-  assert.ok(typeof timerCb === "function");
-  harness.context.captionSession.semanticSpeculativeBackoffUntil = Date.now() - 1;
-
-  timerCb();
-
-  // No messages should have been sent because an active request is still in flight
-  assert.equal(harness.messages.length, 0);
-  assert.equal(harness.context.captionSession.semanticSpeculativeBackoffReason, "local-concurrency");
-});

@@ -2,7 +2,7 @@
 // Translation quality of an end-to-end run, judged by a model.
 //
 //   node --use-env-proxy scripts/quality-eval.js --result e2e-results/e2e-....json
-//        [--base-url URL] [--model NAME] [--judge-model NAME] [--limit N] [--dry-run]
+//        [--base-url URL] [--model NAME] [--judge-model NAME] [--key-env NAME] [--limit N] [--dry-run]
 //
 // For every unit the extension committed, a reference translation is made
 // with the same segmentation but generous context (the whole neighbourhood
@@ -30,12 +30,19 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === "--judge-model") args.judgeModel = next();
   else if (flag === "--limit") args.limit = Math.max(1, Number(next()) || 1);
   else if (flag === "--dry-run") args.dryRun = true;
+  else if (flag === "--key-env") args.keyEnv = next();
   else throw new Error(`unknown argument ${flag}`);
 }
 if (!args.result) throw new Error("--result <e2e-results/....json> is required");
 args.judgeModel = args.judgeModel || args.model;
-const key = String(process.env.CAPTIONAI_E2E_API_KEY || "").trim();
-if (!args.dryRun && !key) throw new Error("set CAPTIONAI_E2E_API_KEY (or use --dry-run)");
+// --key-env names the variable holding this endpoint's key (default
+// CAPTIONAI_E2E_API_KEY), so a second provider's key can sit beside it.
+const keyEnv = args.keyEnv || "CAPTIONAI_E2E_API_KEY";
+if (!/^[A-Z][A-Z0-9_]*$/.test(keyEnv)) throw new Error("--key-env must be an environment variable name");
+const key = String(process.env[keyEnv] || "").trim();
+if (!args.dryRun && !key) throw new Error(`set ${keyEnv} (or use --dry-run)`);
+const redact = (text) => String(text).split(key || "\u0000").join("<key>").replace(/AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{16,}/g, "<key>");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const { committed, bundle } = JSON.parse(fs.readFileSync(args.result, "utf8"));
 if (!committed || !Array.isArray(committed.units) || !committed.units.length) {
@@ -73,17 +80,37 @@ const units = committed.units.slice(0, args.limit).map((unit, index) => ({ index
   ...(origin.get(unit.unitId) || { requestClass: "ledger-or-unknown", windowItems: null, itemsBeforeGuard: null }) }));
 
 // ---- model calls -------------------------------------------------------------------
+// Overload (429/5xx) and an unparsable answer are retried with backoff; any
+// other HTTP error stops the run.
 async function chat(model, system, user) {
-  const response = await fetch(`${args.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: user }] })
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.replace(/AIza[0-9A-Za-z_-]{20,}/g, "<key>").slice(0, 300)}`);
-  const content = JSON.parse(text).choices[0].message.content;
-  const json = content.slice(content.indexOf("["), content.lastIndexOf("]") + 1);
-  return JSON.parse(json);
+  let lastError = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt) await sleep(2000 * 2 ** (attempt - 1));
+    let response;
+    try {
+      response = await fetch(`${args.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, temperature: 0, messages: [{ role: "system", content: system }, { role: "user", content: user }] })
+      });
+    } catch (error) {
+      lastError = new Error(`network: ${redact(error && error.cause && error.cause.code || error.message)}`);
+      continue;
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      lastError = new Error(`HTTP ${response.status}: ${redact(text).slice(0, 300)}`);
+      if (response.status === 429 || response.status >= 500) continue;
+      throw lastError;
+    }
+    try {
+      const content = JSON.parse(text).choices[0].message.content;
+      return JSON.parse(content.slice(content.indexOf("["), content.lastIndexOf("]") + 1));
+    } catch (_e) {
+      lastError = new Error("the model's answer was not a JSON array");
+    }
+  }
+  throw lastError;
 }
 
 async function referenceTranslations(batch, before, after) {

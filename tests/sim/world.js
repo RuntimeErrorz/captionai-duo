@@ -13,7 +13,26 @@ const vm = require("node:vm");
 // SIM_ROOT runs the same world on another checkout (e.g. an older release
 // exported with git archive) so a change can be compared seed for seed.
 const root = path.resolve(process.env.SIM_ROOT || path.join(__dirname, "..", ".."));
-const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+// SIM_SET="NAME=VALUE,NAME=VALUE" replaces numeric constants of the runtime
+// (`const NAME = 123;`) for parameter sweeps (scripts/sim-fuzz.js --set).
+// A name that matches no constant is an error, so a typo cannot silently
+// sweep nothing.
+const SIM_SET = String(process.env.SIM_SET || "").split(",").filter(Boolean).map((pair) => {
+  const [name, value] = pair.split("=");
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !Number.isFinite(Number(value))) throw new Error(`bad SIM_SET ${pair}`);
+  return { name, value: Number(value), used: false };
+});
+const read = (file) => {
+  let text = fs.readFileSync(path.join(root, file), "utf8");
+  for (const entry of SIM_SET) {
+    const pattern = new RegExp(`(\\bconst ${entry.name} = )[0-9][0-9_.]*(;)`, "g");
+    if (pattern.test(text)) {
+      entry.used = true;
+      text = text.replace(pattern, `$1${entry.value}$2`);
+    }
+  }
+  return text;
+};
 const manifest = JSON.parse(read("manifest.json"));
 
 const BACKGROUND_FILES = read("background.js").match(/"[^"]+\.js"/g).map((s) => s.slice(1, -1));
@@ -22,6 +41,9 @@ const CONTENT_SCRIPT = manifest.content_scripts.find((entry) => entry.world !== 
 const CONTENT_SKIP = new Set(["content/lifecycle.js"]);
 const CONTENT_FILES = CONTENT_SCRIPT.js.filter((file) => !CONTENT_SKIP.has(file));
 const SOURCES = new Map([...BACKGROUND_FILES, ...CONTENT_FILES].map((file) => [file, read(file)]));
+for (const file of CONTENT_SCRIPT.js) if (file.startsWith("shared") && !SOURCES.has(file)) SOURCES.set(file, read(file));
+const unusedSet = SIM_SET.filter((entry) => !entry.used).map((entry) => entry.name);
+if (unusedSet.length) throw new Error(`SIM_SET names no runtime constant: ${unusedSet.join(", ")}`);
 
 const EPOCH_MS = Date.UTC(2026, 0, 1);
 const TAB_ID = 7;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Deterministic simulation fuzzing of the real extension runtime.
 //   node scripts/sim-fuzz.js [--seeds N] [--from S] [--seed S] [--profile fast|limited|slow|flaky]
-//                            [--rpm N] [--rate R] [--ttfb A-B] [--root DIR]
+//                            [--rpm N] [--rate R] [--ttfb A-B] [--root DIR] [--set NAME=VALUE,...]
 // --root runs the same seeds against another checkout of the runtime.
 // Every failure prints its seed; rerun it alone with --seed to reproduce the
 // identical event sequence.
@@ -10,6 +10,9 @@
 const path = require("node:path");
 const rootIndex = process.argv.indexOf("--root");
 if (rootIndex > 0) process.env.SIM_ROOT = path.resolve(process.argv[rootIndex + 1]);
+// --set NAME=VALUE[,NAME=VALUE] replaces runtime constants for a sweep.
+const setIndex = process.argv.indexOf("--set");
+if (setIndex > 0) process.env.SIM_SET = process.argv[setIndex + 1];
 const { runSeed } = require(path.join(__dirname, "..", "tests", "sim", "run.js"));
 
 const args = { seeds: 50, from: 1, seed: null, profile: null, verbose: false, rpm: null, rate: null, ttfb: null };
@@ -26,7 +29,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === "--request-items") args.requestItems = Number(next());
   else if (flag === "--ttfb") args.ttfb = next().split("-").map(Number);
   else if (flag === "--json") args.json = true;
-  else if (flag === "--root") next(); // applied before the world loads
+  else if (flag === "--root" || flag === "--set") next(); // applied before the world loads
   else throw new Error(`unknown argument ${flag}`);
 }
 

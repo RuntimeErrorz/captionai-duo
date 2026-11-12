@@ -80,7 +80,7 @@ function advanceAiLookahead(groupIndex) {
 // commit. The background stops streaming once a unit reaches it.
 function aiCommitGuardLocal(requestStart, requestEnd, limitEnd, effectiveGuardItems) {
   const guardStart = YTDS_SHARED.semanticCommitGuardStart(
-    requestStart, requestEnd, limitEnd, effectiveGuardItems, AI_MIN_COMMIT_RUNWAY_ITEMS
+    requestStart, requestEnd, limitEnd, effectiveGuardItems, SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS
   );
   return Number.isInteger(guardStart) && guardStart > requestStart && guardStart <= requestEnd
     ? guardStart - requestStart : -1;
@@ -120,7 +120,7 @@ function aiSpanCommitGuardLocal(requestStart, spans, effectiveGuardItems) {
   const last = spans[spans.length - 1];
   if (!last || last.end >= last.regionEnd) return -1;
   const guardStart = YTDS_SHARED.semanticCommitGuardStart(
-    last.start, last.end, last.regionEnd, effectiveGuardItems, AI_MIN_COMMIT_RUNWAY_ITEMS
+    last.start, last.end, last.regionEnd, effectiveGuardItems, SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS
   );
   return Number.isInteger(guardStart) && guardStart > last.start && guardStart <= last.end
     ? guardStart - requestStart : -1;

@@ -24,6 +24,14 @@ test(`simulated playback keeps every protocol invariant (${SEEDS} seeds)`, async
   assert.deepEqual(failures, []);
 });
 
+test("urgent work in a later region never cancels the region playback is in", async () => {
+  // Sim seed 95096: after a reload, a resumed retry for a later region
+  // cancelled the visible region's writer as obsolete, which then re-sent the
+  // same range (cancelled-range-resent).
+  const result = await runSeed(95096, { profile: "flaky" });
+  assert.equal(result.ok, true, `${result.invariant} ${JSON.stringify(result.detail)}`);
+});
+
 test("changing scheduling settings never cancels in-flight work", async () => {
   // Concurrency and RPM change how future requests are scheduled; the
   // translations already in flight stay valid (sim seed 5032 re-sent them).

@@ -244,7 +244,7 @@ test("caption invalidation emits an ordered state transition with both revisions
     videoIdFromLocation: () => "video",
     extensionContextAlive: () => true,
     sendRuntimeMessage: () => {},
-    resetAiCommitTimeline: () => {},
+    resetSemanticCommitTimeline: () => {},
     clearAiSeekSettle: () => {},
     clearPendingTimer: () => {},
     emitDebug: (event, data) => events.push({ event, data }),

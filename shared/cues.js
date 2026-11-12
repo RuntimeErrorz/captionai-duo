@@ -21,6 +21,24 @@
     return nextStart - Math.max(...candidates);
   }
 
+  // Pause thresholds relative to this video's own speech rhythm. A pause is
+  // a boundary when it is long for this speaker, not only in absolute terms:
+  // the routine pauses of a slow lecture (its 90th percentile) are never
+  // hard, while the floors keep ordinary videos exactly as before.
+  const PAUSE_RHYTHM_PERCENTILE = 0.9;
+  const PAUSE_SOFT_MULTIPLE = 2;
+  const PAUSE_HARD_MULTIPLE = 4;
+  function semanticPauseThresholds(pausesValue, softFloorValue, hardFloorValue) {
+    const softFloor = Math.max(0, Number(softFloorValue) || 900);
+    const hardFloor = Math.max(softFloor, Number(hardFloorValue) || 4000);
+    const pauses = (Array.isArray(pausesValue) ? pausesValue : [])
+      .map(Number).filter((value) => Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
+    if (pauses.length < 20) return { softMs: softFloor, hardMs: hardFloor, rhythmMs: 0 };
+    const rhythmMs = pauses[Math.floor(PAUSE_RHYTHM_PERCENTILE * (pauses.length - 1))];
+    const softMs = Math.max(softFloor, PAUSE_SOFT_MULTIPLE * rhythmMs);
+    return { softMs, hardMs: Math.max(hardFloor, softMs, PAUSE_HARD_MULTIPLE * rhythmMs), rhythmMs };
+  }
+
   function semanticPauseKind(value, softMsValue, hardMsValue) {
     const pauseMs = Math.max(0, Number(value) || 0);
     const softMs = Math.max(0, Number(softMsValue) || 900);
@@ -471,37 +489,12 @@
     };
   }
 
-  // Size a bridge window that reaches an already running future request:
-  // after its private runway the committed prefix must touch futureStart.
-  function semanticBridgeRequestItems(
-    requestStartValue, futureStartValue, maxValue, limitEndValue, guardItemsValue, minRunwayValue
-  ) {
-    const requestStart = Math.floor(Number(requestStartValue));
-    const futureStart = Math.floor(Number(futureStartValue));
-    const maxItems = Math.max(1, Math.floor(Number(maxValue) || 1));
-    const limitEnd = Math.floor(Number(limitEndValue));
-    const guardItems = Math.max(0, Math.floor(Number(guardItemsValue) || 0));
-    const minRunwayItems = Math.max(0, Math.floor(Number(minRunwayValue) || 0));
-    if (![requestStart, futureStart, limitEnd].every(Number.isInteger) ||
-        futureStart <= requestStart || requestStart > limitEnd) return 0;
-    const gap = futureStart - requestStart;
-    let count = Math.min(maxItems, limitEnd - requestStart + 1, gap + 1);
-    while (count < maxItems && count < limitEnd - requestStart + 1 &&
-        count - semanticCommitRunwayItems(count, guardItems, minRunwayItems) < gap) {
-      count++;
-    }
-    const reachesEnd = requestStart + count - 1 >= limitEnd;
-    const runway = reachesEnd ? 0 : semanticCommitRunwayItems(count, guardItems, minRunwayItems);
-    if (!reachesEnd && count - runway < gap) return 0;
-    return count;
-  }
-
   // The whole window decision of one commit-lane request, from plain
   // numbers. The content scheduler, the simulator and the tests all run this
   // one function, so a tuning change is measured exactly as it ships.
   //   state: { windowItems, recoveryWindowItems, urgentTarget, targetThrough }
   //   urgent, requestStart, limitEnd,
-  //   futureStart (start of a live future request, or -1), guardItems,
+  //   guardItems,
   //   minRunwayItems, maxRequestItems, targetTailItems,
   //   urgentWindowItems, urgentRequestItems (recovery), acceleratedPrefetchItems
   function semanticCommitWindowPlan(input) {
@@ -541,14 +534,6 @@
       initialUrgentItems, urgentTailItems
     );
     let requestEnd = Math.min(limitEnd, requestStart + requestPlan.itemCount - 1);
-    const futureStart = count(value.futureStart, -1);
-    let bridgeItems = 0;
-    if (!recoveryWindow && futureStart > requestStart && futureStart <= requestEnd) {
-      bridgeItems = semanticBridgeRequestItems(
-        requestStart, futureStart, maxRequestItems, limitEnd, guardItems, minRunwayItems
-      );
-      if (bridgeItems > 0) requestEnd = Math.min(limitEnd, requestStart + bridgeItems - 1);
-    }
     // The trailing runway is never committed, so a shorter window can only
     // buy a no-progress round trip; only the region's own end may cut it.
     const minUsefulItems = Math.min(maxRequestItems, 2 * Math.max(guardItems, minRunwayItems));
@@ -559,9 +544,7 @@
       requestUrgent,
       requestEnd,
       targetAwareItems: requestPlan.itemCount,
-      targetThrough: requestPlan.targetThrough,
-      bridgeItems,
-      futureStart
+      targetThrough: requestPlan.targetThrough
     };
   }
 
@@ -577,21 +560,6 @@
   // ahead by raw cue/group count is not enough: several adjacent groups often
   // belong to the same already in-flight DeepSeek batch and therefore do not
   // warm any future network request.
-  function semanticPrefetchBatchStarts(groupIndex, groupToBatch, windows, ahead) {
-    const mapping = Array.isArray(groupToBatch) ? groupToBatch : [];
-    const batches = Array.isArray(windows) ? windows : [];
-    const group = Math.floor(Number(groupIndex));
-    const count = Math.max(0, Math.floor(Number(ahead) || 0));
-    if (!Number.isInteger(group) || group < 0 || group >= mapping.length || !count) return [];
-    const currentBatch = mapping[group];
-    if (!Number.isInteger(currentBatch) || currentBatch < 0 || currentBatch >= batches.length) return [];
-    const starts = [];
-    for (let i = currentBatch + 1; i < batches.length && starts.length < count; i++) {
-      const start = batches[i] && batches[i].start;
-      if (Number.isInteger(start) && start >= 0) starts.push(start);
-    }
-    return starts;
-  }
 
   function aiConcurrencyStatus(activeValue, maxActiveValue, urgentValue) {
     const active = Math.max(0, Math.floor(Number(activeValue) || 0));
@@ -734,7 +702,7 @@
     return problems;
   }
 
-  Object.assign(internal, { cuePauseMs, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, semanticBridgeRequestItems, semanticCommitWindowPlan, pendingTranslationScopeKey, semanticPrefetchBatchStarts, aiConcurrencyStatus,
+  Object.assign(internal, { cuePauseMs, semanticPauseThresholds, semanticPauseKind, mergeTimedCueTexts, cueReferenceAtoms, referenceBatchWindows, semanticEffectiveGuardItems, semanticCommitRunwayItems, semanticCommitGuardStart, monotonicSemanticCommitPlan, shouldReseedSemanticCommitState, semanticCommitRequestPlan, semanticCommitWindowPlan, pendingTranslationScopeKey, aiConcurrencyStatus,
     commitStateCreate, commitStateAdvance, commitStateReseed, commitStateComplete, commitStateSkipCommitted,
     commitStateRaiseDemand, commitStateExtendLookahead, commitStateDropDemand, commitStateNoProgress,
     commitStateViolations });

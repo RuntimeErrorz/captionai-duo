@@ -116,7 +116,7 @@ function requestStats(entries) {
     if (entry.event === "batch-start") Object.assign(get(data.requestId), { items: data.itemCount, requestClass: data.requestClass, sourceChars: data.sourceChars });
     else if (entry.event === "prompt-context-budget") Object.assign(get(data.requestId), { promptChars: data.usedChars });
     else if (entry.event === "ai-http-first-byte") Object.assign(get(data.requestId), { firstByteMs: data.firstByteMs, status: data.status });
-    else if (entry.event === "ai-http-body-complete") Object.assign(get(data.requestId), { totalMs: data.totalMs, responseChars: data.responseChars, earlyStopReason: data.earlyStopReason || "" });
+    else if (entry.event === "ai-http-body-complete") Object.assign(get(data.requestId), { totalMs: data.totalMs, responseChars: data.responseChars, earlyStopReason: data.earlyStopReason || "", finishReason: data.finishReason || "" });
   }
   const requests = [...byId.values()].filter((request) => Number.isFinite(request.items));
   const buckets = {};

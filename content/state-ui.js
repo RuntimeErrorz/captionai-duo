@@ -87,28 +87,24 @@ const MAX_CUE_TOTAL_CHARS = 4000000;
 const MAX_TRACK_TIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 const SEMANTIC_CORE_ITEMS = 32; // UI/prefetch scope only; never a semantic boundary
-const AI_CORE_ITEMS = SEMANTIC_CORE_ITEMS;
-const AI_MAX_REQUEST_ITEMS = 320; // every lane's cap; the window grows toward it
+const AI_MAX_REQUEST_ITEMS = 320; // every lane's cap; equals YTDS_SHARED.aiRequestItemsLimit()
 const AI_MAX_CURRENT_CHARS = 18000; // bound source payload independently of item count
 const SEMANTIC_COMMIT_GUARD_ITEMS = 16; // always-carried trailing safety area
-const AI_COMMIT_GUARD_ITEMS = SEMANTIC_COMMIT_GUARD_ITEMS;
 const SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS = 32; // minimum unresolved context after a committed prefix
-const AI_MIN_COMMIT_RUNWAY_ITEMS = SEMANTIC_MIN_COMMIT_RUNWAY_ITEMS;
 // Fixed counts, not seconds of speech: simulated over 1.5-4.5 words/s, a
 // runway of 60/90/150 s and a backtrack of 25-40 s changed stalls by under 1%,
 // so the simpler fixed values stay.
-const AI_URGENT_TARGET_TAIL_ITEMS = 224; // semantic runway after the visible target, at every speed
+// Swept 96-288 in simulation with no measurable effect; it is the cap minus
+// the seek lead-in and twice the guard (320 - 64 - 2 x 16).
+const AI_URGENT_TARGET_TAIL_ITEMS = 224; // reach past the visible target
 const AI_SEEK_BACKTRACK_ITEMS = 64; // read-only lead-in, divided by playback speed
 const AI_SEEK_LEFT_GUARD_ITEMS = 16; // never commit units touching a seek edge
 const AI_SEEK_SETTLE_MS = 140; // wait for seeked or a short idle before requesting
 const AI_MAX_PREFETCH_BATCHES = 12;
 const AI_CONTEXT_GROUPS = 20; // surrounding original cues, never lexical tokens
 const SEMANTIC_SOFT_PAUSE_MS = 900; // timing hint only; the model may cross it
-const AI_SOFT_PAUSE_MS = SEMANTIC_SOFT_PAUSE_MS;
 const SEMANTIC_HARD_PAUSE_MS = 4000; // true discontinuity; semantic units may not cross
-const AI_HARD_PAUSE_MS = SEMANTIC_HARD_PAUSE_MS;
 const SEMANTIC_MIN_DISPLAY_UNIT_MS = 650; // co-display imperceptibly short units from one raw cue
-const AI_MIN_DISPLAY_UNIT_MS = SEMANTIC_MIN_DISPLAY_UNIT_MS;
 const AI_COLD_RETRY_DELAYS_MS = Object.freeze([400, 1200, 2500]);
 const AI_RATE_RETRY_LIMIT = 6;
 const PENDING_ELLIPSIS_MS = 400; // show "…" if the active group is still in flight
@@ -268,7 +264,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if ((needRecue || needRetranslate) && settings.enabled) {
     resetCaptionSessionState("settings-change");
     if (captionSession.sentGroups && captionSession.sentGroups.length) {
-      buildAiCommitRegions();
+      buildSemanticCommitRegions();
       if (!needRecue && typeof loadAiTranslationLedger === "function") loadAiTranslationLedger();
     }
     if (captionSession.cueTimer) {

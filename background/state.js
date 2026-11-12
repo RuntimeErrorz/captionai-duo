@@ -24,7 +24,7 @@ const MAX_TRANSLATE_CHARS = 4000;
 // Keep the normal planner cap at 160, while accepting the larger urgent window
 // that content uses at >=1.75x. The source-character and model-token bounds
 // remain independent safety limits.
-const MAX_BATCH_ITEMS = 320;
+const MAX_BATCH_ITEMS = 320; // equals YTDS_SHARED.aiRequestItemsLimit()
 const MAX_PROMPT_SOURCE_CHARS = 28000;
 const AI_PROMPT_CACHE_VERSION = YTDS_SHARED.AI_PROMPT_CACHE_VERSION;
 const AI_RESPONSE_CACHE_KEY = "ytdsAiResponseCacheV1";

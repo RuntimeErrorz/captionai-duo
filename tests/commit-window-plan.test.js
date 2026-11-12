@@ -10,7 +10,7 @@ const shared = loadShared();
 function plan(overrides = {}) {
   const { state: stateOverrides, ...rest } = overrides;
   return shared.semanticCommitWindowPlan({
-    urgent: false, requestStart: 0, limitEnd: 1000, futureStart: -1,
+    urgent: false, requestStart: 0, limitEnd: 1000,
     guardItems: 16, minRunwayItems: 32, maxRequestItems: 320, targetTailItems: 48,
     urgentWindowItems: 64, urgentRequestItems: 96, acceleratedPrefetchItems: 0,
     ...rest,
@@ -23,7 +23,6 @@ test("a steady lookahead request uses the configured window", () => {
   const result = plan();
   assert.equal(result.requestUrgent, false);
   assert.equal(result.requestEnd, 319);
-  assert.equal(result.bridgeItems, 0);
 });
 
 test("an urgent request uses its window and always covers its visible target", () => {
@@ -58,17 +57,6 @@ test("accelerated prefetch widens only non-urgent work", () => {
   assert.equal(plan({ state: { windowItems: 64 }, acceleratedPrefetchItems: 300 }).requestEnd, 299);
   assert.equal(plan({ urgent: true, state: { windowItems: 64, urgentTarget: 0 },
     acceleratedPrefetchItems: 300 }).requestEnd, 63); // the urgent window, not the prefetch width
-});
-
-test("a window that reaches a live future request is cut to bridge it", () => {
-  const result = plan({ futureStart: 100 });
-  assert.ok(result.bridgeItems > 0);
-  // The committable prefix (window minus its runway) reaches the future start.
-  const runway = shared.semanticCommitRunwayItems(result.bridgeItems, 16, 32);
-  assert.ok(result.bridgeItems - runway >= 100);
-  assert.equal(result.requestEnd, result.bridgeItems - 1);
-  // A recovery window never bridges.
-  assert.equal(plan({ futureStart: 100, state: { recoveryWindowItems: true } }).bridgeItems, 0);
 });
 
 test("windows never shrink below twice the runway except at the region end", () => {

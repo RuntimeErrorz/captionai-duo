@@ -172,9 +172,56 @@ function fullyCachedAiCues() {
   }));
 }
 
+// The original track with each word's timing, in YouTube's json3 shape
+// (events -> segs with tOffsetMs). An SRT keeps only cue boundaries, which
+// for rolling ASR captions touch each other, so the pauses that decide soft
+// and hard boundaries are lost; scripts/sim-replay.js reads this file.
+function buildTimedJson3(cues) {
+  const events = [];
+  for (const cue of cues) {
+    const text = String(cue && cue.text || "").trim();
+    if (!text) continue;
+    const parts = Array.isArray(cue.parts) && cue.parts.length ? cue.parts : [{ text, offsetMs: 0 }];
+    events.push({
+      tStartMs: Math.max(0, Math.round(Number(cue.start) || 0)),
+      dDurationMs: Math.max(0, Math.round(Number(cue.dur) || 0)),
+      segs: parts.map((part) => ({
+        utf8: String(part.text || ""),
+        ...(Number.isFinite(Number(part.offsetMs)) ? { tOffsetMs: Math.round(Number(part.offsetMs)) } : {})
+      }))
+    });
+  }
+  return { text: JSON.stringify({ events }), count: events.length };
+}
+
+function triggerJsonDownload(text, filename) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: "application/json;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try { URL.revokeObjectURL(url); a.remove(); } catch (_e) { /* ignore */ } }, 2000);
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
 // Main export entry. Returns a serializable result for the popup:
 //   { ok:true, count, variant } | { ok:false, reason:"nocues"|"notrans" }
 async function handleExport(variant) {
+  if (variant === "timed") {
+    if (!captionSession.cueList || !captionSession.cueList.length) return { ok: false, reason: "nocues" };
+    const built = buildTimedJson3(captionSession.cueList);
+    if (!built.count) return { ok: false, reason: "nocues" };
+    const filename = srtFilename("orig").replace(/\.srt$/, ".json3");
+    return triggerJsonDownload(built.text, filename)
+      ? { ok: true, count: built.count, variant: "timed", source: "original" }
+      : { ok: false, reason: "nocues" };
+  }
   const v = (variant === "orig" || variant === "trans") ? variant : "bi";
 
   // ORIGINAL: the live cue list already holds the full original track.

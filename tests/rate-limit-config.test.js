@@ -73,6 +73,27 @@ test("connect deadlines follow the measured time to first byte, not the RPM", ()
   assert.equal(timeout(fast, true), 30000, "the adaptive deadline is capped");
 });
 
+test("the whole-request deadline follows measured complete responses, never below the prior", () => {
+  const { context } = loadBackground();
+  const timeout = vm.runInContext("aiTotalTimeoutMs", context);
+  const record = vm.runInContext("recordAiCompleteResponse", context);
+  const fast = { endpoint: "https://api.deepseek.com/chat/completions", model: "a" };
+  const reasoning = { endpoint: `${GEMINI}/chat/completions`, model: "r" };
+  const thinking = { ...fast, model: "t", extraBody: { thinking: { type: "enabled" } } };
+
+  assert.equal(timeout(fast), 30000, "unmeasured: the prior");
+  for (const ms of [2000, 3000, 2500]) record(fast, ms);
+  assert.equal(timeout(fast), 30000, "three samples are not enough");
+  record(fast, 2800);
+  assert.equal(timeout(fast), 30000, "a fast provider keeps the floor");
+  // A reasoning model without a thinking flag measurably needs ~25 s.
+  for (const ms of [18000, 25000, 22000, 21000]) record(reasoning, ms);
+  assert.equal(timeout(reasoning), 75000, "three times the slowest recent response");
+  record(reasoning, 90000);
+  assert.equal(timeout(reasoning), 180000, "capped");
+  assert.equal(timeout(thinking), context.AI_TIMEOUT_THINKING_MS ?? 90000, "the thinking prior");
+});
+
 test("one request policy for every RPM and provider", () => {
   const load = (settings) => {
     const context = { YTDS_SHARED: loadShared(), settings, getVideo: () => ({ playbackRate: 1 }) };
@@ -82,12 +103,20 @@ test("one request policy for every RPM and provider", () => {
     vm.runInContext(read("content/semantic-policy.js"), context);
     return (expr) => vm.runInContext(expr, context);
   };
-  const lanes = ["aiInitialRequestItems()", "aiUrgentRequestItems()", "aiAcceleratedUrgentRequestItems()",
-    "aiSteadyRequestItems()", "aiMaxRequestItems()", "aiMaxSpeculativeRequests()"];
+  const lanes = ["aiConfiguredRequestItems()", "aiConfiguredRequestItems()", "aiConfiguredRequestItems()",
+    "aiConfiguredRequestItems()", "aiMaxRequestItems()", "aiMaxSpeculativeRequests()"];
   const limited = load({ aiBaseUrl: "https://gateway.example/v1", aiModel: "m", aiRateLimitRpm: 10, aiRequestItems: 256 });
   const unlimited = load({ aiBaseUrl: GEMINI, aiModel: "gemini-3.5-flash-lite-preview", aiRateLimitRpm: 0, aiRequestItems: 256 });
   for (const lane of lanes) assert.equal(limited(lane), unlimited(lane), lane);
-  assert.equal(limited("aiUrgentRequestItems()"), 256, "every lane uses the request-items setting");
-  assert.equal(load({})("aiSteadyRequestItems()"), loadShared().DEFAULTS.aiRequestItems);
+  assert.equal(limited("aiConfiguredRequestItems()"), 256, "every lane uses the request-items setting");
+  assert.equal(load({})("aiConfiguredRequestItems()"), loadShared().DEFAULTS.aiRequestItems);
   assert.equal(typeof loadShared().aiRequestLimited, "undefined");
+});
+
+test("one request-size cap: the popup, the content lanes and the background agree", () => {
+  const cap = loadShared().aiRequestItemsLimit();
+  const constant = (file, name) => Number(new RegExp(`const ${name} = (\\d+)`).exec(read(file))[1]);
+  assert.equal(constant("content/state-ui.js", "AI_MAX_REQUEST_ITEMS"), cap);
+  assert.equal(constant("background/state.js", "MAX_BATCH_ITEMS"), cap);
+  assert.equal(Number(/id="aiRequestItems"[^>]*max="(\d+)"/.exec(read("popup.html"))[1]), cap);
 });

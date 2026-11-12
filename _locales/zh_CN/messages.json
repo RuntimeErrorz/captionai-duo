@@ -113,6 +113,8 @@
   "exportBi": { "message": "双语" },
   "exportOrig": { "message": "原文" },
   "exportTrans": { "message": "译文" },
+  "exportTimed": { "message": "逐词时间" },
+  "exportTimedTitle": { "message": "原文，保留每个词的时间（JSON3），可用于回放测试" },
   "exportSrt": { "message": "下载 SRT" },
   "exportWorking": { "message": "正在生成…" },
   "exportDone": { "message": "已下载字幕" },

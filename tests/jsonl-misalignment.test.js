@@ -133,3 +133,17 @@ test("randomized: no committed chunk is the one a misaligned chunk follows", () 
     }
   }
 });
+
+test("a comma moved across a clause edge is not a misalignment (real Gemini line)", () => {
+  // "To me, this is kind of annoying." split as [0,1] and [2,6]: the model put
+  // the comma at the start of the second chunk. The first chunk ends a source
+  // clause, not a sentence, so both chunks commit.
+  const words = ["To", "me,", "this", "is", "kind", "of", "annoying."];
+  const source = words.map((text, id) => ({ id: String(500 + id), text, startMs: id * 300, endMs: id * 300 + 280, hardAfter: false }));
+  const observer = loadObserver()(source, "zh-CN", () => {}, { requestClass: "prefetch" });
+  let status = observer.onTextDelta('[[0,1,"对我来说"],[2,6,"，这有点烦人。"]]\n', false);
+  assert.equal(status.stop, false);
+  status = observer.onTextDelta("[]\n", true);
+  const result = Array.from(observer.result(false) || []);
+  assert.equal(result.length, 7);
+});

@@ -112,6 +112,8 @@
   "secExport": { "message": "Export" },
   "exportBi": { "message": "Bilingual" },
   "exportOrig": { "message": "Original" },
+  "exportTimed": { "message": "Word timing" },
+  "exportTimedTitle": { "message": "Original captions with each word's timing (JSON3), for replay testing" },
   "exportTrans": { "message": "Translation" },
   "exportSrt": { "message": "Download SRT" },
   "exportWorking": { "message": "Generating…" },

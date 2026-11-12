@@ -16,11 +16,11 @@ function buildSemanticGroups(cues) {
   const context = {
     YTDS_SHARED: shared,
     SEMANTIC_CORE_ITEMS: 32,
-    AI_CORE_ITEMS: 32,
+    SEMANTIC_CORE_ITEMS: 32,
     SEMANTIC_SOFT_PAUSE_MS: 900,
-    AI_SOFT_PAUSE_MS: 900,
+    SEMANTIC_SOFT_PAUSE_MS: 900,
     SEMANTIC_HARD_PAUSE_MS: 4000,
-    AI_HARD_PAUSE_MS: 4000,
+    SEMANTIC_HARD_PAUSE_MS: 4000,
     captionSession: {
       sentGroups: [],
       semanticBatchWindows: [],

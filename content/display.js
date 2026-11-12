@@ -174,7 +174,7 @@ function cacheSemanticDisplayCluster(unitsValue, logPages) {
       members,
       sourceCueIndex: first && first.startIdx,
       durationMs: Math.max(0, Number(last && last.end) - Number(first && first.start)),
-      minimumMs: AI_MIN_DISPLAY_UNIT_MS
+      minimumMs: SEMANTIC_MIN_DISPLAY_UNIT_MS
     });
   }
 }
@@ -194,7 +194,7 @@ function aiSemanticDisplayUnits() {
 
 function aiSemanticDisplayClusters() {
   return YTDS_SHARED.semanticDisplayClusters(
-    aiSemanticDisplayUnits(), captionSession.sentGroups, AI_MIN_DISPLAY_UNIT_MS
+    aiSemanticDisplayUnits(), captionSession.sentGroups, SEMANTIC_MIN_DISPLAY_UNIT_MS
   );
 }
 

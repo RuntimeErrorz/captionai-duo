@@ -12,6 +12,9 @@
   const TARGET_LANG_SET = new Set(TARGET_LANGS);
   const AI_DEFAULT_BASE_URL = "https://api.deepseek.com";
   const AI_DEFAULT_MODEL = "deepseek-v4-flash";
+  // The one request-size cap (items per request) for every lane, the popup
+  // setting and the background validator.
+  const AI_REQUEST_ITEMS_MAX = 320;
   // Identity of the translation prompt and output protocol. Response caches
   // and the per-video ledger are invalidated whenever it changes.
   const AI_PROMPT_CACHE_VERSION = "prompt-v35-line-discipline-jsonl";
@@ -40,7 +43,7 @@
     aiContextPast: 1,
     aiContextFuture: 1,
     aiPrefetchBatches: 5,
-    aiRequestItems: 320,
+    aiRequestItems: AI_REQUEST_ITEMS_MAX,
     aiRateLimitRpm: 0,
     aiMaxConcurrency: 4,
     debugEnabled: false,
@@ -468,8 +471,12 @@
     const fallback = Number.isFinite(Number(fallbackValue))
       ? Number(fallbackValue) : DEFAULTS.aiRequestItems;
     return Number.isFinite(items)
-      ? Math.max(32, Math.min(320, Math.round(items)))
-      : Math.max(32, Math.min(320, Math.round(fallback)));
+      ? Math.max(32, Math.min(AI_REQUEST_ITEMS_MAX, Math.round(items)))
+      : Math.max(32, Math.min(AI_REQUEST_ITEMS_MAX, Math.round(fallback)));
+  }
+
+  function aiRequestItemsLimit() {
+    return AI_REQUEST_ITEMS_MAX;
   }
 
   // Requests per minute the provider allows; 0 means no client-side limit.
@@ -597,7 +604,7 @@
     parseAiExtraBody, aiCompletionText, aiErrorDescriptor, aiErrorMessage,
     normalizeAiTokenUsage, compactAiPromptCueRows, compactAiPromptContextRows,
     aiExtraBodyUsesThinking,
-    aiChatCompletionBody, normalizeAiPrefetchBatches, normalizeAiRequestItems, normalizeAiContextCount,
+    aiChatCompletionBody, normalizeAiPrefetchBatches, normalizeAiRequestItems, aiRequestItemsLimit, normalizeAiContextCount,
     preparePromptContexts
   });
 })();

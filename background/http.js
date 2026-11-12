@@ -36,6 +36,36 @@ function recordAiFirstByte(config, firstByteMs) {
   AI_FIRST_BYTE_HISTORY.set(key, history);
 }
 
+// The whole-request deadline follows the same measured-latency rule as the
+// content scheduler: a request is stuck after three times the longest
+// recent complete response. The fixed 30 s (90 s with thinking enabled) is
+// the prior and the floor; a provider that measurably needs longer, such as
+// a reasoning model without a thinking flag, is no longer cut off and
+// retried. Early-stopped responses are shorter by design and not sampled.
+const AI_TOTAL_HISTORY = new Map();
+const AI_TOTAL_SAMPLES_FOR_DEADLINE = 4;
+const AI_TOTAL_OVERDUE_FACTOR = 3;
+const AI_MAX_TOTAL_TIMEOUT_MS = 180000;
+
+function recordAiCompleteResponse(config, totalMs) {
+  const value = Number(totalMs);
+  if (!Number.isFinite(value) || value <= 0) return;
+  const key = aiFirstByteHistoryKey(config);
+  const history = AI_TOTAL_HISTORY.get(key) || [];
+  history.push(value);
+  if (history.length > AI_FIRST_BYTE_HISTORY_SIZE) history.shift();
+  AI_TOTAL_HISTORY.set(key, history);
+}
+
+function aiTotalTimeoutMs(config) {
+  const prior = YTDS_SHARED.aiExtraBodyUsesThinking(config && config.extraBody)
+    ? AI_TIMEOUT_THINKING_MS : AI_TIMEOUT_FAST_MS;
+  const history = AI_TOTAL_HISTORY.get(aiFirstByteHistoryKey(config)) || [];
+  if (history.length < AI_TOTAL_SAMPLES_FOR_DEADLINE) return prior;
+  return Math.min(AI_MAX_TOTAL_TIMEOUT_MS,
+    Math.max(prior, Math.ceil(AI_TOTAL_OVERDUE_FACTOR * Math.max(...history))));
+}
+
 function aiConnectTimeoutMs(config, urgent) {
   const history = AI_FIRST_BYTE_HISTORY.get(aiFirstByteHistoryKey(config)) || [];
   if (history.length < AI_FIRST_BYTE_SAMPLES_FOR_DEADLINE) return AI_COLD_CONNECT_TIMEOUT_MS;
@@ -88,21 +118,15 @@ function waitForAiRateDelay(delayValue, signal) {
 
 // Requests per minute are a budget over any 60 s window (plus a 5% margin),
 // the way providers count them, not a fixed spacing: a burst may start at
-// once. Speculative work may use the budget only down to a reserve kept for
-// visible (urgent) requests, so a seek right after a prefetch does not queue
-// behind it. Simulated at 10-30 RPM this removed most rate-limit waiting.
+// once. Simulated at 10-30 RPM this removed most rate-limit waiting. A
+// reserve of the budget for visible requests was measured too (8-60 RPM) and
+// changed nothing: visible requests already go first in the queue.
 const AI_RATE_WINDOW_MS = 63000;
 const AI_RATE_MIN_SPACING_MS = 250;
-const AI_RATE_URGENT_RESERVE = 0.2;
 
-function aiRateBudget(rpm, isUrgent) {
-  const reserve = Math.max(1, Math.round(rpm * AI_RATE_URGENT_RESERVE));
-  return isUrgent ? rpm : Math.max(1, rpm - reserve);
-}
-
-function aiRateWaitMs(state, rpm, isUrgent, now) {
+function aiRateWaitMs(state, rpm, now) {
   state.starts = state.starts.filter((t) => now - t < AI_RATE_WINDOW_MS);
-  const budget = aiRateBudget(rpm, isUrgent);
+  const budget = rpm;
   let wait = 0;
   if (state.starts.length >= budget) wait = state.starts[state.starts.length - budget] + AI_RATE_WINDOW_MS - now;
   if (Number.isFinite(state.lastStartedAt)) wait = Math.max(wait, state.lastStartedAt + AI_RATE_MIN_SPACING_MS - now);
@@ -176,7 +200,7 @@ function pumpAiRateQueue(key, state, intervalMs, rpm) {
     return;
   }
 
-  const waitMs = aiRateWaitMs(state, rpm, next.isUrgent, Date.now());
+  const waitMs = aiRateWaitMs(state, rpm, Date.now());
 
   if (waitMs <= 0) {
     recordAiRateStart(state, Date.now());
@@ -332,6 +356,7 @@ async function fetchAiStreamWithTimeout(
     let buffer = "";
     let content = "";
     let usage = null;
+    let finishReason = "";
     let done = false;
     let stopDeadline = 0;
     let earlyStopped = false;
@@ -394,6 +419,13 @@ async function fetchAiStreamWithTimeout(
         const chunkUsage = chunk && (chunk.usage || chunk.usageMetadata ||
           chunk.usage_metadata || chunk.interaction && chunk.interaction.usage);
         if (chunkUsage) usage = chunkUsage;
+        // The provider's own reason for ending the output ("stop", "length",
+        // a safety or recitation filter): a body that ends mid-sentence is
+        // otherwise indistinguishable from a model that chose to stop.
+        const choice = chunk && Array.isArray(chunk.choices) ? chunk.choices[0] : null;
+        if (choice && typeof choice.finish_reason === "string" && choice.finish_reason) {
+          finishReason = choice.finish_reason.slice(0, 64);
+        }
         const delta = YTDS_SHARED.aiCompletionText(chunk);
         content += delta;
         if (delta && typeof onTextDelta === "function" &&
@@ -421,6 +453,7 @@ async function fetchAiStreamWithTimeout(
       text: content,
       usage,
       streamed: true,
+      finishReason,
       earlyStopped,
       earlyStopReason,
       firstByteMs,
@@ -608,6 +641,7 @@ function recordAiAttemptResult(attemptInfo, result) {
   attemptInfo.responseChars = text.length;
   attemptInfo.earlyStopped = !!result.earlyStopped;
   attemptInfo.earlyStopReason = String(result.earlyStopReason || "");
+  if (result.finishReason) attemptInfo.finishReason = String(result.finishReason);
   if (!result.response.ok) {
     const providerCode = aiProviderErrorCode(text);
     if (providerCode) attemptInfo.providerCode = providerCode;
@@ -661,6 +695,7 @@ async function fetchAiCompletionAttempt(config, requestOptions, attemptInfo, tra
     typeof trace.onTextDelta === "function" ? trace.onTextDelta : null
   );
   recordAiAttemptResult(attemptInfo, result);
+  if (result.response.ok && !attemptInfo.earlyStopped) recordAiCompleteResponse(config, result.totalMs);
   if (trace.debug) appendDebug("background", "ai-http-body-complete", {
     ...aiAttemptTraceFields(trace, attemptInfo),
     status: result.response.status,
@@ -669,7 +704,8 @@ async function fetchAiCompletionAttempt(config, requestOptions, attemptInfo, tra
     totalMs: result.totalMs,
     responseChars: String(result.text || "").length,
     earlyStopped: attemptInfo.earlyStopped,
-    earlyStopReason: attemptInfo.earlyStopReason
+    earlyStopReason: attemptInfo.earlyStopReason,
+    finishReason: attemptInfo.finishReason || ""
   });
   return result;
 }
@@ -728,8 +764,7 @@ async function aiRawCompletion(
   let responseText = "";
   let responseUsage = null;
   const attempts = [];
-  const timeoutMs = YTDS_SHARED.aiExtraBodyUsesThinking(config.extraBody)
-    ? AI_TIMEOUT_THINKING_MS : AI_TIMEOUT_FAST_MS;
+  const timeoutMs = aiTotalTimeoutMs(config);
   const requestClass = String(trace.requestClass || "");
   const connectTimeoutMs = aiConnectTimeoutMs(config, requestClass.startsWith("urgent"));
   for (let attempt = 0; attempt < AI_MAX_ATTEMPTS; attempt++) {
