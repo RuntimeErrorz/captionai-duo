@@ -52,3 +52,15 @@ test("the simulation is deterministic: one seed, one event sequence", async () =
   assert.ok(first.length > 50);
   assert.deepEqual(second, first);
 });
+
+test("a smaller request-items setting keeps every invariant", async () => {
+  // Users may lower the window; the seek-adoption reach once broke there
+  // (sim seed 9021 at 160 items).
+  const failures = [];
+  for (const [i, requestItems] of [96, 160, 96, 160, 96, 160].entries()) {
+    const seed = i === 0 ? 9021 : 2000 + i;
+    const result = await runSeed(seed, { profile: i === 0 || i % 2 ? "fast" : "limited", rate: 1, requestItems });
+    if (!result.ok) failures.push(`seed ${seed} items ${requestItems} ${result.invariant} ${JSON.stringify(result.detail)}`);
+  }
+  assert.deepEqual(failures, []);
+});

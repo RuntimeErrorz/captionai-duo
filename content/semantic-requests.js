@@ -572,7 +572,11 @@ function aiCommitRequestsWantedAfterSeek(group) {
   const regions = captionSession.semanticCommitRegions;
   const targetRegion = groupToRegion && Number.isInteger(target) ? groupToRegion[target] : undefined;
   if (!Number.isInteger(targetRegion) || !regions) return kept;
-  const reach = target + (typeof aiLookaheadItems === "function" ? aiLookaheadItems() : 0);
+  // One lookahead batch of hysteresis: playback keeps advancing after the
+  // seek, so a lane just past the reach is wanted again within moments
+  // (sim seed 9021: cancelled one item beyond reach, restarted 10 ms later).
+  const batchItems = typeof AI_LOOKAHEAD_ITEMS_PER_BATCH === "number" ? AI_LOOKAHEAD_ITEMS_PER_BATCH : 32;
+  const reach = target + (typeof aiLookaheadItems === "function" ? aiLookaheadItems() : 0) + batchItems;
   for (const [key, request] of captionSession.semanticRequestMeta.entries()) {
     if (!request || request.prefetch || key !== `dsb:${request.regionIndex}` ||
         request.reqEpoch !== captionSession.cueEpoch ||

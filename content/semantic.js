@@ -541,9 +541,13 @@ function handleAiTranslationProgress(msg) {
 
   const state = aiCommitState(request.regionIndex);
   if (!state || state.cursor < request.requestStart || state.cursor > request.requestEnd) return false;
-  const pending = request.progressTranslations.filter(
-    (item) => Number(item && item.id) >= state.cursor
-  );
+  // Whole units that reach the cursor, with any members before it, so the
+  // commit plan sees where each unit really starts.
+  const reaching = new Set(request.progressTranslations
+    .filter((item) => Number(item && item.id) >= state.cursor && item.unitId)
+    .map((item) => String(item.unitId)));
+  const pending = request.progressTranslations.filter((item) =>
+    Number(item && item.id) >= state.cursor || (item && item.unitId && reaching.has(String(item.unitId))));
   const previousCursor = state.cursor;
   let nextCursor = commitAiResponsePrefix(
     request.regionIndex, previousCursor, Math.min(request.requestEnd, request.limitEnd),

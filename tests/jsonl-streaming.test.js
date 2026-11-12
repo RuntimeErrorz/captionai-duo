@@ -519,7 +519,9 @@ test("JSONL still rejects an oversized monolithic unit without alignment boundar
   assert.equal(state.cursor, 0);
 });
 
-test("JSONL state heals half-open boundary coordinate overlap", () => {
+// An overlapping start means the model lost count; its ranges cannot be
+// trusted, so nothing is healed (see tests/jsonl-misalignment.test.js).
+test("JSONL state rejects a chunk that starts inside the previous one", () => {
   const items = sampleItems();
   const state = shared.createAiJsonlTranslationState(items, "zh-CN");
   const result = shared.pushAiJsonlTranslationRecord(state, {
@@ -529,9 +531,9 @@ test("JSONL state heals half-open boundary coordinate overlap", () => {
       rangeChunk(1, 2, "后半")
     ]
   });
-  assert.equal(result.ok, true);
-  assert.equal(state.cursor, 3);
-  assert.equal(result.translations.length, 3);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /unexpected JSONL position 1 at offset 2/);
+  assert.equal(state.cursor, 0);
 
   const invalidState = shared.createAiJsonlTranslationState(items, "zh-CN");
   const rejected = shared.pushAiJsonlTranslationRecord(invalidState, {

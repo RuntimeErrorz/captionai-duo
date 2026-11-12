@@ -5,6 +5,7 @@
 // an invariant checker that fails on the first protocol violation.
 
 const { World, createRandom } = require("./world");
+const vm = require("node:vm");
 const { FakeProvider, SECRET_KEY } = require("./provider");
 const { loadShared } = require("../helpers");
 
@@ -84,6 +85,14 @@ function buildTruth(random, wordCount, paceValue) {
   };
 }
 
+// Real captions (scripts/sim-replay.js) carry no ground truth: the checker
+// keeps its structural and liveness rules and skips the alignment ones.
+function replayTruth(cues) {
+  const last = cues.reduce((end, cue) => Math.max(end, cue.start + cue.dur), 0);
+  return { real: true, pace: null, words: [], cues, regionOf: [], canonicalChunks: () => [],
+    unitOf: () => [-1, -1], durationMs: last + 2000 };
+}
+
 // ---- user behaviour ------------------------------------------------------------
 function buildActions(random, truth) {
   const actions = [];
@@ -116,14 +125,15 @@ function tagsOf(text) {
 }
 
 class Checker {
-  constructor(truth, provider) {
+  constructor(truth, provider, secret) {
     this.truth = truth;
+    this.secret = secret || SECRET_KEY;
     this.provider = provider;
     this.committed = new Map();
     this.requests = new Map();
     this.recentCancels = [];
     this.sendTimes = [];
-    this.metrics = { translateBatches: 0, sentItems: 0, cancels: 0, stallMs: 0, paints: 0 };
+    this.metrics = { translateBatches: 0, sentItems: 0, cancels: 0, stallMs: 0, paints: 0, stallBreakdown: {} };
     this.untranslatedSince = -1;
     this.paints = [];
   }
@@ -141,7 +151,7 @@ class Checker {
   onTransport(event) {
     const message = event.message || event.response;
     const text = JSON.stringify(event);
-    if (text.includes(SECRET_KEY)) this.fail("secret-leaked-to-transport", { kind: event.kind });
+    if (text.includes(this.secret)) this.fail("secret-leaked-to-transport", { kind: event.kind });
     if (event.kind === "background-reply" && event.request && event.request.type === "translateBatch") {
       this.requests.delete(event.request.requestId);
       return;
@@ -228,6 +238,7 @@ class Checker {
         if (previous !== value) this.fail("committed-translation-rewritten", { key, previous, value });
         continue;
       }
+      if (this.truth.real) { this.committed.set(key, value); continue; }
       // A committed unit starts and ends at true sentence boundaries: its
       // chunks are exactly the chunks of the whole sentence, never a fragment
       // that began mid-sentence at a request edge.
@@ -244,7 +255,7 @@ class Checker {
     // opens mid-sentence leaves a fragment no later window can close. It may
     // end at an alignment-chunk boundary (urgent chunk progress), never
     // inside a chunk.
-    if (this.dirty) {
+    if (this.dirty && !this.truth.real) {
       this.dirty = false;
       const has = (id) => session.transCache.has(`${session.cueVideoId} g${id}`);
       const last = this.truth.words.length - 1;
@@ -285,7 +296,10 @@ class Checker {
     const group = session.activeGroupIdx;
     const missing = playing && Number.isInteger(group) && group >= 0 && session.cueList &&
       !session.transCache.has(`${session.cueVideoId} g${group}`);
-    if (missing) this.metrics.stallMs += STEP_MS;
+    if (missing) {
+      this.metrics.stallMs += STEP_MS;
+      this.attributeStall(session, group, now);
+    }
     const idle = session.semanticRequestMeta.size === 0 && session.transInflight.size === 0 &&
       background.__sim.aiControllers.size === 0 && this.provider.inFlight === 0;
     if (missing && idle && !session.semanticSeekSettling) {
@@ -296,6 +310,38 @@ class Checker {
     } else {
       this.untranslatedSince = -1;
     }
+  }
+
+  // Where a stalled step went: the playback phase (time since the last focus
+  // event) and what the visible group was waiting for.
+  noteFocusEvent(type, now) {
+    this.metrics.focusEvents = (this.metrics.focusEvents || 0) + (type === "ratechange" ? 0 : 1);
+    this.focusEvents = this.focusEvents || {};
+    this.focusEvents[type] = now;
+  }
+
+  attributeStall(session, group, now) {
+    // A recent seek or reload explains a stall before a rate change does.
+    const events = this.focusEvents || {};
+    const recent = (type) => Number.isFinite(events[type]) && now - events[type] <= 15000;
+    const phase = ["reload", "seek", "start", "ratechange"].find(recent);
+    const label = phase ? `after-${phase}` : "steady";
+    let owner = null;
+    for (const request of session.semanticRequestMeta.values()) {
+      if (request && Number(request.requestStart) <= group && group <= Number(request.requestEnd)) {
+        if (!owner || !request.prefetch) owner = request;
+      }
+    }
+    let waiting;
+    if (!owner) {
+      const regionIndex = session.semanticGroupToCommitRegion && session.semanticGroupToCommitRegion[group];
+      const holds = session.semanticRequestHolds instanceof Map ? session.semanticRequestHolds : new Map();
+      waiting = holds.has(`dsb:${regionIndex}`) ? "retry-wait" : "no-request";
+    } else {
+      waiting = this.provider.phases.get(owner.requestId) || "queued";
+    }
+    const key = `${label}/${waiting}`;
+    this.metrics.stallBreakdown[key] = (this.metrics.stallBreakdown[key] || 0) + STEP_MS;
   }
 
   quiescent(context, background, world) {
@@ -312,7 +358,7 @@ class Checker {
     for (const [area, store] of [["sync", world.sync], ["local", world.local], ["session", world.session]]) {
       for (const [key, value] of store.data) {
         if (key === "aiApiKeys") continue;
-        if (JSON.stringify(value).includes(SECRET_KEY)) this.fail("secret-leaked-to-storage", { area, key });
+        if (JSON.stringify(value).includes(this.secret)) this.fail("secret-leaked-to-storage", { area, key });
       }
     }
   }
@@ -321,12 +367,15 @@ class Checker {
 // ---- driver ----------------------------------------------------------------------
 async function runSeed(seed, options = {}) {
   const random = createRandom(seed);
-  const truth = buildTruth(random, options.words || random.int(250, 900), options.pace);
+  const truth = options.cues ? replayTruth(options.cues)
+    : buildTruth(random, options.words || random.int(250, 900), options.pace);
   const profile = options.profile || random.pick(["fast", "fast", "limited", "limited", "flaky"]);
+  const secret = options.secret || SECRET_KEY;
   const settings = {
     enabled: true, targetLang: "zh-CN", debugEnabled: true, translationEnabled: true,
-    aiMaxConcurrency: random.int(1, 6), ...PROVIDER_SETTINGS[profile],
-    ...(Number.isFinite(options.rpm) ? { aiRateLimitRpm: options.rpm } : {})
+    aiMaxConcurrency: random.int(1, 6), ...PROVIDER_SETTINGS[profile], ...(options.settings || {}),
+    ...(Number.isFinite(options.rpm) ? { aiRateLimitRpm: options.rpm } : {}),
+    ...(Number.isFinite(options.requestItems) ? { aiRequestItems: options.requestItems } : {})
   };
   // Experiment overrides: the provider enforces the same RPM the profile sets.
   const overrides = {
@@ -334,12 +383,13 @@ async function runSeed(seed, options = {}) {
     ...(Array.isArray(options.ttfb) ? { ttfb: options.ttfb } : {})
   };
   let world;
-  const provider = new FakeProvider({ truth, random: createRandom(seed ^ 0x9e3779b9), clock: null, profile, overrides });
+  const provider = options.provider ||
+    new FakeProvider({ truth, random: createRandom(seed ^ 0x9e3779b9), clock: null, profile, overrides });
   let checker = null;
   world = new World({
     seed,
     sync: settings,
-    local: { aiApiKeys: { [shared.aiCredentialScope(settings.aiBaseUrl)]: SECRET_KEY } },
+    local: { aiApiKeys: { [shared.aiCredentialScope(settings.aiBaseUrl)]: secret } },
     fetch: (url, init) => provider.fetch(url, init),
     onEvent: (event) => {
       if (options.record) options.record.push(`${event.t} ${event.kind} ${JSON.stringify(event.message || event.request || "").slice(0, 160)}`);
@@ -347,7 +397,14 @@ async function runSeed(seed, options = {}) {
     }
   });
   provider.clock = world.clock;
-  checker = new Checker(truth, provider);
+  checker = new Checker(truth, provider, secret);
+  // Real-provider runs pace the virtual clock to wall time.
+  const wallStart = Date.now();
+  const pace = async () => {
+    if (!options.realTime) return;
+    const ahead = wallStart + world.clock.now - Date.now();
+    if (ahead > 0) await new Promise((resolve) => setTimeout(resolve, ahead));
+  };
   const trace = [];
   const debugTail = [];
   const note = (entry) => { trace.push({ t: world.clock.now, ...entry }); if (trace.length > 400) trace.shift(); };
@@ -402,6 +459,7 @@ async function runSeed(seed, options = {}) {
       for (const entry of callbacks) entry.fn(world.clock.now, {});
       if (Math.floor(world.clock.now / 250) !== Math.floor((world.clock.now + STEP_MS) / 250)) video.dispatch("timeupdate");
     }
+    await pace();
     await world.clock.advanceTo(world.clock.now + STEP_MS);
     if (checker.violation) throw checker.violation;
     if (options.onStep) options.onStep(context, world);
@@ -421,18 +479,25 @@ async function runSeed(seed, options = {}) {
   if (Number.isFinite(options.rate)) for (const action of actions) if (action.type === "play") action.rate = options.rate;
   try {
     await boot();
+    checker.noteFocusEvent("start", world.clock.now);
     video.paused = false;
     video.dispatch("play");
     for (const action of actions) {
       note({ action });
       if (action.type === "play") {
-        if (video.playbackRate !== action.rate) { video.playbackRate = action.rate; video.dispatch("ratechange"); }
+        if (video.playbackRate !== action.rate) {
+          video.playbackRate = action.rate;
+          video.dispatch("ratechange");
+          checker.noteFocusEvent("ratechange", world.clock.now);
+        }
         if (video.paused) { video.paused = false; video.dispatch("play"); }
         await runFor(action.ms);
       } else if (action.type === "seek") {
         await seekTo(action.to);
+        checker.noteFocusEvent("seek", world.clock.now);
       } else if (action.type === "scrub") {
         for (let i = 0; i < action.steps; i++) await seekTo(action.to + random.int(-20000, 20000));
+        checker.noteFocusEvent("seek", world.clock.now);
       } else if (action.type === "pause") {
         video.paused = true;
         await runFor(action.ms);
@@ -441,24 +506,60 @@ async function runSeed(seed, options = {}) {
       } else if (action.type === "reload") {
         checker.onReload();
         await boot();
+        checker.noteFocusEvent("reload", world.clock.now);
       } else if (action.type === "setting") {
         await world.sync.set({ [action.key]: action.value });
       }
-      if (video.currentTime * 1000 >= truth.durationMs - 1500) await seekTo(random.int(0, truth.durationMs / 2));
+      if (!truth.real && video.currentTime * 1000 >= truth.durationMs - 1500) {
+        await seekTo(random.int(0, truth.durationMs / 2));
+        checker.noteFocusEvent("seek", world.clock.now);
+      }
     }
     video.paused = true;
-    await runFor(180000);
+    if (options.realTime) {
+      // Drain until the last real stream settles instead of idling for minutes.
+      const session = () => context.__sim.session;
+      for (let waited = 0; waited < 120000 && (provider.inFlight || session().semanticRequestMeta.size); waited += STEP_MS) await step();
+      await runFor(2000);
+    } else {
+      await runFor(180000);
+    }
     if (checker.violation) throw checker.violation;
     checker.quiescent(context, world.background, world);
     return { ok: true, seed, profile, metrics: checker.metrics, virtualMs: world.clock.now,
       providerRequests: provider.requests, provider429: provider.rejected429, words: truth.words.length,
-      promptTokens: Math.round(provider.promptChars / 4), completionTokens: Math.round(provider.completionChars / 4) };
+      promptTokens: Math.round(provider.promptChars / 4), completionTokens: Math.round(provider.completionChars / 4),
+      ...(options.collect ? await collectRun(context, world) : {}) };
   } catch (error) {
     if (!(error instanceof Violation)) throw error;
     return { ok: false, seed, profile, invariant: error.invariant, detail: error.detail,
       at: world.clock.now, trace: trace.slice(-12), paints: checker.paints.slice(-8),
       debug: debugTail.slice(-40) };
   }
+}
+
+// Committed units and the debug bundle, in the shape scripts/e2e-chrome.js
+// writes, so scripts/quality-eval.js reads either.
+async function collectRun(context, world) {
+  const committed = vm.runInContext(`(() => {
+    const s = captionSession;
+    const units = new Map();
+    (s.sentGroups || []).forEach((group, id) => {
+      const key = groupKey(id);
+      const translation = s.transCache.get(key);
+      const unitId = s.semanticUnitCache.get(key);
+      if (!translation || !unitId) return;
+      if (!units.has(unitId)) units.set(unitId, { unitId, first: id, last: id, words: [], translation });
+      const unit = units.get(unitId);
+      unit.last = id;
+      unit.words.push(group.text);
+    });
+    return JSON.stringify({ targetLang: settings.targetLang, sourceLang: s.cueSourceLang,
+      groupCount: (s.sentGroups || []).length, units: [...units.values()].map((u) => ({ unitId: u.unitId,
+        first: u.first, last: u.last, source: u.words.join(" "), translation: u.translation })) });
+  })()`, context);
+  const bundle = await vm.runInContext("exportDebugLogs()", world.background);
+  return { committed: JSON.parse(committed), bundle: JSON.parse(bundle) };
 }
 
 module.exports = { runSeed, buildTruth, Violation };

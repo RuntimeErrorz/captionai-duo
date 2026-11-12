@@ -88,6 +88,39 @@ scheduling change is proposed, compare the per-profile totals on fixed seeds
 before and after; a failing seed is a reproducible fixture, but add a reduced
 unit test for the invariant it exposed.
 
+Every fuzz run also attributes stall time (`stallBreakdown`): each stalled
+50 ms step is booked by playback phase (after start, seek, reload or rate
+change, or steady) and by what the visible group waited for (no request,
+retry wait, queued in the worker, first byte, generating). Decide what to
+optimize from this table, not from a total.
+
+## Translation quality
+
+`scripts/quality-eval.js` scores what the extension actually committed. The
+committed text depends only on the captions, the runtime's scheduling and the
+model, not on YouTube's player, so the run comes from `scripts/sim-replay.js`:
+the real background and content code in the simulator, the exported captions
+played start to finish, and the real provider, with the virtual clock paced to
+wall time. Automated Chrome is not used here: YouTube's player stops with an
+error after about a minute in it. Both steps read `CAPTIONAI_E2E_API_KEY` from
+your own shell:
+
+```sh
+node --use-env-proxy scripts/sim-replay.js --provider gemini --cues-file "captions [VIDEO].orig.srt" --rate 1
+node --use-env-proxy scripts/quality-eval.js --result e2e-results/replay-....json
+```
+
+`sim-replay.js` without `--provider` uses the local stand-in.
+`e2e-chrome.js --scenario quality` still writes the same result shape; it
+reports a failure when the video played less than half the intended time.
+
+For every committed unit it asks for a reference translation with the same
+segmentation and generous context, then has a judge model score accuracy,
+fluency and segmentation (1-5) and name the main issue. Scores are grouped by
+the request class that committed the unit and by how close the unit ended to
+that request's uncommitted runway, so a speed change can be checked for a
+quality cost. `--dry-run` checks the pipeline without any API.
+
 ## End-to-end in Chrome
 
 `scripts/e2e-chrome.js` loads a temporary copy of the extension into a fresh

@@ -50,6 +50,8 @@ class FakeProvider {
     // Token cost of everything sent and generated (about 4 chars per token),
     // including the system prompt and context every request repeats.
     this.promptChars = 0;
+    // requestId -> "first-byte" | "generating", for stall attribution.
+    this.phases = new Map();
     this.completionChars = 0;
     this.rejected429 = 0;
   }
@@ -88,6 +90,11 @@ class FakeProvider {
     this.promptChars += String(init && init.body || "").length;
     const rows = parseCurrentRows(body);
     this.requests++;
+    const trace = String(headers["X-CaptionAI-Trace"] || headers["x-captionai-trace"] || "");
+    const requestId = trace.replace(/\.\d+$/, "");
+    if (requestId) this.phases.set(requestId, "first-byte");
+    const endPhase = () => { if (requestId) this.phases.delete(requestId); };
+    if (signal) signal.addEventListener("abort", endPhase, { once: true });
     const now = this.clock.now;
     const record = { url: String(url), auth: auth === `Bearer ${SECRET_KEY}`, first: rows[0].id,
       last: rows[rows.length - 1].id, at: now };
@@ -99,11 +106,12 @@ class FakeProvider {
     this.starts = this.starts.filter((t) => now - t < 60000);
     if (profile.rpm && this.starts.length >= profile.rpm) {
       this.rejected429++;
-      return this.errorResponse(429, "RESOURCE_EXHAUSTED", { "retry-after": String(r.int(1, 8)) }, signal);
+      return this.errorResponse(429, "RESOURCE_EXHAUSTED", { "retry-after": String(r.int(1, 8)) }, signal)
+        .finally(endPhase);
     }
     this.starts.push(now);
     if (profile.overload && r.chance(profile.overload)) {
-      return this.errorResponse(503, "UNAVAILABLE", {}, signal);
+      return this.errorResponse(503, "UNAVAILABLE", {}, signal).finally(endPhase);
     }
     const fault = r.chance(profile.faults) ? r.pick(["hang", "truncate", "malformed", "duplicate",
       "no-marker", "stall", "garbage"]) : "";
@@ -122,7 +130,8 @@ class FakeProvider {
     if (fault === "garbage") lines = ["I am sorry, here is the translation:", ...lines];
     const marker = fault === "truncate" || fault === "no-marker" ? [] : ["[]"];
     const text = [...lines, ...marker].join("\n") + "\n";
-    return this.streamResponse(text, fault === "stall", signal);
+    if (requestId) this.phases.set(requestId, "generating");
+    return this.streamResponse(text, fault === "stall", signal, endPhase);
   }
 
   wait(ms, signal) {
@@ -145,7 +154,7 @@ class FakeProvider {
     }));
   }
 
-  streamResponse(text, stall, signal) {
+  streamResponse(text, stall, signal, onFinish) {
     this.completionChars += text.length;
     const charsPerSecond = this.profile.charsPerSecond || 500;
     const r = this.random;
@@ -178,7 +187,12 @@ class FakeProvider {
     let cancelled = false;
     this.inFlight++;
     let finished = false;
-    const finish = () => { if (!finished) { finished = true; provider.inFlight--; } };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      provider.inFlight--;
+      if (onFinish) onFinish();
+    };
     // An aborted request releases its stream even when nobody is reading.
     if (signal) signal.addEventListener("abort", finish, { once: true });
     return {

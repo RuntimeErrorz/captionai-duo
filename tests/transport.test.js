@@ -412,128 +412,90 @@ test("Gemini usage metadata is retained from a usage-only SSE event", async () =
   assert.equal(result.usage.totalTokenCount, 38);
 });
 
-test("a 15 RPM profile leaves a 4.2 second global start interval", async () => {
+// A virtual clock for the background rate limiter: timers fire only when the
+// test advances time to them.
+function loadRateHarness() {
+  let now = 0;
   const timers = [];
-  const cleared = new Set();
   const context = loadHttpContext(async () => {
     throw new Error("network should not be reached");
   }, {
-    Date: { now: () => 0 },
+    Date: { now: () => now },
     setTimeout: (callback, delay) => {
-      const id = timers.length + 1;
-      timers.push({ id, callback, delay });
-      return id;
+      const timer = { id: timers.length + 1, at: now + delay, delay, callback, cleared: false };
+      timers.push(timer);
+      return timer.id;
     },
-    clearTimeout: (timerId) => { cleared.add(timerId); }
+    clearTimeout: (id) => { const timer = timers.find((t) => t.id === id); if (timer) timer.cleared = true; }
   });
   const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
-  const config = {
-    endpointKind: "compatible",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    model: "gemini-3.1-flash-lite-preview",
-    rateLimitRpm: 15
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  // Run pending timers in time order until `until`.
+  const advance = async (until) => {
+    for (;;) {
+      await settle();
+      const due = timers.filter((t) => !t.cleared && !t.fired && t.at <= until).sort((a, b) => a.at - b.at)[0];
+      if (!due) break;
+      now = due.at;
+      due.fired = true;
+      due.callback();
+    }
+    now = Math.max(now, until);
+    await settle();
   };
-  assert.equal(await waitForSlot(config, null), 0);
-  const second = waitForSlot(config, null);
-  await new Promise((resolve) => setImmediate(resolve));
-  const rateTimer = timers.find((timer) => !cleared.has(timer.id));
-  assert.ok(rateTimer);
-  assert.equal(rateTimer.delay, 4200);
-  rateTimer.callback();
-  assert.equal(await second, 4200);
+  // Start one request and return the virtual time it was allowed to start.
+  const start = async (config, urgent) => {
+    let started = null;
+    waitForSlot(config, null, urgent).then(() => { started = now; }, () => { started = "rejected"; });
+    await settle(); // a request allowed at once resolves on the next microtask
+    for (let guard = 0; started === null && guard < 400; guard++) {
+      const next = timers.filter((t) => !t.cleared && !t.fired).sort((a, b) => a.at - b.at)[0];
+      await advance(next ? next.at : now);
+    }
+    return started;
+  };
+  return { waitForSlot, timers, advance, start, now: () => now, set: (t) => { now = t; } };
+}
+
+const RATE_15 = { endpointKind: "compatible", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  model: "gemini-3.1-flash-lite-preview", rateLimitRpm: 15 };
+
+test("an RPM setting allows at most that many starts in any 63 s window", async () => {
+  const rate = loadRateHarness();
+  const starts = [];
+  for (let i = 0; i < 16; i++) starts.push(await rate.start(RATE_15, true));
+  // A burst starts at once (250 ms apart), the way providers count a minute.
+  assert.deepEqual(starts.slice(0, 15), Array.from({ length: 15 }, (_v, i) => i * 250));
+  // The 16th waits until the first start leaves the 63 s window.
+  assert.equal(starts[15], 63000);
+  for (let i = 15; i < starts.length; i++) {
+    const inWindow = starts.filter((t) => t > starts[i] - 63000 && t <= starts[i]).length;
+    assert.ok(inWindow <= 15, `start ${i}`);
+  }
 });
 
-test("any provider is paced by its configured requests per minute", async () => {
-  const timers = [];
-  const cleared = new Set();
-  const context = loadHttpContext(async () => {
-    throw new Error("network should not be reached");
-  }, {
-    Date: { now: () => 0 },
-    setTimeout: (callback, delay) => {
-      const id = timers.length + 1;
-      timers.push({ id, callback, delay });
-      return id;
-    },
-    clearTimeout: (timerId) => { cleared.add(timerId); }
-  });
-  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
-  const config = {
-    endpointKind: "compatible",
-    baseUrl: "https://api.groq.com/openai/v1",
-    model: "llama-3.3-70b-versatile",
-    rateLimitRpm: 30
-  };
-  assert.equal(await waitForSlot(config, null), 0);
-  const second = waitForSlot(config, null);
-  await new Promise((resolve) => setImmediate(resolve));
-  const rateTimer = timers.find((timer) => !cleared.has(timer.id));
-  assert.ok(rateTimer);
-  assert.equal(rateTimer.delay, 2100, "60000 / 30 with a 5% margin");
-  rateTimer.callback();
-  assert.equal(await second, 2100);
+test("speculative requests leave a reserve of the RPM budget for visible ones", async () => {
+  const rate = loadRateHarness();
+  const speculative = [];
+  for (let i = 0; i < 12; i++) speculative.push(await rate.start(RATE_15, false));
+  assert.equal(speculative[11], 11 * 250, "12 speculative starts fit the 15 RPM budget minus a 3 request reserve");
+  // The 13th speculative request must wait for the window...
+  let thirteenth = null;
+  rate.waitForSlot(RATE_15, null, false).then(() => { thirteenth = rate.now(); }, () => { thirteenth = "rejected"; });
+  await rate.advance(rate.now() + 5000);
+  assert.equal(thirteenth, null);
+  // ...while a visible request uses the reserve: it preempts the waiting one.
+  const visible = await rate.start(RATE_15, true);
+  assert.ok(visible - 11 * 250 <= 5250, `visible started at ${visible}`);
+  assert.equal(thirteenth, "rejected", "the waiting speculative request is preempted");
 });
 
-test("urgent request preempts speculative prefetch rate delay and claims the slot", async () => {
-  let currentTime = 0;
-  const timers = [];
-  const cleared = new Set();
-  const context = loadHttpContext(async () => {
-    throw new Error("network should not be reached");
-  }, {
-    Date: { now: () => currentTime },
-    setTimeout: (callback, delay) => {
-      const id = timers.length + 1;
-      timers.push({ id, callback, delay });
-      return id;
-    },
-    clearTimeout: (timerId) => { cleared.add(timerId); }
-  });
-  const waitForSlot = vm.runInContext("waitForAiRequestSlot", context);
-  const config = {
-    endpointKind: "compatible",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    model: "gemini-3.1-flash-lite-preview",
-    rateLimitRpm: 15
-  };
-
-  // First request starts immediately at T = 0
-  assert.equal(await waitForSlot(config, null, true), 0);
-
-  // At T = 1000, a speculative prefetch requests a slot and enters 3200ms rate delay
-  currentTime = 1000;
-  let prefetchErr = null;
-  const prefetchPromise = waitForSlot(config, null, false).catch((err) => {
-    prefetchErr = err;
-    return err;
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  const prefetchTimer = timers.find((timer) => !cleared.has(timer.id));
-  assert.ok(prefetchTimer);
-  assert.equal(prefetchTimer.delay, 3200);
-
-  // At T = 1500, an urgent playback request arrives. It must preempt the prefetch.
-  currentTime = 1500;
-  const urgentPromise = waitForSlot(config, null, true);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  // The prefetch delay must have been cancelled/preempted
-  assert.ok(cleared.has(prefetchTimer.id));
-  await prefetchPromise;
-  assert.ok(prefetchErr);
-  assert.equal(prefetchErr.cancelled, true);
-  assert.equal(prefetchErr.preempted, true);
-
-  // The urgent request is now waiting for the remaining interval since T = 0 (4200 - 1500 = 2700ms)
-  const urgentTimer = timers.find((timer) => !cleared.has(timer.id));
-  assert.ok(urgentTimer);
-  assert.equal(urgentTimer.delay, 2700);
-
-  // When urgent timer fires, urgent request gets the slot
-  currentTime = 4200;
-  urgentTimer.callback();
-  assert.equal(await urgentPromise, 2700);
+test("an unlimited profile is never delayed", async () => {
+  const rate = loadRateHarness();
+  const config = { ...RATE_15, rateLimitRpm: 0 };
+  for (let i = 0; i < 40; i++) assert.equal(await rate.start(config, i % 2 === 0), 0);
 });
+
 
 test("promoting a live prefetch reuses it instead of cancelling it", () => {
   const messages = [];

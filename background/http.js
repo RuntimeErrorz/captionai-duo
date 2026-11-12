@@ -86,6 +86,34 @@ function waitForAiRateDelay(delayValue, signal) {
   });
 }
 
+// Requests per minute are a budget over any 60 s window (plus a 5% margin),
+// the way providers count them, not a fixed spacing: a burst may start at
+// once. Speculative work may use the budget only down to a reserve kept for
+// visible (urgent) requests, so a seek right after a prefetch does not queue
+// behind it. Simulated at 10-30 RPM this removed most rate-limit waiting.
+const AI_RATE_WINDOW_MS = 63000;
+const AI_RATE_MIN_SPACING_MS = 250;
+const AI_RATE_URGENT_RESERVE = 0.2;
+
+function aiRateBudget(rpm, isUrgent) {
+  const reserve = Math.max(1, Math.round(rpm * AI_RATE_URGENT_RESERVE));
+  return isUrgent ? rpm : Math.max(1, rpm - reserve);
+}
+
+function aiRateWaitMs(state, rpm, isUrgent, now) {
+  state.starts = state.starts.filter((t) => now - t < AI_RATE_WINDOW_MS);
+  const budget = aiRateBudget(rpm, isUrgent);
+  let wait = 0;
+  if (state.starts.length >= budget) wait = state.starts[state.starts.length - budget] + AI_RATE_WINDOW_MS - now;
+  if (Number.isFinite(state.lastStartedAt)) wait = Math.max(wait, state.lastStartedAt + AI_RATE_MIN_SPACING_MS - now);
+  return Math.max(0, wait);
+}
+
+function recordAiRateStart(state, now) {
+  state.lastStartedAt = now;
+  state.starts.push(now);
+}
+
 function aiRequestRateKey(config) {
   return `${String(config && config.baseUrl || config && config.endpoint || "")}\n` +
     `${String(config && config.model || "")}`;
@@ -96,6 +124,7 @@ function getOrCreateAiRateState(key) {
   if (!state) {
     state = {
       lastStartedAt: null,
+      starts: [],
       active: null,
       queue: [],
       cleanupTimer: null
@@ -109,7 +138,7 @@ function getOrCreateAiRateState(key) {
   return state;
 }
 
-function pumpAiRateQueue(key, state, intervalMs) {
+function pumpAiRateQueue(key, state, intervalMs, rpm) {
   if (state.active) {
     if (!state.active.isUrgent && state.queue.some((item) => item.isUrgent)) {
       const preempted = state.active;
@@ -124,13 +153,14 @@ function pumpAiRateQueue(key, state, intervalMs) {
 
   if (state.queue.length === 0) {
     if (state.cleanupTimer == null && Number.isFinite(state.lastStartedAt)) {
+      // Keep the start history until it can no longer count against the window.
       state.cleanupTimer = setTimeout(() => {
         state.cleanupTimer = null;
         if (state.active == null && state.queue.length === 0 &&
-            Date.now() - state.lastStartedAt >= intervalMs) {
+            Date.now() - state.lastStartedAt >= AI_RATE_WINDOW_MS) {
           AI_REQUEST_RATE_STATE.delete(key);
         }
-      }, intervalMs);
+      }, AI_RATE_WINDOW_MS);
     }
     return;
   }
@@ -142,17 +172,16 @@ function pumpAiRateQueue(key, state, intervalMs) {
 
   if (next.signal && next.signal.aborted) {
     next.reject(aiRequestCancelledError());
-    pumpAiRateQueue(key, state, intervalMs);
+    pumpAiRateQueue(key, state, intervalMs, rpm);
     return;
   }
 
-  const waitMs = Number.isFinite(state.lastStartedAt)
-    ? Math.max(0, state.lastStartedAt + intervalMs - Date.now()) : 0;
+  const waitMs = aiRateWaitMs(state, rpm, next.isUrgent, Date.now());
 
   if (waitMs <= 0) {
-    state.lastStartedAt = Date.now();
+    recordAiRateStart(state, Date.now());
     next.resolve(0);
-    pumpAiRateQueue(key, state, intervalMs);
+    pumpAiRateQueue(key, state, intervalMs, rpm);
     return;
   }
 
@@ -170,7 +199,7 @@ function pumpAiRateQueue(key, state, intervalMs) {
       if (active.timer != null) clearTimeout(active.timer);
       if (active.cleanupSignal) active.cleanupSignal();
       next.reject(aiRequestCancelledError());
-      pumpAiRateQueue(key, state, intervalMs);
+      pumpAiRateQueue(key, state, intervalMs, rpm);
     }
   };
 
@@ -191,9 +220,9 @@ function pumpAiRateQueue(key, state, intervalMs) {
     if (state.active === active) {
       state.active = null;
       if (active.cleanupSignal) active.cleanupSignal();
-      state.lastStartedAt = Date.now();
+      recordAiRateStart(state, Date.now());
       next.resolve(waitMs);
-      pumpAiRateQueue(key, state, intervalMs);
+      pumpAiRateQueue(key, state, intervalMs, rpm);
     }
   }, waitMs);
 }
@@ -231,7 +260,7 @@ function waitForAiRequestSlot(config, signal, isUrgent = false) {
       };
     }
     state.queue.push(item);
-    pumpAiRateQueue(key, state, intervalMs);
+    pumpAiRateQueue(key, state, intervalMs, YTDS_SHARED.normalizeAiRateLimitRpm(config && config.rateLimitRpm, 0));
   });
 }
 

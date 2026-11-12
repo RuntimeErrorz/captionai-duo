@@ -450,3 +450,13 @@ test("chunk recovery still commits a sentence that starts at the proven floor", 
   const plan = shared.monotonicSemanticCommitPlan(recovered, 175, 260, 260, 16, 191, 0);
   assert.equal(plan.units[0].unitId, "semantic-191-197");
 });
+
+test("a unit that started before the cursor never commits its remainder", () => {
+  // A prefetch began mid-sentence at 28 and streamed unit 28-35; chunk
+  // recovery had already committed 23-29. Committing 30-35 from that unit
+  // would repeat the translation of 28-29 (sim seed 70117).
+  const translations = [...unit(28, 35, "从28开始的片段"), ...unit(36, 50, "下一句")];
+  const fromCursor = shared.monotonicSemanticCommitPlan(translations, 30, 120, 300, 16, 30, 0);
+  assert.deepEqual(Array.from(fromCursor.translations), []);
+  assert.equal(fromCursor.commitThrough, 29);
+});

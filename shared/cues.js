@@ -335,11 +335,19 @@
       cursor, requestEnd, regionEnd, guardItems, minimumRunwayItems
     );
     const ordered = Array.isArray(translations) ? translations : [];
+    // A unit with a member before the cursor straddles it: its earlier part
+    // was committed by another unit, so its translation would repeat it.
+    const straddling = new Set();
+    for (const item of ordered) {
+      const id = Number(item && item.id);
+      if (Number.isInteger(id) && id < cursor && item.unitId) straddling.add(String(item.unitId));
+    }
     const units = [];
     const unitById = new Map();
     for (const item of ordered) {
       const id = Number(item && item.id);
       if (!Number.isInteger(id) || id < cursor || id > requestEnd || !item.translation) continue;
+      if (item.unitId && straddling.has(String(item.unitId))) continue;
       const unitId = String(item.unitId || `semantic-${id}-${id}`);
       let unit = unitById.get(unitId);
       if (!unit) {

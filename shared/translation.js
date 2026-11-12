@@ -411,6 +411,13 @@
     return aiJsonlRangeIds(stateValue, chunk[0], chunk[1], offset);
   }
 
+  // Clause punctuation opening a translation belongs to the clause before it.
+  const CONTINUATION_START = /^\s*[，,、；;：:]/u;
+  function aiJsonlChunkContinuesPrevious(chunkValue) {
+    return Array.isArray(chunkValue) && typeof chunkValue[2] === "string" &&
+      CONTINUATION_START.test(chunkValue[2]);
+  }
+
   function aiJsonlChunkStartOffset(chunkValue) {
     const chunk = Array.isArray(chunkValue) ? chunkValue : null;
     if (!chunk || chunk.length !== 3) return -1;
@@ -461,20 +468,16 @@
       let effectiveChunk = chunk;
       let chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
       if (chunkResult.error) {
-        if (Array.isArray(chunk) && compactJsonlCoordinate(chunk[0]) === chunkOffset - 1 &&
-            compactJsonlCoordinate(chunk[1]) >= chunkOffset) {
-          effectiveChunk = [chunkOffset, chunk[1], chunk[2]];
+        const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], chunkOffset);
+        if (omittedIds && omittedIds.length) {
+          alignedChunks.push({ ids: omittedIds, translation: "" });
+          ids.push(...omittedIds);
+          chunkOffset += omittedIds.length;
           chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
         }
-        if (chunkResult.error) {
-          const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], chunkOffset);
-          if (omittedIds && omittedIds.length) {
-            alignedChunks.push({ ids: omittedIds, translation: "" });
-            ids.push(...omittedIds);
-            chunkOffset += omittedIds.length;
-            chunkResult = aiJsonlChunkIds(state, effectiveChunk, chunkOffset);
-          }
-        }
+      }
+      if (!chunkResult.error && chunkOffset > 0 && aiJsonlChunkContinuesPrevious(effectiveChunk)) {
+        return reject(`JSONL chunk at offset ${chunkOffset} continues the previous chunk`);
       }
       const chunkIds = chunkResult.ids;
       const translation = aiJsonlChunkTranslation(effectiveChunk);
@@ -644,20 +647,23 @@
     let stopped = false;
     for (const chunk of recordChunks) {
       let effectiveChunk = chunk;
+      // A chunk that starts inside the previous one, or whose text continues
+      // it, shows the model lost count: the previous chunk's translation does
+      // not match its range either, so the safe prefix ends before it.
+      const start = aiJsonlChunkStartOffset(chunk);
+      if ((start >= 0 && start < offset) || (offset > 0 && aiJsonlChunkContinuesPrevious(chunk))) {
+        while (chunks.length && !chunks[chunks.length - 1][2]) chunks.pop();
+        chunks.pop();
+        stopped = true;
+        break;
+      }
       let chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
       if (chunkResult.error) {
-        if (Array.isArray(chunk) && compactJsonlCoordinate(chunk[0]) === offset - 1 &&
-            compactJsonlCoordinate(chunk[1]) >= offset) {
-          effectiveChunk = [offset, chunk[1], chunk[2]];
+        const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], offset);
+        if (omittedIds && omittedIds.length) {
+          chunks.push([offset, offset + omittedIds.length - 1, ""]);
+          offset += omittedIds.length;
           chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
-        }
-        if (chunkResult.error) {
-          const omittedIds = aiJsonlSafeOmittedMarkerIds(state, chunk && chunk[0], offset);
-          if (omittedIds && omittedIds.length) {
-            chunks.push([offset, offset + omittedIds.length - 1, ""]);
-            offset += omittedIds.length;
-            chunkResult = aiJsonlChunkIds(state, effectiveChunk, offset);
-          }
         }
       }
       const ids = chunkResult.ids;
@@ -708,7 +714,11 @@
       return null;
     }
     const firstChunk = Array.isArray(record.chunks) ? record.chunks[0] : null;
-    const overlapStart = aiJsonlChunkStartOffset(firstChunk);
+    const firstStart = aiJsonlChunkStartOffset(firstChunk);
+    // A record that starts inside the last unit, or continues its text, makes
+    // that unit suspect; it is still provisional, so take it back.
+    const continues = firstStart === state.cursor && aiJsonlChunkContinuesPrevious(firstChunk);
+    const overlapStart = continues ? state.cursor - 1 : firstStart;
     if (overlapStart < 0 || overlapStart >= state.cursor) return null;
 
     const last = state.translations[state.translations.length - 1];

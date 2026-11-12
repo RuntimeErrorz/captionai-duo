@@ -47,6 +47,9 @@ in `manifest.json` in order, and the service worker loads its modules through
   `YTDS_SHARED.commitState*` transitions in `shared/cues.js`; a test forbids
   direct assignment in `content/`, and the simulator checks
   `commitStateViolations` for every lane at every step.
+- **RPM is a window budget.** At most RPM requests start in any 63 s window
+  (60 s plus 5%), with 250 ms between starts; speculative requests stop at
+  RPM minus a fifth, which stays reserved for visible ones.
 - **Blocks start at sentences.** A recovered alignment chunk carries its
   sentence start, so a committed block never opens mid-sentence.
 
@@ -56,6 +59,13 @@ in `manifest.json` in order, and the service worker loads its modules through
   previous chunk) and accepts closed sentences while their line is still
   streaming. End-only prompting was benchmarked and showed no significant
   difference, so the prompt stays provider-independent.
+- **Chunks tile exactly; a lost count is never healed.** A chunk that starts
+  inside the previous one, or whose translation opens with clause
+  punctuation (`，`, `、`, `;`, ...), shows the model's positions drifted from
+  its text. Neither it nor the chunk before it is committed: the safe prefix
+  ends before both, a still-provisional unit is taken back, and the next
+  request resumes there. Measured on a real Gemini replay: 2 such drifts in
+  11 requests, each of which had committed text into the wrong sentence.
 - **Window decision.** `YTDS_SHARED.semanticCommitWindowPlan` decides each
   commit-lane request window from plain numbers. The content scheduler, the
   deterministic simulator (`tests/sim/`) and the tests all run it, so a

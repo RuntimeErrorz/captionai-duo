@@ -23,6 +23,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === "--verbose") args.verbose = true;
   else if (flag === "--rpm") args.rpm = Number(next());
   else if (flag === "--rate") args.rate = Number(next());
+  else if (flag === "--request-items") args.requestItems = Number(next());
   else if (flag === "--ttfb") args.ttfb = next().split("-").map(Number);
   else if (flag === "--json") args.json = true;
   else if (flag === "--root") next(); // applied before the world loads
@@ -34,13 +35,14 @@ for (let i = 2; i < process.argv.length; i++) {
     : Array.from({ length: args.seeds }, (_v, i) => args.from + i);
   const failures = [];
   const totals = { stallMs: 0, virtualMs: 0, translateBatches: 0, providerRequests: 0, provider429: 0,
-    sentItems: 0, cancels: 0, promptTokens: 0, completionTokens: 0 };
+    sentItems: 0, cancels: 0, promptTokens: 0, completionTokens: 0, stallBreakdown: {} };
   for (const seed of seeds) {
     const started = Date.now();
     const result = await runSeed(seed, {
       ...(args.profile ? { profile: args.profile } : {}),
       ...(Number.isFinite(args.rpm) ? { rpm: args.rpm } : {}),
       ...(Number.isFinite(args.rate) ? { rate: args.rate } : {}),
+      ...(Number.isFinite(args.requestItems) ? { requestItems: args.requestItems } : {}),
       ...(args.ttfb ? { ttfb: args.ttfb } : {})
     });
     const wallMs = Date.now() - started;
@@ -62,6 +64,10 @@ for (let i = 2; i < process.argv.length; i++) {
     totals.provider429 += result.provider429;
     totals.sentItems += result.metrics.sentItems;
     totals.promptTokens += result.promptTokens;
+    totals.focusEvents = (totals.focusEvents || 0) + (result.metrics.focusEvents || 0);
+    for (const [key, ms] of Object.entries(result.metrics.stallBreakdown || {})) {
+      totals.stallBreakdown[key] = (totals.stallBreakdown[key] || 0) + ms;
+    }
     totals.completionTokens += result.completionTokens;
     if (args.verbose || args.seed != null) {
       console.log(`seed ${seed} [${result.profile}] ok ${wallMs}ms wall ` + JSON.stringify(result.metrics));

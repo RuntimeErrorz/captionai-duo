@@ -292,3 +292,18 @@ test("a seek back inside a region keeps that region's lane running from its curs
 
   assert.equal(harness.session.semanticRequestMeta.get(key), request);
 });
+
+test("a lane just past the lookahead reach survives the seek that playback is about to reach", () => {
+  // Cancelling a lane one item beyond reach re-sent it 10 ms later, once the
+  // playhead advanced one group (sim seed 9021, request items 160).
+  const harness = loadContent();
+  const reach = 520 + vm.runInContext("aiLookaheadItems()", harness.context);
+  for (const [start, kept] of [[reach + 1, true], [reach + 32, true], [reach + 33, false]]) {
+    const run = loadContent();
+    const state = vm.runInContext("semanticCommitState(1)", run.context);
+    state.cursor = start;
+    const { key, request } = startCommit(run, 1, start, start + 100);
+    run.focusAiAfterSeek(groupTimeMs(520));
+    assert.equal(run.session.semanticRequestMeta.get(key) === request, kept, `lane at ${start}`);
+  }
+});
